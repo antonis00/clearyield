@@ -54,6 +54,8 @@ def screen(body, settings):
 
         def gt(v, lim):
             return lim is None or (v is not None and v >= lim)
+        if f.get("sector") and r.get("sector") != f["sector"]:
+            return False
         return (lt(r["pe"] if (r["pe"] or 0) > 0 else None, f.get("max_pe")) and gt(r["divYield"], f.get("min_div_yield"))
                 and gt(r["revGrowth"], f.get("min_rev_growth")) and lt(r["de"], f.get("max_de")) and gt(r["roe"], f.get("min_roe"))
                 and gt(r["composite"], f.get("min_score")) and gt(r.get("f_momentum"), f.get("min_momentum"))

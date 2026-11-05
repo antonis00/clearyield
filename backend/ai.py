@@ -90,7 +90,23 @@ FILTER_SPEC = {
     "max_pe": "number", "min_div_yield": "fraction e.g. 0.03", "min_rev_growth": "fraction", "max_de": "number (x)",
     "min_roe": "fraction", "min_score": "0-100", "min_momentum": "0-100 momentum factor score", "max_vol": "fraction annual volatility",
     "sort": "one of composite, value, quality, growth, momentum, risk, divYield",
+    "sector": "one of Technology, Financial Services, Energy, Healthcare, Utilities, Real Estate, Industrials, Communication Services, Basic Materials, Consumer Defensive, Consumer Cyclical",
 }
+
+MARKET_WORDS = {"US": ["usa", "u.s.", "u.s", "american", "america"], "Europe": ["europe", "european", "eu"],
+                "Gulf": ["gulf", "qatar", "qatari", "saudi", "uae", "gcc", "dubai", "middle east"],
+                "ETFs": ["etf", "etfs"], "Crypto": ["crypto", "cryptocurrency", "bitcoin"]}
+SECTOR_WORDS = {"Technology": ["tech", "technology", "software", "semiconductor", "semiconductors"],
+                "Financial Services": ["bank", "banks", "financial", "financials"], "Energy": ["energy", "oil"],
+                "Healthcare": ["health", "healthcare", "pharma"], "Utilities": ["utility", "utilities"],
+                "Real Estate": ["reit", "reits", "property"], "Industrials": ["industrial", "industrials"],
+                "Communication Services": ["telecom", "telecoms", "media"], "Basic Materials": ["materials", "mining"]}
+# Words the rules act on, and words that don't change a screen, so neither is reported as not understood
+RULE_WORDS = {"p/e", "pe", "ratio", "yield", "yielding", "dividend", "dividends", "income", "growth", "growing", "revenue", "cheap", "undervalued", "value",
+              "low", "debt", "no", "profitable", "quality", "momentum", "trending", "uptrend", "vol", "volatility", "risk", "safe", "defensive", "under", "below",
+              "above", "over", "less", "than", "more", "at", "least", "most", "of", "us", "real", "estate", "middle", "east"}
+FILLER_WORDS = {"stock", "stocks", "share", "shares", "company", "companies", "name", "names", "equities", "market", "markets", "listed", "with", "and", "or", "in",
+                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous"}
 
 
 def parse_query(text):
@@ -106,37 +122,66 @@ def parse_query(text):
                 return json.loads(m.group(0))
         except Exception:
             pass
-    t = text.lower()
-    f = {}
-    markets = [m for m, words in {"US": ["us ", "u.s", "american", "usa"], "Europe": ["europe", "eu "],
-                                   "Gulf": ["gulf", "qatar", "saudi", "uae", "gcc", "middle east"],
-                                   "ETFs": ["etf"], "Crypto": ["crypto", "bitcoin"]}.items() if any(w in t + " " for w in words)]
+    return _parse_rules(text.lower())
+
+
+def _has(t, *words):
+    return any(re.search(rf"(?<![\w/.]){re.escape(w)}(?![\w/])", t) for w in words)
+
+
+def _parse_rules(t):
+    """Keyword rules, matching whole words. Anything they can't act on comes back under "ignored" to show the user."""
+    f, ignored = {}, []
+
+    # Set aside what can't be honoured, rather than reading "not cheap" as cheap or dividend growth as yield
+    def set_aside(m):
+        ignored.extend(m.group(0).split()[1 if m.group(0).split()[0] in ("not", "non") else 0:])
+        return " "
+    t = re.sub(r"\b(?:not|non)[ -]\w+", set_aside, t)
+    t = re.sub(r"\bdividend growth\b", set_aside, t)
+
+    markets = [m for m, words in MARKET_WORDS.items() if _has(t, *words)]
+    # "us" on its own is usually the pronoun, as in "show us"
+    if re.search(r"\bus[ -](?:stocks?|shares|companies|market|equities|listed)\b|\bin the us\b", t):
+        markets.insert(0, "US")
     if markets:
-        f["markets"] = markets
-    if m := re.search(r"p/?e\s*(?:under|below|<|less than)\s*(\d+(?:\.\d+)?)", t):
-        f["max_pe"] = float(m.group(1))
-    if m := re.search(r"(?:yield|dividend)[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
+        f["markets"] = list(dict.fromkeys(m for m in MARKET_WORDS if m in markets))
+    for sector, words in SECTOR_WORDS.items():
+        if _has(t, *words) or (sector == "Real Estate" and "real estate" in t):
+            f["sector"] = sector
+            break
+
+    pe = r"p/?e(?:\s+ratio)?"
+    below = r"(?:under|below|<=?|less than|at most)"
+    if m := re.search(rf"\b{pe}\s*(?:of\s*|{below}\s*|=\s*)(\d+(?:\.\d+)?)|{below}\s*(\d+(?:\.\d+)?)\s*{pe}\b", t):
+        f["max_pe"] = float(m.group(1) or m.group(2))
+    if m := re.search(r"\b(?:yield\w*|dividends?)\b[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
         f["min_div_yield"] = float(m.group(1)) / 100
-    elif "dividend" in t or "income" in t:
+    elif _has(t, "dividend", "dividends", "income", "yield"):
         f["min_div_yield"] = 0.025
         f["sort"] = "divYield"
-    if m := re.search(r"growth[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
+    if m := re.search(r"\bgrowth\b[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
         f["min_rev_growth"] = float(m.group(1)) / 100
-    elif "growth" in t or "growing" in t:
+    elif _has(t, "growth", "growing"):
         f["min_rev_growth"] = 0.10
         f.setdefault("sort", "growth")
-    if any(w in t for w in ("cheap", "undervalued", "value")):
+    if _has(t, "cheap", "undervalued", "value"):
         f.setdefault("max_pe", 18)
         f.setdefault("sort", "value")
-    if "low debt" in t or "no debt" in t:
+    if _has(t, "low debt", "no debt"):
         f["max_de"] = 0.5
-    if "profitable" in t or "quality" in t:
+    if _has(t, "profitable", "quality"):
         f["min_roe"] = 0.12
         f.setdefault("sort", "quality")
-    if "momentum" in t or "trending" in t or "uptrend" in t:
+    if _has(t, "momentum", "trending", "uptrend"):
         f["min_momentum"] = 60
         f.setdefault("sort", "momentum")
-    if "low vol" in t or "safe" in t or "defensive" in t:
+    if _has(t, "low vol", "low volatility", "low risk", "safe", "defensive"):
         f["max_vol"] = 0.25
         f.setdefault("sort", "risk")
+
+    known = RULE_WORDS | FILLER_WORDS | {w for ws in (*MARKET_WORDS.values(), *SECTOR_WORDS.values()) for w in ws}
+    ignored += [w for w in re.findall(r"[a-z][a-z/.'-]*", t) if w.strip(".'") not in known]
+    if ignored:
+        f["ignored"] = list(dict.fromkeys(ignored))
     return f

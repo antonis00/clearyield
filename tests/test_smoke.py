@@ -134,9 +134,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v3:EMPTY.X") is None
-        db.cache_set("info:v3:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v3:OLD.X'")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v4:EMPTY.X") is None
+        db.cache_set("info:v4:OLD.X", {"trailingPE": 12.0})
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v4:OLD.X'")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -807,6 +807,91 @@ def test_compare_handles_different_calendars_and_histories():
     first_new = next(v for v in d["series"]["NEW"] if v is not None and v == v)
     assert first_new == 100.0
     assert d["series"]["NEW"][0] != d["series"]["NEW"][0] or d["series"]["NEW"][0] is None
+
+
+def test_plain_language_parser_reads_what_was_written():
+    from backend.ai import parse_query as p
+    # Words inside other words don't count
+    assert "markets" not in p("generous dividend payers")
+    assert "markets" not in p("famous companies")
+    assert "markets" not in p("netflix style growth")
+    assert "markets" not in p("show us cheap stocks")
+    # Real mentions still do
+    assert p("cheap US stocks")["markets"] == ["US"]
+    assert p("american value")["markets"] == ["US"]
+    assert p("etfs from the usa")["markets"] == ["US", "ETFs"]
+    assert p("european banks")["markets"] == ["Europe"]
+    assert p("best stocks in Qatar")["markets"] == ["Gulf"]
+    # Ways of writing P/E
+    for q in ("stocks with PE ratio under 15", "stocks with a p/e of 15", "P/E below 15", "under 15 pe", "pe < 15"):
+        assert p(q).get("max_pe") == 15.0, q
+    # Yield and growth are separate things, and dividend growth is neither
+    assert p("yield above 4%") == {"min_div_yield": 0.04}
+    assert p("revenue growth above 20%") == {"min_rev_growth": 0.20}
+    dg = p("dividend growth above 5%")
+    assert "min_div_yield" not in dg and "min_rev_growth" not in dg and "dividend" in dg["ignored"] and "growth" in dg["ignored"]
+    # Negation isn't silently read as the opposite
+    no = p("not cheap")
+    assert "max_pe" not in no and "cheap" in no["ignored"]
+    assert p("no debt")["max_de"] == 0.5
+    assert "min_roe" not in p("not profitable")
+    # Sectors
+    assert p("tech stocks") == {"sector": "Technology"}
+    assert p("gulf banks") == {"markets": ["Gulf"], "sector": "Financial Services"}
+    # Anything else is reported rather than dropped without a word
+    assert p("large cap stocks")["ignored"] == ["large", "cap"]
+    assert p("low risk")["max_vol"] == 0.25
+    assert "ignored" not in p("cheap profitable dividend stocks in the gulf")
+
+
+def test_screener_sector_filter():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        rows = c.post("/api/screener", json={"markets": ["US"], "query": "tech stocks"}).json()
+        assert rows["rows"] and all(r["sector"] == "Technology" for r in rows["rows"])
+        none = c.post("/api/screener", json={"markets": ["US"], "filters": {"sector": "Nope"}}).json()
+        assert none["rows"] == []
+
+
+def test_price_to_book_for_a_different_statement_currency():
+    """Market cap over equity in one currency. Yahoo's own figure can mix the two."""
+    import pandas as pd
+
+    from backend import data
+
+    class Listing:
+        balance_sheet = pd.DataFrame({"2025-12-31": [4000.0]}, index=["Stockholders Equity"])
+
+    class YF:
+        Ticker = staticmethod(lambda t: Listing())
+
+    base = {"quoteType": "EQUITY", "marketCap": 1000.0, "priceToBook": 99.0}
+    real_yf, real_demo = data._yf, data.DEMO
+    real_fx = data.statement_fx
+    data._yf, data.DEMO = (lambda: YF), False
+    data.statement_fx = lambda d: 0.5
+    try:
+        d = data._normalize_info("X.L", {**base, "currency": "GBp", "financialCurrency": "USD"})
+        assert d["priceToBook"] == 1000.0 / (4000.0 * 0.5)
+        # The latest quarter wins over the last annual figure, in whatever order Yahoo lists them
+        Listing.quarterly_balance_sheet = pd.DataFrame({"2025-06-30": [3000.0], "2026-03-31": [2000.0]}, index=["Stockholders Equity"])
+        d = data._normalize_info("X.L", {**base, "currency": "GBp", "financialCurrency": "USD"})
+        assert d["priceToBook"] == 1000.0 / (2000.0 * 0.5)
+        del Listing.quarterly_balance_sheet
+        # Same currency: Yahoo's own figure stands, and no extra download
+        data.statement_fx = lambda d: 1.0
+        assert data._normalize_info("X", {**base, "currency": "USD", "financialCurrency": "USD"})["priceToBook"] == 99.0
+        # No equity figure, or a negative one: blank rather than the mixed figure
+        data.statement_fx = lambda d: 0.5
+        Listing.balance_sheet = pd.DataFrame({"2025-12-31": [-10.0]}, index=["Stockholders Equity"])
+        assert data._normalize_info("X.L", {**base, "currency": "GBp", "financialCurrency": "USD"})["priceToBook"] is None
+        Listing.balance_sheet = None
+        assert data._normalize_info("X.L", {**base, "currency": "GBp", "financialCurrency": "USD"})["priceToBook"] is None
+    finally:
+        data._yf, data.DEMO, data.statement_fx = real_yf, real_demo, real_fx
 
 
 def test_minor_unit_currencies():

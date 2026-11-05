@@ -391,6 +391,16 @@ $("#btnCompare").onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- screener */
+const FILTER_LABELS = { max_pe: ["Max P/E", (v) => v], min_div_yield: ["Min yield", (v) => pct(v, 1, false)], min_rev_growth: ["Min revenue growth", (v) => pct(v, 0, false)],
+  max_de: ["Max debt/equity", (v) => v], min_roe: ["Min ROE", (v) => pct(v, 0, false)], min_score: ["Min score", (v) => v], min_momentum: ["Min momentum", (v) => v],
+  max_vol: ["Max volatility", (v) => pct(v, 0, false)], sector: ["Sector", (v) => esc(v)], sort: ["Sorted by", (v) => esc(v)], markets: ["Markets", (v) => esc(v.join(", "))] };
+const filterChips = (f) => Object.entries(FILTER_LABELS).filter(([k]) => isNum(f[k]) && f[k] !== "").map(([k, [label, show]]) => `<span class="pill">${label}: ${show(f[k])}</span>`).join("");
+function fillFilterForm(f) {
+  const set = (id, v, scale = 1) => { $(id).value = isNum(v) ? +(v * scale).toFixed(4) : ""; };
+  set("#fPe", f.max_pe); set("#fDiv", f.min_div_yield, 100); set("#fGrowth", f.min_rev_growth, 100); set("#fDe", f.max_de);
+  set("#fRoe", f.min_roe, 100); set("#fScore", f.min_score); set("#fVol", f.max_vol, 100);
+  if (f.sort && $(`#fSort option[value="${f.sort}"]`)) $("#fSort").value = f.sort;
+}
 function screenerFilters() {
   const v = (id, scale = 1) => ($(id).value === "" ? undefined : Number($(id).value) / scale);
   return { max_pe: v("#fPe"), min_div_yield: v("#fDiv", 100), min_rev_growth: v("#fGrowth", 100), max_de: v("#fDe"), min_roe: v("#fRoe", 100),
@@ -402,7 +412,8 @@ async function runScreen(body) {
   try {
     const d = await api("/api/screener", { method: "POST", body });
     const f = d.filters;
-    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. Filters: <code>${esc(JSON.stringify(Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== null))))}</code>${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
+    if (body.query) fillFilterForm(f);
+    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${filterChips(f)}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
       { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
