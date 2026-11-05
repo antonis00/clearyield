@@ -16,7 +16,7 @@ async function api(path, opts = {}) {
   if (o.body && typeof o.body !== "string") { o.body = JSON.stringify(o.body); o.headers = { "Content-Type": "application/json" }; }
   const r = await fetch(path, o);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.detail || `Request failed (${r.status})`);
+  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : r.status === 422 ? "Please check the values you entered." : `Request failed (${r.status})`);
   return j;
 }
 const isNum = (v) => v !== null && v !== undefined && !Number.isNaN(v);
@@ -32,6 +32,7 @@ function big(v) {
 }
 function money(v, cur = "USD", d = 2) {
   if (!isNum(v)) return "—";
+  if (!cur) return num(v, d);
   if (cur === "GBp") return `${num(v, d)} GBp`;
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, minimumFractionDigits: d, maximumFractionDigits: d }).format(v); }
   catch { return `${num(v, d)} ${cur}`; }
@@ -104,6 +105,22 @@ document.addEventListener("click", (e) => { const g = e.target.closest("[data-go
   inp.onblur = () => setTimeout(() => { hits = []; render(); }, 150);
 })();
 
+// Anything that fails without its own handling still tells you
+window.addEventListener("unhandledrejection", (e) => { e.preventDefault(); toast(e.reason?.message || "Something went wrong."); });
+
+/* ---------------------------------------------------------------- alerts in the tab title and notifications */
+let firedSeen = null;
+async function checkFiredAlerts() {
+  const all = await api("/api/alerts").catch(() => null);
+  if (!all) return;
+  const fired = all.filter((a) => a.triggered && !a.dismissed);
+  document.title = fired.length ? `(${fired.length}) StockPilot` : "StockPilot";
+  if (firedSeen && window.Notification?.permission === "granted") {
+    fired.filter((a) => !firedSeen.has(a.id)).forEach((a) => new Notification("StockPilot alert", { body: a.message }));
+  }
+  firedSeen = new Set(all.filter((a) => a.triggered).map((a) => a.id));
+}
+
 /* ---------------------------------------------------------------- dashboard */
 function spark(vals, up) {
   if (!(vals?.length > 1)) return "";
@@ -150,7 +167,7 @@ async function loadDigest() {
     const d = await api("/api/digest");
     ul.innerHTML = d.items.length ? d.items.map((i) => `<li class="t${i.tone}" data-t="${esc(i.ticker || "")}">${esc(i.text)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("") : `<li>Quiet day — nothing notable on your names.</li>`;
     $$("li[data-t]", ul).forEach((li) => li.dataset.t && (li.onclick = () => openStock(li.dataset.t)));
-    $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" }); b.closest("li").remove(); });
+    $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" }); b.closest("li").remove(); checkFiredAlerts(); });
   } catch (e) { ul.innerHTML = `<li>${esc(e.message)}</li>`; }
 }
 $("#refreshDigest").onclick = loadDigest;
@@ -339,11 +356,15 @@ $("#btnHold").onclick = () => modal(`<h3>Add ${esc(state.ticker)} holding</h3><f
   <label>Cost / share (${esc(state.stock.info.currency)})<input name="cost" type="number" step="any" value="${state.stock.stats.price.toFixed(4)}" required></label>
   <label>Date<input name="bought" type="date"></label></div><div class="form-row"><button class="btn">Add</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`,
   async (f) => { await api("/api/holdings", { method: "POST", body: { ticker: state.ticker, shares: f.get("shares"), cost: f.get("cost"), bought: f.get("bought") } }); toast("Holding added"); });
-$("#btnAlert").onclick = () => modal(`<h3>Alert on ${esc(state.ticker)}</h3><form><div class="form-row">
+const ALERT_DEFAULTS = { rsi_above: 70, rsi_below: 30, day_move: 5, score_below: 45 };
+$("#btnAlert").onclick = () => { modal(`<h3>Alert on ${esc(state.ticker)}</h3><form><div class="form-row">
   <label>Condition<select name="kind">${Object.entries(state.meta.alertKinds).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label>
   <label>Value<input name="value" type="number" step="any" value="${state.stock.stats.price.toFixed(2)}" required></label></div>
   <div class="form-row"><button class="btn">Create</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`,
   async (f) => { await api("/api/alerts", { method: "POST", body: { ticker: state.ticker, kind: f.get("kind"), value: f.get("value") } }); toast("Alert created"); });
+  const kind = $("#modalCard select[name='kind']");
+  kind.onchange = () => { $("#modalCard input[name='value']").value = ALERT_DEFAULTS[kind.value] ?? state.stock.stats.price.toFixed(2); };
+};
 $("#btnJournal").onclick = () => { show("journal"); $("#jTicker").value = state.ticker; $("#jPrice").value = state.stock.stats.price.toFixed(2); $("#jThesis").focus(); };
 
 $("#btnPretrade").onclick = async () => {
@@ -434,7 +455,7 @@ async function runScreen(body) {
   } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; } finally { $$("#btnScr,#btnScrQuery").forEach((b) => b.disabled = false); }
 }
 const selectedMarkets = () => $$("#scrMarkets input:checked").map((i) => i.value);
-$("#btnScr").onclick = () => runScreen({ markets: selectedMarkets(), filters: screenerFilters() });
+$("#btnScr").onclick = () => (selectedMarkets().length ? runScreen({ markets: selectedMarkets(), filters: screenerFilters() }) : toast("Tick at least one market."));
 $("#btnScrQuery").onclick = () => $("#scrQuery").value.trim() && runScreen({ markets: selectedMarkets(), query: $("#scrQuery").value });
 $("#scrQuery").onkeydown = (e) => e.key === "Enter" && $("#btnScrQuery").click();
 
@@ -461,10 +482,11 @@ async function loadPortfolio() {
   .afterDraw(() => $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
     const pos = p.positions.find((x) => x.ticker === btn.dataset.lots);
     modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);
-    $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
+    $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { if (!confirm("Delete this lot?")) return; await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
   }));
   if (p.errors?.length) toast(p.errors.join(" · "));
   $("#pfNote").textContent = p.note;
+  if (!p.performance) { state.charts.pfPerf?.destroy(); delete state.charts.pfPerf; }
   if (p.performance) {
     const ds = [{ label: "Portfolio", data: p.performance.portfolio, borderColor: C("--accent"), borderWidth: 2, pointRadius: 0 }];
     if (p.performance.benchmark) ds.push({ label: p.performance.benchmarkName, data: p.performance.benchmark, borderColor: C("--muted"), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 });
@@ -539,11 +561,11 @@ async function loadJournal() {
   $("#journalList").innerHTML = j.length ? j.map((e) => `<div class="jentry"><div class="jh"><span class="sym" style="font-family:var(--mono);font-weight:600">${esc(e.ticker)}</span>
     <span class="pill ${e.action === "buy" || e.action === "add" ? "on" : "warn"}">${esc(e.action)}</span><span class="muted sm">${new Date(e.ts * 1000).toLocaleDateString()} ${e.price ? "@ " + num(e.price) : ""}</span>
     ${e.stop_price ? `<span class="pill">stop ${num(e.stop_price)}</span>` : ""}${e.target_price ? `<span class="pill">target ${num(e.target_price)}</span>` : ""}${e.review_date ? `<span class="pill">review ${esc(e.review_date)}</span>` : ""}
-    ${entryResult(results[e.id])}<span style="margin-left:auto"></span><button class="btn ghost sm" data-out="${e.id}">${e.outcome ? "Edit outcome" : "Record outcome"}</button><button class="btn danger" data-jdel="${e.id}">Delete</button></div>
+    ${entryResult(results[e.id])}<span style="margin-left:auto"></span><button class="btn ghost sm" data-out="${e.id}" data-text="${esc(e.outcome || "")}">${e.outcome ? "Edit outcome" : "Record outcome"}</button><button class="btn danger" data-jdel="${e.id}">Delete</button></div>
     ${e.thesis ? `<p><b>Thesis:</b> ${esc(e.thesis)}</p>` : ""}${e.invalidation ? `<p class="muted"><b>Wrong if:</b> ${esc(e.invalidation)}</p>` : ""}${e.outcome ? `<p class="up"><b>Outcome:</b> ${esc(e.outcome)}</p>` : ""}</div>`).join("")
     : `<div class="muted">No entries yet. A decision journal is the best way to learn from your own track record.</div>`;
   $$("[data-jdel]").forEach((b) => b.onclick = async () => { if (confirm("Delete this entry?")) { await api(`/api/journal/${b.dataset.jdel}`, { method: "DELETE" }); loadJournal(); } });
-  $$("[data-out]").forEach((b) => b.onclick = async () => { const o = prompt("What happened, and what did you learn?"); if (o !== null) { await api(`/api/journal/${b.dataset.out}`, { method: "PATCH", body: { outcome: o } }); loadJournal(); } });
+  $$("[data-out]").forEach((b) => b.onclick = async () => { const o = prompt("What happened, and what did you learn?", b.dataset.text); if (o !== null) { await api(`/api/journal/${b.dataset.out}`, { method: "PATCH", body: { outcome: o } }); loadJournal(); } });
   table($("#alertTable"), [
     { k: "ticker", label: "Ticker", fmt: (v) => `<span class="sym">${esc(v)}</span>` }, { k: "kind", label: "Condition", fmt: (v) => esc(state.meta.alertKinds[v] || v) },
     { k: "value", label: "Value", num: 1, fmt: (v) => num(v) }, { k: "active", label: "Status", fmt: (v, r) => v ? `<span class="pill on">active</span>` : `<span class="pill warn" title="${esc(r.message)}">triggered</span>` },
@@ -561,7 +583,12 @@ $("#btnAlertAdd").onclick = async () => {
   try { await api("/api/alerts", { method: "POST", body: { ticker: $("#aTicker").value, kind: $("#aKind").value, value: $("#aValue").value } }); toast("Alert created"); loadJournal(); }
   catch (e) { toast(e.message); }
 };
-$("#btnCheckAlerts").onclick = async () => { const f = await api("/api/alerts/check", { method: "POST" }); toast(f.length ? f.map((x) => x.message).join(" · ") : "No alerts triggered"); loadJournal(); };
+$("#btnCheckAlerts").onclick = async () => { const f = await api("/api/alerts/check", { method: "POST" }); toast(f.length ? f.map((x) => x.message).join(" · ") : "No alerts triggered"); loadJournal(); checkFiredAlerts(); };
+$("#btnNotify").onclick = async () => {
+  if (!window.Notification) return toast("This browser doesn't support notifications.");
+  const answer = await Notification.requestPermission();
+  toast(answer === "granted" ? "Notifications are on." : "Notifications are off. You can change this in the browser's site settings.");
+};
 
 /* ---------------------------------------------------------------- settings */
 function loadSettings() {
@@ -572,14 +599,21 @@ function loadSettings() {
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${k}<input type="number" data-tgt="${k}" value="${v}"></label>`).join("");
 }
 $("#btnBalanced").onclick = () => $$("[data-w]").forEach((r) => { r.value = 20; r.nextElementSibling.textContent = "20%"; });
+function renderModeBadge() {
+  const m = state.meta;
+  $("#modeBadge").innerHTML = `${m.demo ? '<span class="pill warn">DEMO DATA</span>' : '<span class="pill on">LIVE · Yahoo</span>'}
+    ${m.ai ? '<span class="pill on">AI on</span>' : '<span class="pill">AI off</span>'}<div style="margin-top:6px">Base: ${esc(m.settings.base_currency)}</div>`;
+}
 $("#btnSaveSettings").onclick = async () => {
+  if ($("#sRf").value.trim() === "") return toast("Enter a risk-free rate.");
+  if (!$$("[data-w]").some((r) => Number(r.value) > 0)) return toast("Give at least one factor some weight.");
   const w = Object.fromEntries($$("[data-w]").map((r) => [r.dataset.w, Number(r.value)]));
   const tot = Object.values(w).reduce((a, b) => a + b, 0) || 1;
   const body = { weights: Object.fromEntries(Object.entries(w).map(([k, v]) => [k, v / tot])), base_currency: $("#sBase").value,
     risk_free_rate: Number($("#sRf").value) / 100, benchmark: $("#sBench").value.trim().toUpperCase() || "SPY",
     targets: Object.fromEntries($$("[data-tgt]").map((i) => [i.dataset.tgt, Number(i.value)])) };
   state.meta.settings = await api("/api/settings", { method: "POST", body });
-  loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
+  renderModeBadge(); loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
 };
 $("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Cache cleared — next loads fetch fresh data"); };
 
@@ -599,8 +633,8 @@ $("#restoreFile").onchange = async (e) => {
 (async function boot() {
   state.meta = await api("/api/meta");
   const m = state.meta;
-  $("#modeBadge").innerHTML = `${m.demo ? '<span class="pill warn">DEMO DATA</span>' : '<span class="pill on">LIVE · Yahoo</span>'}
-    ${m.ai ? '<span class="pill on">AI on</span>' : '<span class="pill">AI off</span>'}<div style="margin-top:6px">Base: ${esc(m.settings.base_currency)}</div>`;
+  renderModeBadge();
+  checkFiredAlerts(); setInterval(checkFiredAlerts, 60000);
   $("#scrMarkets").innerHTML = m.markets.map((x) => `<label><input type="checkbox" value="${x}" ${x !== "Crypto" ? "checked" : ""}> ${x}</label>`).join("");
   $("#bStrat").innerHTML = Object.entries(m.strategies).map(([k, v]) => `<option value="${k}" ${k === "sma_cross" ? "selected" : ""}>${v.label}</option>`).join("");
   $("#bStrat").onchange = renderParams; renderParams();
@@ -608,7 +642,7 @@ $("#restoreFile").onchange = async (e) => {
   const route = () => {
     const [view, arg] = location.hash.slice(1).split("/");
     if (view === "research" && arg) openStock(decodeURIComponent(arg));
-    else show(view && $(`#view-${view}`) ? view : "dashboard", false);
+    else show(view && document.getElementById(`view-${view}`) ? view : "dashboard", false);
   };
   window.addEventListener("hashchange", route);
   route();

@@ -34,7 +34,7 @@ Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn o
 | **Screener** | ~100-ticker universe across 5 markets; numeric filters or a plain-language query ("cheap profitable dividend stocks in the Gulf") |
 | **Portfolio** | Multi-currency holdings converted to your base currency, P&L, 1Y performance vs benchmark, volatility/Sharpe/Sortino/beta/drawdown, allocation by asset class/region/sector/currency, concentration warnings, rebalancing vs target allocation, estimated dividend income |
 | **Backtest** | Buy & hold, MA crossover, RSI mean reversion, absolute momentum and monthly DCA, with next-bar execution and trading costs |
-| **Journal & Alerts** | Record thesis, invalidation condition, stop/target and review date for every decision, with a scorecard of how your buy and add decisions did against the benchmark, overall and by the stance when recorded; alerts on price, daily move, RSI or score. Both feed the digest |
+| **Journal & Alerts** | Record thesis, invalidation condition, stop/target and review date for every decision, with a scorecard of how your buy and add decisions did against the benchmark, overall and by the stance when recorded; alerts on price, daily move, RSI or score, shown in the tab title and as optional browser notifications while the page is open. Both feed the digest |
 | **Settings** | Factor weights (balanced by default), base currency, risk-free rate, benchmark, target allocation |
 
 ## How the scores work

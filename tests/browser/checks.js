@@ -118,6 +118,105 @@ const CHECKS = {
     expect("old headlines don't overwrite the news", !/OLD STOCK/.test(r.news));
   },
 
+  // Fired alerts show in the tab title and, once allowed, as browser notifications
+  async notify(page) {
+    await page.addInitScript(() => {
+      window.__shown = [];
+      window.Notification = function (title, o) { window.__shown.push(o.body); };
+      window.Notification.permission = "granted";
+      window.Notification.requestPermission = async () => "granted";
+    });
+    await page.reload(); await page.waitForTimeout(800);
+    const before = await post(page, "/api/alerts", { ticker: "AAPL", kind: "price_above", value: 0.01 });
+    await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
+    expect("nothing fired yet", (await page.title()) === "StockPilot", await page.title());
+    await post(page, "/api/alerts/check", {});
+    await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
+    expect("count in the tab title", (await page.title()) === "(1) StockPilot", await page.title());
+    expect("browser notification shown once", (await page.evaluate(() => window.__shown)).length === 1, JSON.stringify(await page.evaluate(() => window.__shown)));
+    await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
+    expect("not repeated on the next check", (await page.evaluate(() => window.__shown)).length === 1);
+    await post(page, `/api/alerts/${before.body.id}/dismiss`, {});
+    await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
+    expect("title clears when dismissed", (await page.title()) === "StockPilot", await page.title());
+    await page.evaluate(() => { location.hash = "#journal"; }); await page.waitForTimeout(300);
+    expect("the page says it needs the app open", /while this page is open/.test(await page.textContent("#view-journal")));
+  },
+
+  // Small page fixes
+  async pagefixes(page) {
+    // Alert values start from something that suits the condition
+    await page.evaluate(() => { location.hash = "#research/AAPL"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.click("#btnAlert"); await page.waitForTimeout(200);
+    const price = await page.inputValue("#modalCard input[name='value']");
+    await page.selectOption("#modalCard select[name='kind']", "rsi_above");
+    expect("RSI alert defaults to 70", (await page.inputValue("#modalCard input[name='value']")) === "70", `price default was ${price}`);
+    await page.selectOption("#modalCard select[name='kind']", "day_move");
+    expect("daily move alert defaults to 5", (await page.inputValue("#modalCard input[name='value']")) === "5");
+    await page.selectOption("#modalCard select[name='kind']", "price_below");
+    expect("price alert defaults to the price", (await page.inputValue("#modalCard input[name='value']")) === price);
+    await page.evaluate(() => document.querySelector("#modal").classList.add("hidden"));
+
+    // Failed actions say so
+    await page.route("**/api/journal", (route) => route.request().method() === "POST" ? route.fulfill({ status: 500, json: { detail: "Could not save" } }) : route.continue());
+    await page.evaluate(() => { location.hash = "#journal"; }); await page.waitForTimeout(400);
+    await page.fill("#jTicker", "AAPL"); await page.click("#btnJournalAdd"); await page.waitForTimeout(500);
+    expect("a failed save shows a message", (await page.textContent("#toast")).includes("Could not save"), await page.textContent("#toast"));
+    await page.unroute("**/api/journal");
+
+    // Edit outcome starts from what's there
+    await post(page, "/api/journal", { ticker: "AAPL", action: "buy", price: 100 });
+    const jid = (await post(page, "/api/journal", null, "GET")).body[0].id;
+    await post(page, `/api/journal/${jid}`, { outcome: "first note" }, "PATCH");
+    await page.reload(); await page.waitForSelector("[data-out]");
+    let shown = null, kind = null;
+    const once = (d) => { shown = d.defaultValue(); kind = d.type(); d.dismiss(); };
+    page.once("dialog", once);
+    await page.click("[data-out]"); await page.waitForTimeout(300);
+    expect("Edit outcome shows the existing text", kind === "prompt" && shown === "first note", shown);
+
+    // Deleting a lot asks first
+    await post(page, "/api/holdings", { ticker: "SPY", shares: 1, cost: 100 });
+    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForSelector("#pfTable [data-lots]", { timeout: 60000 });
+    await page.click("#pfTable [data-lots]"); await page.waitForTimeout(250);
+    let asked = false;
+    page.once("dialog", (d) => { asked = true; d.dismiss(); });
+    await page.click("#modal [data-del]"); await page.waitForTimeout(500);
+    expect("lot delete asks first", asked);
+    expect("saying no keeps the lot", (await post(page, "/api/portfolio", null, "GET")).body.positions.length === 1);
+    await page.evaluate(() => document.querySelector("#modal").classList.add("hidden"));
+
+    // Removing the last holding clears the chart
+    page.once("dialog", (d) => d.accept());
+    await page.click("#pfTable [data-lots]"); await page.waitForTimeout(250);
+    await page.click("#modal [data-del]"); await page.waitForTimeout(1500);
+    expect("chart clears with the last holding", await page.evaluate(() => !state.charts.pfPerf || state.charts.pfPerf.data.labels.length === 0));
+
+    // The sidebar follows the base currency
+    await page.evaluate(() => { location.hash = "#settings"; }); await page.waitForTimeout(300);
+    await page.selectOption("#sBase", "EUR"); await page.click("#btnSaveSettings"); await page.waitForTimeout(500);
+    expect("sidebar shows the new base", /Base: EUR/.test(await page.textContent("#modeBadge")), await page.textContent("#modeBadge"));
+    // A blank rate doesn't quietly become 0%, and all-zero weights are refused
+    const rate = await page.inputValue("#sRf");
+    await page.fill("#sRf", ""); await page.click("#btnSaveSettings"); await page.waitForTimeout(400);
+    expect("blank risk-free rate refused", (await post(page, "/api/settings", null, "GET")).body.risk_free_rate === Number(rate) / 100, await page.textContent("#toast"));
+    await page.fill("#sRf", rate);
+    await page.$$eval("[data-w]", (rs) => rs.forEach((r) => { r.value = 0; }));
+    await page.click("#btnSaveSettings"); await page.waitForTimeout(400);
+    expect("all-zero weights refused", /weight/i.test(await page.textContent("#toast")), await page.textContent("#toast"));
+
+    // Unticking every market asks for one rather than scanning everything
+    await page.evaluate(() => { location.hash = "#screener"; }); await page.waitForTimeout(300);
+    await page.$$eval("#scrMarkets input", (i) => i.forEach((x) => { x.checked = false; }));
+    await page.click("#btnScr"); await page.waitForTimeout(400);
+    expect("no markets ticked", /market/i.test(await page.textContent("#toast")), await page.textContent("#toast"));
+
+    // An odd address doesn't break the page
+    await page.goto(BASE + "#a%20b"); await page.waitForTimeout(500);
+    expect("odd address falls back to the dashboard", await page.evaluate(() => !document.querySelector("#view-dashboard").classList.contains("hidden")));
+  },
+
   // Text from Yahoo can't run as a script in the brief
   async xss(page) {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });
