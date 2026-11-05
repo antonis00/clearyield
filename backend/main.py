@@ -12,10 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _load_env():
-    env = ROOT / ".env"
+def _load_env(env=ROOT / ".env"):
     if env.exists():
-        for line in env.read_text().splitlines():
+        for line in env.read_text(encoding="utf-8-sig").splitlines():  # -sig: Notepad can start a file with a byte-order mark
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
@@ -81,6 +80,19 @@ app = FastAPI(title="StockPilot", lifespan=lifespan)
 FRONT = ROOT / "frontend"
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "testserver"}
+
+
+@app.middleware("http")
+async def only_local_addresses(request, call_next):
+    """The app has no login and only listens locally. Refusing other Host headers stops a website from
+    pointing its own domain name at this machine to read and change your data through your browser."""
+    host = request.headers.get("host", "")
+    if (host if host.endswith("]") else host.rsplit(":", 1)[0]) not in LOCAL_HOSTS:
+        return JSONResponse({"detail": "StockPilot only answers on localhost."}, status_code=400)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def always_revalidate(request, call_next):
     """Without this, browsers can reuse an old page, or another app's page on the same port, without asking."""
@@ -99,6 +111,27 @@ def index():
 
 def T(t):
     return t.strip().upper()
+
+
+def _ticker(body):
+    t = T(str(body.get("ticker") or ""))
+    if not t:
+        raise HTTPException(400, "Enter a ticker.")
+    return t
+
+
+def _number(body, key, default=None):
+    """A finite number from the request, or a clear refusal. `default` applies only when the field wasn't sent."""
+    v = body.get(key)
+    if v is None and default is not None:
+        return default
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{key.replace('_', ' ').capitalize()} must be a number.")
+    if not math.isfinite(n):
+        raise HTTPException(400, f"{key.replace('_', ' ').capitalize()} must be a real number.")
+    return n
 
 
 def _hist_or_404(t, period="5y"):
@@ -249,9 +282,9 @@ def get_portfolio():
 
 @app.post("/api/holdings")
 def add_holding(body: dict = Body(...)):
-    t = T(body["ticker"])
+    t = _ticker(body)
+    shares, cost = _number(body, "shares"), _number(body, "cost")
     _hist_or_404(t, "1y")
-    shares, cost = float(body["shares"]), float(body["cost"])
     if shares <= 0 or cost < 0:
         raise HTTPException(400, "Shares must be positive and cost non-negative.")
     if body.get("bought"):
@@ -290,11 +323,12 @@ def pretrade(body: dict = Body(...)):
 # ---------------------------------------------------------------- backtest
 @app.post("/api/backtest")
 def run_backtest(body: dict = Body(...)):
-    t = T(body["ticker"])
+    t = _ticker(body)
+    cost_bps = _number(body, "cost_bps", 10.0)
     df = _hist_or_404(t, "max")  # all of it, so indicators are warmed up when the chosen period starts
     start = data.slice_period(df, body.get("period", "5y")).index[0]
     try:
-        res = backtest.run(df, body.get("strategy", "sma_cross"), body.get("params") or {}, float(body.get("cost_bps", 10)),
+        res = backtest.run(df, body.get("strategy", "sma_cross"), body.get("params") or {}, cost_bps,
                            db.get_settings().get("risk_free_rate", 0.04), start=start)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -310,9 +344,8 @@ def journal():
 @app.post("/api/journal")
 def journal_add(body: dict = Body(...)):
     def num(k):
-        v = body.get(k)
-        return float(v) if v not in (None, "") else None
-    t, settings = T(body["ticker"]), db.get_settings()
+        return _number(body, k) if body.get(k) not in (None, "") else None
+    t, settings = _ticker(body), db.get_settings()
     try:
         _, _, sc = insights.evaluate_ticker(t, settings)
     except data.DataError:  # the note matters more than the snapshot
@@ -352,8 +385,9 @@ def alerts():
 def alert_add(body: dict = Body(...)):
     if body.get("kind") not in insights.ALERT_KINDS:
         raise HTTPException(400, "Unknown alert kind")
-    aid = db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES (?,?,?,?)",
-               (T(body["ticker"]), body["kind"], float(body["value"]), time.time()))
+    t, value = _ticker(body), _number(body, "value")
+    _hist_or_404(t, "1y")
+    aid = db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES (?,?,?,?)", (t, body["kind"], value, time.time()))
     return ok({"id": aid})
 
 

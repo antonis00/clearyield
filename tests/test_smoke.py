@@ -962,6 +962,116 @@ def test_reverse_dcf_and_sensitivity_grid():
             raise AssertionError("no demo ticker had a DCF")
 
 
+def test_risk_figures_are_hand_calculated():
+    import math
+
+    import pandas as pd
+
+    from backend import indicators as ind
+    idx = pd.bdate_range("2024-01-01", periods=61)
+    returns = [0.01, -0.02, 0.03, -0.01] * 15
+    px = [100.0]
+    for r in returns:
+        px.append(px[-1] * (1 + r))
+    close = pd.Series(px, index=idx)
+    r = pd.Series(returns)
+    target = 0.04 / 252
+    downside = math.sqrt(sum(min(x - target, 0) ** 2 for x in returns) / len(returns))
+    assert abs(ind.sortino(close, 0.04) - (r.mean() - target) / downside * math.sqrt(252)) < 1e-9
+    assert abs(ind.sharpe(close, 0.04) - (r.mean() - target) / r.std() * math.sqrt(252)) < 1e-9
+    assert abs(ind.max_drawdown(pd.Series([100.0, 120, 60, 90], index=idx[:4])) + 0.5) < 1e-12
+    assert ind.rsi(pd.Series([1.0, 2, 3, 4, 5] * 10, index=pd.bdate_range("2024-01-01", periods=50))).iloc[-1] < 100
+
+    # "5Y" needs about five years of history
+    days = pd.bdate_range(end="2026-06-01", periods=510)
+    assert ind.stats(pd.Series(range(100, 610), index=days, dtype=float))["ret5yCagr"] is None
+    days = pd.bdate_range(end="2026-06-01", periods=1250)
+    assert ind.stats(pd.Series(range(100, 1350), index=days, dtype=float))["ret5yCagr"] is not None
+
+
+def test_etfs_are_not_called_a_concentrated_sector():
+    from backend import db, portfolio
+    _reset()
+    for t in ("VTI", "VXUS", "BND", "GLD", "VNQ", "SCHD"):
+        db.x("INSERT INTO holdings (ticker, shares, cost) VALUES (?, 1, 100)", (t,))
+    flat = _steps([0.0] * 300)
+    etf = {"assetClass": "ETFs", "sector": "ETFs"}
+    tickers = ("VTI", "VXUS", "BND", "GLD", "VNQ", "SCHD")
+    with _FakeMarket({t: flat for t in tickers}, {t: etf for t in tickers}):
+        warnings = portfolio.summary(db.get_settings())["warnings"]
+    assert not any("sector" in w for w in warnings), warnings
+
+
+def test_other_exchanges_are_not_treated_as_us_dollars():
+    from backend import data, db, portfolio
+    from backend.universe import currency_guess, region_of
+    for t, cur, region in (("7203.T", "JPY", "Asia"), ("0700.HK", "HKD", "Asia"), ("SHOP.TO", "CAD", "Americas"), ("BHP.AX", "AUD", "Asia"),
+                           ("RELIANCE.NS", "INR", "Asia"), ("VOW3.F", "EUR", "Europe"), ("AAPL", "USD", "US"), ("BRK-B", "USD", "US")):
+        assert currency_guess(t) == cur and region_of(t) == region, t
+    assert currency_guess("ABC.ZZ") is None and region_of("ABC.ZZ") == "Other"
+    assert region_of("^GSPC") == "US" and region_of("EURUSD=X") == "US"
+    # With no currency at all a position is unpriced, not valued 1:1 with USD
+    _reset()
+    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('ABC.ZZ', 100, 300)")
+    with _FakeMarket({"ABC.ZZ": _steps([0.001] * 30)}, {"ABC.ZZ": {"currency": None}}):
+        p = portfolio.summary(db.get_settings())
+    assert p["missing"] == ["ABC.ZZ"] and p["total"] == 0
+
+
+def test_bad_input_gets_a_clear_refusal():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app, raise_server_exceptions=False) as c:
+        bad = [
+            ("/api/holdings", {"ticker": "AAPL", "shares": "", "cost": 100}), ("/api/holdings", {"ticker": "AAPL", "shares": "inf", "cost": 100}),
+            ("/api/holdings", {"ticker": "AAPL", "shares": 1, "cost": "abc"}), ("/api/holdings", {"ticker": "", "shares": 1, "cost": 1}),
+            ("/api/alerts", {"ticker": "AAPL", "kind": "price_above", "value": ""}), ("/api/alerts", {"ticker": "", "kind": "price_above", "value": 1}),
+            ("/api/backtest", {"ticker": "SPY", "cost_bps": ""}), ("/api/backtest", {"ticker": "SPY", "cost_bps": -5}),
+            ("/api/backtest", {"ticker": "SPY", "strategy": "rsi_reversion", "params": {"period": 0}}),
+            ("/api/backtest", {"ticker": "SPY", "strategy": "sma_cross", "params": {"fast": 0, "slow": 0}}),
+            ("/api/backtest", {"ticker": "SPY", "strategy": "sma_cross", "params": {"fast": 200, "slow": 50}}),
+            ("/api/backtest", {"ticker": "SPY", "strategy": "momentum", "params": {"lookback": -1}}),
+        ]
+        for path, body in bad:
+            r = c.post(path, json=body)
+            assert r.status_code == 400 and isinstance(r.json()["detail"], str), (path, body, r.status_code, r.text[:100])
+        assert c.get("/api/portfolio").json()["positions"] == []
+        assert c.get("/api/alerts").json() == []
+
+
+def test_alert_for_an_unknown_ticker_is_refused():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c, _FakeMarket({"AAPL": _steps([0.0] * 30)}):
+        assert c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 1}).status_code == 200
+        assert c.post("/api/alerts", json={"ticker": "NOPE", "kind": "price_above", "value": 1}).status_code == 404
+
+
+def test_only_local_addresses_are_served():
+    """Stops a website pointing its own domain name at this machine and reading the app through your browser."""
+    import tempfile
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from backend import main
+    with TestClient(main.app) as c:
+        assert c.get("/api/meta", headers={"Host": "evil.example"}).status_code == 400
+        assert c.delete("/api/holdings/1", headers={"Host": "evil.example"}).status_code == 400
+        for host in ("localhost:8001", "127.0.0.1:8001", "[::1]:8001"):
+            assert c.get("/api/meta", headers={"Host": host}).status_code == 200, host
+
+    # A .env saved by Notepad starts with a byte-order mark, which used to rename the key
+    env = Path(tempfile.mkdtemp()) / ".env"
+    env.write_bytes("\ufeffSTOCKPILOT_TEST_KEY=héllo\n".encode("utf-8"))
+    main._load_env(env)
+    assert os.environ.pop("STOCKPILOT_TEST_KEY") == "héllo"
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

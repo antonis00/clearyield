@@ -17,9 +17,14 @@ def _positions(close, strategy, p):
     if strategy == "buy_hold":
         return pd.Series(1.0, index=close.index)
     if strategy == "sma_cross":
-        fast, slow = ind.sma(close, int(p.get("fast", 50))), ind.sma(close, int(p.get("slow", 200)))
+        n_fast, n_slow = int(p.get("fast", 50)), int(p.get("slow", 200))
+        if not 1 <= n_fast < n_slow:
+            raise ValueError("The fast average must be at least 1 and shorter than the slow one.")
+        fast, slow = ind.sma(close, n_fast), ind.sma(close, n_slow)
         return (fast > slow).astype(float).where(slow.notna(), 0.0)
     if strategy == "rsi_reversion":
+        if int(p.get("period", 14)) < 1:
+            raise ValueError("The RSI period must be at least 1.")
         r = ind.rsi(close, int(p.get("period", 14)))
         lo, hi = float(p.get("buy_below", 30)), float(p.get("sell_above", 55))
         pos, state = [], 0.0
@@ -33,6 +38,8 @@ def _positions(close, strategy, p):
         return pd.Series(pos, index=close.index)
     if strategy == "momentum":
         lb = int(p.get("lookback", 126))
+        if lb < 1:
+            raise ValueError("The lookback must be at least 1.")
         return (close / close.shift(lb) - 1 > 0).astype(float).where(close.shift(lb).notna(), 0.0)
     raise ValueError(f"Unknown strategy {strategy}")
 
@@ -45,6 +52,8 @@ def _metrics(eq, rf, trades=None):
 def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=10000, start=None):
     """Backtest from `start` (default: the first bar). Earlier bars of `df` only warm up the indicators."""
     params = params or {}
+    if cost_bps < 0:
+        raise ValueError("The trading cost can't be negative.")
     full = df["Close"].dropna()
     close = full if start is None else full[full.index >= start]
     if len(close) < 60:
