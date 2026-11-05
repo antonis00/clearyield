@@ -757,6 +757,58 @@ def test_journal_stops_work_for_any_ticker():
         assert not any(i["ticker"] in ("MSFT", "NVDA") and ("moved" in i["text"] or "RSI" in i["text"]) for i in items)
 
 
+def test_backtest_fills_at_the_next_open():
+    """A signal from today's close can only trade at tomorrow's open. Hand-calculated with no costs."""
+    import pandas as pd
+
+    from backend import backtest
+    closes = [100.0] * 60 + [110, 120, 90, 100, 110]
+    opens = [100.0] * 60 + [105, 112, 118, 88, 102]
+    df = pd.DataFrame({"Open": opens, "Close": closes}, index=pd.bdate_range("2024-01-01", periods=65))
+    # Lookback 1 means long the day after any up close:
+    #   110 up -> buy at the next open, 112, and that day ends at 120
+    #   120 up -> hold, and that day ends at 90
+    #    90 down -> sell at the next open, 88
+    #   100 up -> buy at the next open, 102, and that day ends at 110
+    r = backtest.run(df, "momentum", {"lookback": 1}, 0)
+    expected = (120 / 112) * (90 / 120) * (88 / 90) * (110 / 102) - 1
+    assert abs(r["strategy"]["totalReturn"] - expected) < 1e-9, (r["strategy"]["totalReturn"], expected)
+    assert r["strategy"]["trades"] == 3
+
+    # Costs still come off each trade
+    costed = backtest.run(df, "momentum", {"lookback": 1}, 100)
+    assert costed["strategy"]["totalReturn"] < r["strategy"]["totalReturn"]
+
+    # No look-ahead: changing a later price can't change anything before it
+    moved = df.copy()
+    moved.loc[moved.index[-1], "Close"] = 500.0
+    later = backtest.run(moved, "momentum", {"lookback": 1}, 0)
+    assert later["equity"][:-1] == r["equity"][:-1]
+
+
+def test_compare_handles_different_calendars_and_histories():
+    import pandas as pd
+
+    from backend import insights
+    idx = pd.date_range("2025-01-06", periods=500, freq="D")
+    daily = pd.Series([100 * (1.01 if i % 7 < 3 else 0.992) ** (i % 13) for i in range(500)], index=idx)
+    weekdays = daily[daily.index.day_of_week < 5]  # the same asset, on a stock market's calendar
+    short = daily.iloc[-60:]
+    with _FakeMarket({"CRYPTO": daily, "STOCK": weekdays, "NEW": short}):
+        d = insights.compare(["CRYPTO", "STOCK", "NEW", "GONE"], "1y")
+    assert d["failed"] == ["GONE"] and d["short"] == ["NEW"]
+    # The same asset correlates fully, whatever days each market trades
+    m = dict(zip(d["correlation"]["tickers"], d["correlation"]["matrix"]))
+    assert m["CRYPTO"][d["correlation"]["tickers"].index("STOCK")] > 0.97
+    assert m["CRYPTO"][d["correlation"]["tickers"].index("CRYPTO")] == 1.0
+    # One new listing doesn't cut the others down, and each line starts at 100
+    assert len(d["dates"]) > 300
+    assert d["series"]["CRYPTO"][0] == 100.0
+    first_new = next(v for v in d["series"]["NEW"] if v is not None and v == v)
+    assert first_new == 100.0
+    assert d["series"]["NEW"][0] != d["series"]["NEW"][0] or d["series"]["NEW"][0] is None
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

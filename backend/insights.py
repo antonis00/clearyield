@@ -70,26 +70,36 @@ def screen(body, settings):
 
 
 def compare(tickers, period, rf=0.04):
-    closes, meta = {}, []
+    closes, meta, failed = {}, [], []
     for t in tickers:
         try:
             h = data.history(t, period)
             inf = data.info(t)
         except data.DataError:
+            failed.append(t)
             continue
         closes[t] = h["Close"]
         st = ind.stats(data.history(t, "5y")["Close"], rf)
         meta.append({"ticker": t, "name": inf.get("name"), "currency": inf.get("currency"), "pe": inf.get("trailingPE"),
                      "divYield": inf.get("dividendYield"), "periodReturn": float(h["Close"].iloc[-1] / h["Close"].iloc[0] - 1), **st})
     if not closes:
-        return {"series": {}, "meta": [], "correlation": None}
-    df = pd.concat(closes, axis=1).sort_index().ffill().dropna()
-    norm = (df / df.iloc[0] * 100).round(3)
-    corr = df.pct_change().dropna().corr().round(2)
+        return {"series": {}, "meta": [], "correlation": None, "failed": failed, "short": []}
+    # Each line starts at 100 on its own first day, so a new listing doesn't cut the others short
+    df = pd.concat(closes, axis=1).sort_index().ffill()
+    norm = df.apply(lambda s: s / s.dropna().iloc[0] * 100).round(3)
+    earliest = min(c.index[0] for c in closes.values())
+
+    def pair(a, b):
+        if a == b:
+            return 1.0
+        c = ind.correlation(closes[a], closes[b])
+        return None if c is None else round(c, 2)
+    names = list(closes)
     return {
         "dates": [d.strftime("%Y-%m-%d") for d in norm.index],
-        "series": {t: norm[t].tolist() for t in norm.columns}, "meta": meta,
-        "correlation": {"tickers": list(corr.columns), "matrix": corr.values.tolist()},
+        "series": {t: norm[t].tolist() for t in norm.columns}, "meta": meta, "failed": failed,
+        "short": [t for t, c in closes.items() if (c.index[0] - earliest).days > 30],
+        "correlation": {"tickers": names, "matrix": [[pair(a, b) for b in names] for a in names]},
     }
 
 

@@ -372,7 +372,7 @@ $("#btnCompare").onclick = async () => {
     const ts = Object.keys(d.series);
     if (!ts.length) { toast("No data for those tickers"); return; }
     mkChart("cmpChart", {
-      type: "line", data: { labels: d.dates, datasets: ts.map((t, i) => ({ label: t, data: d.series[t], borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.6, pointRadius: 0, tension: 0.1 })) },
+      type: "line", data: { labels: d.dates, datasets: ts.map((t, i) => ({ label: t, data: d.series[t], borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.6, pointRadius: 0, tension: 0.1, spanGaps: true })) },
       options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 10 } } } },
     });
     table($("#cmpTable"), [
@@ -384,7 +384,9 @@ $("#btnCompare").onclick = async () => {
     const cm = d.correlation;
     const col = (v) => v >= 0 ? `rgba(239,91,91,${v * 0.7})` : `rgba(79,179,191,${-v * 0.7})`;
     $("#cmpCorr").innerHTML = `<table><tr><th></th>${cm.tickers.map((t) => `<th class="num">${esc(t)}</th>`).join("")}</tr>${cm.matrix.map((row, i) => `<tr><th>${esc(cm.tickers[i])}</th>${row.map((v) => `<td class="num" style="background:${col(v)}">${num(v, 2)}</td>`).join("")}</tr>`).join("")}</table>
-      <p class="muted sm">High correlation (red) means the assets tend to move together and add little diversification.</p>`;
+      <p class="muted sm">High correlation (red) means the assets tend to move together and add little diversification. It uses weekly returns on shared dates, because markets open at different hours and on different days. Short periods have few weeks, so read those with care; "—" means too few.</p>
+      ${d.short.length ? `<p class="muted sm">Started later than the rest, so shown from its first day: ${esc(d.short.join(", "))}.</p>` : ""}
+      ${d.failed.length ? `<p class="muted sm">No data for: ${esc(d.failed.join(", "))}.</p>` : ""}`;
   } catch (e) { toast(e.message); } finally { b.disabled = false; }
 };
 
