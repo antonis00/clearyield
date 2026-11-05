@@ -61,7 +61,7 @@ The composite is a weighted average of the factors that have data. ETFs and cryp
 
 ## Tickers
 
-Any Yahoo Finance symbol works in the search box. Suffix conventions:
+The search box finds anything Yahoo Finance lists, by symbol or name. Funds and stocks outside the US usually have an exchange suffix, so searching `vwce` offers `VWCE.DE`, `VWCE.MI` and so on. Suffix conventions:
 
 - `.QA` Qatar (QNBK.QA)
 - `.SR` Saudi (2222.SR)

@@ -12,7 +12,7 @@ const SLOW = 150000;
   const browser = await chromium.launch({ channel: "chrome", headless: true });
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
   const p = await ctx.newPage();
-  const errs = [], http = [], expected404 = /NOSUCHTICKER/;
+  const errs = [], http = [], expected404 = /NOSUCHTICKER|stock\/VWCE\?/;
   p.on("pageerror", (e) => errs.push(e.message));
   p.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) errs.push("console: " + m.text()); });
   p.on("response", (r) => { const u = r.url(); if (u.startsWith(BASE) && r.status() >= 400 && !u.endsWith("favicon.ico") && !expected404.test(u)) http.push(`${r.status()} ${u.replace(BASE, "/")}`); });
@@ -47,6 +47,16 @@ const SLOW = 150000;
     expect("research: unknown ticker explains itself", /No price data/.test(await txt("#researchEmpty")));
   }
 
+  if (MODE === "live") {  // a symbol outside the built-in list, the way you'd really search for it
+    await p.fill("#globalSearch", "vwce");
+    await p.waitForFunction(() => /VWCE\.DE/.test(document.querySelector("#searchResults").textContent), null, { timeout: 30000 });
+    await p.press("#globalSearch", "Enter");
+    await p.waitForFunction(() => document.querySelector("#rSym")?.textContent === "VWCE.DE" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
+    await p.waitForTimeout(800);
+    expect("research: search finds an ETF outside the built-in list", /ETFs/.test(await txt("#rTags")) && !/undefined|NaN/.test(await txt("#researchBody")), `${await txt("#rName")} | ${await txt("#rPrice")} | ${await txt("#rTags")}`);
+    await research("VWCE");
+    expect("research: a symbol with no data suggests the right one", /VWCE\.DE/.test(await txt("#researchEmpty")), await txt("#researchEmpty"));
+  }
   await research("AAPL");
   for (const per of ["1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y"]) {
     const btn = p.locator(`#periodSeg button[data-p="${per}"]`);

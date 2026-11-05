@@ -309,6 +309,30 @@ def fund(ticker):
     return out
 
 
+SEARCH_TYPES = {"EQUITY": "Stock", "ETF": "ETF", "MUTUALFUND": "Fund", "CRYPTOCURRENCY": "Crypto", "INDEX": "Index"}
+
+
+def search_symbols(text):
+    """Yahoo's own symbol search, for anything outside the built-in list. European funds, for example, are only
+    listed with an exchange suffix: VWCE doesn't exist, but VWCE.DE does."""
+    text = text.strip().lower()
+    if DEMO or len(text) < 2:
+        return []
+    key = f"search:{text}"
+    cached = db.cache_get(key, 24 * 3600)
+    if cached is not None:
+        return cached
+    try:
+        quotes = _yf().Search(text, max_results=10, news_count=0, timeout=5).quotes
+    except Exception as e:
+        log.warning("symbol search failed for %s: %s", text, e)
+        return []
+    out = [{"ticker": q["symbol"], "name": q.get("longname") or q.get("shortname") or q["symbol"],
+            "market": f"{SEARCH_TYPES[q['quoteType']]} · {q.get('exchange', '')}"} for q in quotes if q.get("symbol") and q.get("quoteType") in SEARCH_TYPES]
+    db.cache_set(key, out)
+    return out
+
+
 def news(ticker, limit=12):
     key = f"news:{ticker}"
     cached = db.cache_get(key, TTL["news"])

@@ -52,6 +52,7 @@ REGION_BY_SUFFIX = {
     ".L": "Europe", ".PA": "Europe", ".DE": "Europe", ".AS": "Europe", ".SW": "Europe", ".CO": "Europe",
     ".MC": "Europe", ".MI": "Europe", ".BR": "Europe", ".ST": "Europe", ".OL": "Europe", ".HE": "Europe",
     ".AT": "Europe", ".LS": "Europe", ".VI": "Europe", ".IR": "Europe", ".F": "Europe", ".SG": "Europe", ".WA": "Europe",
+    ".MU": "Europe", ".DU": "Europe", ".BE": "Europe", ".HM": "Europe", ".HA": "Europe",
     ".T": "Asia", ".HK": "Asia", ".AX": "Asia", ".NS": "Asia", ".BO": "Asia", ".SS": "Asia", ".SZ": "Asia", ".KS": "Asia",
     ".KQ": "Asia", ".TW": "Asia", ".SI": "Asia", ".NZ": "Asia", ".TO": "Americas", ".V": "Americas", ".SA": "Americas", ".MX": "Americas",
     ".NYB": "US",
@@ -61,7 +62,7 @@ CURRENCY_BY_SUFFIX = {
     ".QA": "QAR", ".SR": "SAR", ".AE": "AED", ".AD": "AED", ".KW": "KWF", ".BH": "BHD", ".L": "GBp",
     ".PA": "EUR", ".DE": "EUR", ".AS": "EUR", ".MC": "EUR", ".MI": "EUR", ".BR": "EUR", ".HE": "EUR",
     ".AT": "EUR", ".LS": "EUR", ".VI": "EUR", ".IR": "EUR", ".SW": "CHF", ".CO": "DKK", ".ST": "SEK",
-    ".OL": "NOK", ".F": "EUR", ".SG": "EUR", ".WA": "PLN", ".T": "JPY", ".HK": "HKD", ".AX": "AUD", ".NS": "INR", ".BO": "INR", ".SS": "CNY",
+    ".OL": "NOK", ".F": "EUR", ".SG": "EUR", ".MU": "EUR", ".DU": "EUR", ".BE": "EUR", ".HM": "EUR", ".HA": "EUR", ".WA": "PLN", ".T": "JPY", ".HK": "HKD", ".AX": "AUD", ".NS": "INR", ".BO": "INR", ".SS": "CNY",
     ".SZ": "CNY", ".KS": "KRW", ".KQ": "KRW", ".TW": "TWD", ".SI": "SGD", ".NZ": "NZD", ".TO": "CAD", ".V": "CAD", ".SA": "BRL", ".MX": "MXN",
     ".NYB": "USD",
 }

@@ -98,7 +98,15 @@ document.addEventListener("click", (e) => { const g = e.target.closest("[data-go
     $$("div", dd).forEach((d) => d.onmousedown = () => pick(hits[+d.dataset.i]));
   };
   const pick = (h) => { if (!h) return; inp.value = ""; hits = []; render(); openStock(h.ticker); };
-  inp.oninput = () => { clearTimeout(timer); timer = setTimeout(async () => { hits = inp.value.trim() ? await api(`/api/search?q=${encodeURIComponent(inp.value)}`) : []; sel = 0; render(); }, 180); };
+  inp.oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const text = inp.value.trim();
+      const found = text ? await api(`/api/search?q=${encodeURIComponent(text)}`) : [];
+      if (text !== inp.value.trim()) return; // Yahoo can take a moment, and you may have typed more by now
+      hits = found; sel = 0; render();
+    }, 250);
+  };
   inp.onkeydown = (e) => {
     if (e.key === "ArrowDown") { sel = Math.min(sel + 1, hits.length - 1); render(); e.preventDefault(); }
     else if (e.key === "ArrowUp") { sel = Math.max(sel - 1, 0); render(); e.preventDefault(); }

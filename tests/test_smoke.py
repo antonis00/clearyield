@@ -1812,6 +1812,65 @@ def test_score_history_starts_now_and_notes_changes():
         assert c.post("/api/backup/restore", json={**older, "version": 2}).status_code == 200
 
 
+def test_search_finds_what_yahoo_lists():
+    from fastapi.testclient import TestClient
+
+    from backend import data, db
+    from backend.main import app
+    from backend.universe import currency_guess, region_of
+    calls = []
+
+    class FakeSearch:
+        def __init__(self, q, **kw):
+            calls.append(q)
+            if q == "down":
+                raise RuntimeError("no connection")
+            self.quotes = {
+                "vwce": [{"symbol": "VWCE.DE", "exchange": "GER", "quoteType": "ETF", "longname": "Vanguard FTSE All-World UCITS ETF"},
+                         {"symbol": "VWCE.MI", "exchange": "MIL", "quoteType": "ETF", "shortname": "Vanguard All-World"},
+                         {"symbol": "XVWC=F", "exchange": "CME", "quoteType": "FUTURE", "longname": "A future"},
+                         {"symbol": "VWCE.OPT", "exchange": "X", "quoteType": "OPTION"}],
+                "apple": [{"symbol": "AAPL", "exchange": "NMS", "quoteType": "EQUITY", "longname": "Apple Inc."},
+                          {"symbol": "APLE", "exchange": "NYQ", "quoteType": "EQUITY", "longname": "Apple Hospitality"}],
+            }.get(q.lower(), [])
+
+    class YF:
+        Search = FakeSearch
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    db.cache_clear()
+    try:
+        with TestClient(app) as c:
+            hits = c.get("/api/search?q=vwce").json()
+            assert [h["ticker"] for h in hits] == ["VWCE.DE", "VWCE.MI"], "only things the app can analyse"
+            assert hits[0]["name"] == "Vanguard FTSE All-World UCITS ETF" and hits[0]["market"] == "ETF · GER"
+            c.get("/api/search?q=vwce")
+            assert calls.count("vwce") == 1, "repeat searches use the cache"
+            # The built-in list comes first, and nothing appears twice
+            apple = c.get("/api/search?q=apple").json()
+            assert [h["ticker"] for h in apple] == ["AAPL", "APLE"] and apple[0]["market"] == "US"
+            # With Yahoo down or nothing found, a typed symbol can still be tried
+            assert c.get("/api/search?q=down").json() == [{"ticker": "DOWN", "name": "Look up this symbol on Yahoo Finance", "market": "Any"}]
+            assert not db.cache_get_stale("search:down")
+            assert c.get("/api/search?q=").json() == []
+            # One letter is too broad to send to Yahoo
+            before = len(calls)
+            c.get("/api/search?q=v")
+            assert len(calls) == before
+
+            # Opening a symbol with no data suggests the right one
+            with _FakeMarket({}):
+                r = c.get("/api/stock/VWCE")
+            assert r.status_code == 404 and "VWCE.DE" in r.json()["detail"], r.text
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        db.cache_clear()
+    # Germany's other exchanges are European and in euros
+    for t in ("VWCE.MU", "VWCE.DU", "X.BE", "X.HM", "X.HA"):
+        assert currency_guess(t) == "EUR" and region_of(t) == "Europe", t
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

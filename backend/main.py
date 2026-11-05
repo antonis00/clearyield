@@ -153,10 +153,12 @@ def meta():
 @app.get("/api/search")
 def search(q: str = ""):
     hits = uni_search(q)
+    known = {h["ticker"] for h in hits}
+    hits += [h for h in data.search_symbols(q) if h["ticker"] not in known]
     raw = T(q)
-    if raw and not any(h["ticker"] == raw for h in hits) and " " not in raw:
+    if raw and not hits and " " not in raw:
         hits.append({"ticker": raw, "name": "Look up this symbol on Yahoo Finance", "market": "Any"})
-    return ok(hits)
+    return ok(hits[:12])
 
 
 @app.get("/api/macro")
@@ -180,7 +182,8 @@ def stock(ticker: str, period: str = "1y"):
     try:
         full, inf, sc = insights.evaluate_ticker(t, settings)
     except data.DataError as e:
-        raise HTTPException(404, str(e))
+        options = [h["ticker"] for h in data.search_symbols(t)][:4]
+        raise HTTPException(404, f"Yahoo has no data for {t}. Did you mean {', '.join(options)}?" if options else str(e))
     ib = ind.bundle(full)
     view = data.slice_period(full, period)
     ib = ib.loc[view.index]
