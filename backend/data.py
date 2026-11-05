@@ -109,7 +109,7 @@ MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.
 
 
 def info(ticker):
-    key = f"info:v3:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v4:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -151,6 +151,7 @@ def _normalize_info(ticker, d):
     d["statementFx"] = statement_fx(d)
     if d["statementFx"] != 1.0:
         d["enterpriseToEbitda"] = _ev_to_ebitda(d)
+        d["priceToBook"] = _price_to_book(ticker, d)
     qt = d.get("quoteType") or ("CRYPTOCURRENCY" if ticker.endswith("-USD") else "EQUITY")
     d["quoteType"] = qt
     d["assetClass"] = asset_class(qt)
@@ -166,6 +167,24 @@ def _ev_to_ebitda(d):
     if not fx or not mc or debt is None or cash is None or not ebitda or ebitda <= 0:
         return None
     return (mc + (debt - cash) * fx) / (ebitda * fx)
+
+
+def _price_to_book(ticker, d):
+    """Market cap over balance-sheet equity in one currency. Yahoo's book value per share is in the statement currency
+    for some listings and the quote currency for others, so its ratio can't be trusted when the two differ."""
+    fx, mc = d["statementFx"], d.get("marketCap")
+    if DEMO or not fx or not mc:
+        return None
+    listing = _yf().Ticker(ticker)
+    for sheet_name in ("quarterly_balance_sheet", "balance_sheet"):  # the latest quarter, or else the latest year
+        try:
+            values = getattr(listing, sheet_name).loc["Stockholders Equity"].dropna()
+            equity = float(values.sort_index().iloc[-1])
+        except Exception:
+            continue
+        return mc / (equity * fx) if equity > 0 else None
+    log.warning("no balance sheet for %s", ticker)
+    return None
 
 
 def statement_fx(d):
