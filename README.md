@@ -99,3 +99,7 @@ backend/   main.py (API) · data.py (Yahoo + cache + FX + demo) · scoring.py ·
 frontend/  index.html · app.js · styles.css · vendor/ (charting libraries, bundled for offline use)
 tests/     test_smoke.py · check_live.py · run_all.py · browser/ (walk through every screen in Chrome)
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE). The bundled libraries in `frontend/vendor/` keep their own licenses.
