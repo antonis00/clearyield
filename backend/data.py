@@ -127,6 +127,8 @@ def info(ticker):
             return db.cache_get_stale(key) or _normalize_info(ticker, {k: None for k in INFO_KEYS})
         out = {k: raw.get(k) for k in INFO_KEYS}
         out = _normalize_info(ticker, out)
+        if out["statementFx"] is None:
+            return out  # retry next time rather than keeping the gap for hours
     db.cache_set(key, out)
     return out
 
@@ -150,7 +152,7 @@ def _normalize_info(ticker, d):
     # Yahoo divides an EV in the quote currency by EBITDA in the statement currency. Its P/E and
     # forward EPS are already converted, so they stay as they are.
     if d.get("enterpriseToEbitda") is not None:
-        d["enterpriseToEbitda"] /= d["statementFx"]
+        d["enterpriseToEbitda"] = d["enterpriseToEbitda"] / d["statementFx"] if d["statementFx"] else None
     qt = d.get("quoteType") or ("CRYPTOCURRENCY" if ticker.endswith("-USD") else "EQUITY")
     d["quoteType"] = qt
     d["assetClass"] = asset_class(qt)
@@ -164,7 +166,11 @@ def statement_fx(d):
     quote = MINOR_UNITS.get(d["currency"], (d["currency"],))[0]
     if d["financialCurrency"] == quote:
         return 1.0
-    return fx_rate(d["financialCurrency"], "USD") / fx_rate(quote, "USD")
+    try:
+        return fx_rate(d["financialCurrency"], "USD") / fx_rate(quote, "USD")
+    except DataError as e:
+        log.warning("%s: %s", d.get("ticker"), e)
+        return None  # figures from the statements can't be compared with the price right now
 
 
 def asset_class(quote_type):
@@ -279,13 +285,19 @@ def fx_rate(currency, base="USD"):
             except Exception:
                 continue
         if rate is None:
-            rate = DEMO_FX.get(currency, 1.0) / DEMO_FX.get(base, 1.0)  # pegged / fallback approximations
-            log.warning("FX %s->%s unavailable, using fallback %.4f", currency, base, rate)
+            log.warning("FX %s->%s unavailable from Yahoo", currency, base)
+            stale = db.cache_get_stale(key)
+            if stale is not None:
+                return stale / divisor
+            if currency in USD_PEGGED and base in USD_PEGGED:
+                return DEMO_FX[currency] / DEMO_FX[base] / divisor
+            raise DataError(f"No exchange rate available for {currency} to {base}.")
     db.cache_set(key, rate)
     return rate / divisor
 
 
-# USD value of one unit (approximate; used for demo mode and as a fallback for pegged currencies)
+# USD value of one unit. These are approximate: demo mode uses them all, live mode only the pegged ones.
+USD_PEGGED = {"USD", "QAR", "SAR", "AED", "BHD"}
 DEMO_FX = {"USD": 1.0, "EUR": 1.08, "GBP": 1.27, "CHF": 1.13, "DKK": 0.145, "SEK": 0.095, "NOK": 0.093,
            "QAR": 0.2747, "SAR": 0.2666, "AED": 0.2723, "KWD": 3.25, "BHD": 2.6525, "JPY": 0.0067, "ZAR": 0.055, "ILS": 0.27}
 

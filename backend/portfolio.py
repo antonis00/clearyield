@@ -39,12 +39,12 @@ def summary(settings):
         try:
             h = data.history(t, "1y")
             inf = data.info(t)
+            cur = inf.get("currency")
+            fx = data.fx_rate(cur, base)
         except data.DataError as e:
-            errors.append(str(e))
+            errors.append(f"{t}: {e}")
             continue
         close = h["Close"]
-        cur = inf.get("currency")
-        fx = data.fx_rate(cur, base)
         price, prev = float(close.iloc[-1]), float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
         value = p["shares"] * price * fx
         cost = p["costTotal"] * fx

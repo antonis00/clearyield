@@ -209,6 +209,60 @@ def test_new_position_keeps_the_portfolio_history():
     assert abs(half["risk"]["return1y"]) < 0.5
 
 
+def test_fx_failure_never_guesses_a_rate():
+    """When Yahoo has no FX rate: use the last real one, or a true peg, or say so. Never assume 1:1."""
+    from backend import data, db, insights, portfolio, scoring
+    _reset()
+    db.cache_clear()
+
+    class Down:
+        def history(self, **kw):
+            raise RuntimeError("rate limited")
+
+    class YF:
+        Ticker = staticmethod(lambda t: Down())
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    try:
+        # No rate known and no peg: an error, and nothing cached
+        try:
+            data.fx_rate("HKD", "USD")
+            raise AssertionError("HKD should not get a made-up rate")
+        except data.DataError as e:
+            assert "HKD" in str(e)
+        assert db.cache_get_stale("fx:HKDUSD") is None
+        # Pegged to the dollar: the fixed rate is fine, but only against the dollar
+        assert abs(data.fx_rate("QAR", "USD") - data.DEMO_FX["QAR"]) < 1e-9
+        assert db.cache_get_stale("fx:QARUSD") is None
+        try:
+            data.fx_rate("QAR", "EUR")
+            raise AssertionError("QAR/EUR floats with the euro, so the peg does not settle it")
+        except data.DataError:
+            pass
+        # An expired real rate beats any guess, and stays marked as expired
+        db.cache_set("fx:CADUSD", 0.71)
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'fx:CADUSD'")
+        assert abs(data.fx_rate("CAD", "USD") - 0.71) < 1e-9
+        assert db.cache_get("fx:CADUSD", 3600) is None
+
+        # Without a rate the statement figures stay out of the score and the DCF
+        hk = data._normalize_info("0700.HK", {"currency": "HKD", "financialCurrency": "CNY", "quoteType": "EQUITY",
+                                              "marketCap": 1e9, "freeCashflow": 1e8, "sharesOutstanding": 1e8})
+        assert hk["statementFx"] is None
+        import pandas as pd
+        close = pd.Series(1.0, index=pd.bdate_range("2024-01-01", periods=300))
+        assert not [p for p in scoring.factor_breakdown(hk, close)["value"] if p["label"] == "FCF yield"]
+        assert "error" in insights.dcf(hk)
+        # A position in that currency is reported as a problem, not valued at 1:1
+        db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('0700.HK', 100, 300)")
+        with _FakeMarket({"0700.HK": _steps([0.001] * 30)}, {"0700.HK": {"currency": "HKD"}}):
+            p = portfolio.summary(db.get_settings())
+        assert p["total"] == 0 and not p["positions"] and any("HKD" in e for e in p["errors"])
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

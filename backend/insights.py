@@ -93,6 +93,9 @@ def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
     fcf = fcf if fcf is not None else inf.get("freeCashflow")
     # sharesOutstanding counts one share class only: Roche by 7.5x, Alphabet by 2x
     shares = inf.get("impliedSharesOutstanding") or inf.get("sharesOutstanding")
+    fx = inf.get("statementFx", 1.0)
+    if fx is None:
+        return {"error": "DCF needs an exchange rate between the statement and quote currencies, which isn't available right now."}
     if not fcf or not shares or fcf <= 0:
         return {"error": "DCF needs positive free cash flow and share count (not available for this asset)."}
     if growth is None:
@@ -113,7 +116,7 @@ def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
     equity = pv + tv_pv + cash - debt
     # Cash flows are in the statement currency. Convert the result to the price's unit, e.g. USD -> GBp.
     minor = data.MINOR_UNITS.get(inf.get("currency"), (None, 1.0))[1]
-    fair = equity / shares * (inf.get("statementFx") or 1.0) * minor
+    fair = equity / shares * fx * minor
     return {"fairValue": fair, "statementCurrency": inf.get("financialCurrency"), "growth": growth, "years": years, "discount": discount, "terminal": terminal,
             "pvFlows": pv, "pvTerminal": tv_pv, "terminalShare": tv_pv / (pv + tv_pv), "netCash": cash - debt,
             "flows": flows, "startFcf": fcf}

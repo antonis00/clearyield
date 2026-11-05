@@ -41,9 +41,9 @@ def factor_breakdown(info, close):
         _part(f["value"], "Forward P/E", g("forwardPE"), lin(g("forwardPE"), 35, 10) if (g("forwardPE") or 0) > 0 else None)
         _part(f["value"], "Price / Book", g("priceToBook"), lin(g("priceToBook"), 8, 1) if (g("priceToBook") or 0) > 0 else None)
         _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), lin(g("enterpriseToEbitda"), 25, 6) if (g("enterpriseToEbitda") or 0) > 0 else None)
-        fcf, mc = g("freeCashflow"), g("marketCap")
-        if fcf is not None and mc:
-            fy = fcf * (g("statementFx") or 1.0) / mc  # FCF is in the statement currency, market cap is not
+        fcf, mc, fx = g("freeCashflow"), g("marketCap"), g("statementFx", 1.0)
+        if fcf is not None and mc and fx:
+            fy = fcf * fx / mc  # FCF is in the statement currency, market cap is not
             _part(f["value"], "FCF yield", fy, lin(fy, 0, 0.08), "pct")
         # --- quality
         _part(f["quality"], "Return on equity", g("returnOnEquity"), lin(g("returnOnEquity"), 0, 0.30), "pct")
