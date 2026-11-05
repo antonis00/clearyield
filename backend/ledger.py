@@ -25,6 +25,19 @@ def _positive(t, key, allow_zero=False):
     return v
 
 
+def _valid_date(t, required):
+    date = t.get("date") or ""
+    if not date:
+        if required:
+            raise LedgerError(f"{t.get('ticker')}: sales and dividends need a date.")
+        return ""
+    try:
+        dt.date.fromisoformat(date)
+    except (TypeError, ValueError):
+        raise LedgerError(f"{t.get('ticker')}: the date must look like 2025-01-31.")
+    return date
+
+
 def replay(rows):
     """{ticker: {"lots": open lots, "sales": each sale per lot it came from, "dividends": [...]}}. Raises LedgerError."""
     book = {}
@@ -33,7 +46,7 @@ def replay(rows):
         if kind not in KINDS:
             raise LedgerError(f"{t.get('ticker')}: unknown transaction type '{kind}'.")
         p = book.setdefault(t["ticker"], {"lots": [], "sales": [], "dividends": []})
-        date = t.get("date") or ""
+        date = _valid_date(t, required=kind != "buy")
         if kind == "buy":
             p["lots"].append({"id": t.get("id"), "ticker": t["ticker"], "shares": _positive(t, "shares"), "cost": _positive(t, "price", True),
                               "bought": date, "note": t.get("note") or ""})
@@ -54,6 +67,29 @@ def replay(rows):
     return book
 
 
+def xirr(flows):
+    """Annual return from dated cash flows, [(date, amount)] with money in as negative. None if it can't be worked out,
+    or if they span under a month, when an annual figure would mislead."""
+    if not flows or not any(a < 0 for _, a in flows) or not any(a > 0 for _, a in flows):
+        return None
+    start = min(d for d, _ in flows)
+    if (max(d for d, _ in flows) - start).days < 30:
+        return None
+
+    def npv(rate):
+        return sum(a / (1 + rate) ** ((d - start).days / 365) for d, a in flows)
+    lo, hi = -0.99, 100.0
+    if npv(lo) * npv(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if npv(lo) * npv(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid
+    return (lo + hi) / 2
+
+
 def transactions():
     return db.q("SELECT * FROM transactions ORDER BY date DESC, id DESC")
 
@@ -62,25 +98,13 @@ def held_tickers():
     return [t for t, p in replay(transactions()).items() if p["lots"]]
 
 
-def _check_date(date, required):
-    if not date:
-        if required:
-            raise LedgerError("Sales and dividends need a date.")
-        return ""
-    try:
-        when = dt.date.fromisoformat(date)
-    except (TypeError, ValueError):
-        raise LedgerError("The date must look like 2025-01-31.")
-    if when > dt.date.today():
-        raise LedgerError("The date can't be in the future.")
-    return date
-
-
 def add(ticker, kind, date="", shares=None, price=None, amount=None, note=""):
     """Record a transaction if the ledger still adds up with it. Returns its id."""
     if kind not in KINDS:
         raise LedgerError(f"Unknown transaction type '{kind}'.")
-    date = _check_date(date, required=kind != "buy")
+    date = _valid_date({"ticker": ticker, "date": date}, required=kind != "buy")
+    if date and dt.date.fromisoformat(date) > dt.date.today():
+        raise LedgerError("The date can't be in the future.")
     rows = db.q("SELECT * FROM transactions")
     if kind != "buy" and not any(r["ticker"] == ticker and r["kind"] == "buy" for r in rows):
         raise LedgerError(f"There's no purchase of {ticker} to go with this.")

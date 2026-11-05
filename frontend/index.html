@@ -206,26 +206,32 @@
     <div id="pfIncomplete" class="alertbar hidden"></div>
     <div id="pfKpis" class="kpis big"></div>
     <div class="card">
-      <div class="card-h"><h3>Add a holding</h3><span class="muted sm">Cost per share in the asset's trading currency. Add the date so P&amp;L includes currency moves.</span></div>
+      <div class="card-h"><h3>Record a transaction</h3><span class="muted sm">Prices in the asset's trading currency. Add the date so P&amp;L includes currency moves.</span></div>
       <div class="form-row">
+        <label>Type<select id="hKind"><option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option></select></label>
         <label>Ticker<input id="hTicker" placeholder="AAPL"></label>
-        <label>Shares<input type="number" id="hShares" step="any"></label>
-        <label>Cost / share<input type="number" id="hCost" step="any"></label>
+        <label id="hSharesWrap">Shares<input type="number" id="hShares" step="any"></label>
+        <label><span id="hCostLabel">Price / share</span><input type="number" id="hCost" step="any"></label>
         <label>Date<input type="date" id="hDate"></label>
         <label class="grow">Note<input id="hNote"></label>
-        <button class="btn" id="btnAddHolding">Add</button>
+        <button class="btn" id="btnAddHolding">Record</button>
       </div>
     </div>
     <div class="card"><div class="card-h"><h3>Positions</h3></div><div id="pfTable" class="tablewrap"></div></div>
     <div class="grid2">
-      <div class="card"><div class="card-h"><h3>Performance vs benchmark (1Y)</h3></div><canvas id="pfPerf" height="200"></canvas><div class="muted sm" id="pfNote"></div></div>
-      <div class="card"><div class="card-h"><h3>Risk</h3></div><div id="pfRisk" class="statgrid"></div><ul id="pfWarn" class="signals"></ul></div>
+      <div class="card"><div class="card-h"><h3>Your performance vs benchmark (up to 1Y)</h3></div><canvas id="pfPerf" height="200"></canvas><div class="muted sm" id="pfNote"></div></div>
+      <div class="card"><div class="card-h"><h3>Risk</h3><span class="muted sm">Returns are what you earned. The rest applies today's holdings to the past year.</span></div><div id="pfRisk" class="statgrid"></div><ul id="pfWarn" class="signals"></ul></div>
     </div>
     <div class="grid4">
       <div class="card"><h4>Asset class</h4><canvas id="aAsset"></canvas></div>
       <div class="card"><h4>Region</h4><canvas id="aRegion"></canvas></div>
       <div class="card"><h4>Sector</h4><canvas id="aSector"></canvas></div>
       <div class="card"><h4>Currency</h4><canvas id="aCur"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Transactions</h3></div>
+      <div id="txTable" class="tablewrap"></div>
+      <div id="pfClosed"></div>
     </div>
     <div class="card">
       <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>

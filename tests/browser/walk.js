@@ -121,8 +121,17 @@ const SLOW = 150000;
   for (const id of ["#pfPerf", "#aAsset", "#aRegion", "#aSector", "#aCur"]) expect(`portfolio: chart ${id}`, await canvasDrawn(id));
   expect("portfolio: no bad text", !/undefined|NaN|\[object/.test(await txt("#view-portfolio")));
   await shot("portfolio");
+  // A sale and a dividend through the form
+  await p.selectOption("#hKind", "sell"); await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hShares", "100"); await p.fill("#hCost", "18"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
+  await p.selectOption("#hKind", "dividend"); await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hCost", "120"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
+  await p.selectOption("#hKind", "buy");
+  const led = await p.evaluate(async () => (await fetch("/api/portfolio")).json());
+  expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
+  expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs dated/.test(await txt("#pfKpis")), await txt("#pfKpis"));
+  expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
+  await shot("ledger");
   await p.click("#pfTable thead th:nth-child(6)"); await p.waitForTimeout(200);
-  await p.locator("#pfTable [data-lots]").first().click(); await p.waitForTimeout(300);
+  await p.locator('#pfTable tbody tr:has-text("SPY") [data-lots]').click(); await p.waitForTimeout(300);
   await p.locator("#modal [data-del]").first().click(); await p.waitForFunction(() => document.querySelectorAll("#pfTable tbody tr").length === 4, null, { timeout: SLOW });
   expect("portfolio: delete a lot after sorting", true);
 

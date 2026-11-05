@@ -217,6 +217,52 @@ const CHECKS = {
     expect("odd address falls back to the dashboard", await page.evaluate(() => !document.querySelector("#view-dashboard").classList.contains("hidden")));
   },
 
+  // Record a buy, a sale and a dividend on the Portfolio page, and see the results
+  async ledger(page) {
+    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(500);
+    const record = async (kind, fields) => {
+      await page.selectOption("#hKind", kind);
+      for (const [k, v] of Object.entries(fields)) await page.fill(k, v);
+      await page.click("#btnAddHolding"); await page.waitForTimeout(1500);
+    };
+    await record("buy", { "#hTicker": "AAPL", "#hShares": "10", "#hCost": "100", "#hDate": "2024-06-03" });
+    expect("buy is recorded", (await page.locator("#pfTable tbody tr").count()) === 1);
+    expect("form clears", (await page.inputValue("#hTicker")) === "" && (await page.inputValue("#hDate")) === "");
+
+    await record("sell", { "#hTicker": "AAPL", "#hShares": "11", "#hCost": "150", "#hDate": "2025-01-02" });
+    expect("selling too many is refused with a reason", /more than were held/.test(await page.textContent("#toast")), await page.textContent("#toast"));
+    expect("the form keeps what you typed after a refusal", (await page.inputValue("#hShares")) === "11");
+    await record("sell", { "#hTicker": "AAPL", "#hShares": "4", "#hCost": "150", "#hDate": "2025-01-02" });
+    await page.selectOption("#hKind", "dividend");
+    expect("a dividend has no shares field", !(await page.isVisible("#hShares")));
+    expect("its amount is labelled", /Total received/.test(await page.textContent("#hCostLabel")), await page.textContent("#hCostLabel"));
+    await page.fill("#hTicker", "AAPL"); await page.fill("#hCost", "10"); await page.fill("#hDate", "2025-02-03");
+    await page.click("#btnAddHolding"); await page.waitForTimeout(1500);
+    await page.selectOption("#hKind", "buy");
+    expect("shares field returns for a buy", await page.isVisible("#hShares"));
+
+    const kpis = (await page.innerText("#pfKpis")).replace(/\s+/g, " ");
+    expect("realised P&L shown", /REALISED P&L \$200/i.test(kpis), kpis);
+    expect("dividends shown", /DIVIDENDS RECEIVED \$10/i.test(kpis), kpis);
+    expect("annual return shown", /ANNUAL RETURN/i.test(kpis));
+    expect("position is what's left", /6\.00/.test(await page.innerText("#pfTable tbody tr")));
+    const rows = await page.locator("#txTable tbody tr").count();
+    expect("all three are listed, not the refused one", rows === 3, rows);
+    expect("history is not blank", !/undefined|NaN|null/.test(await page.innerText("#txTable")));
+    await page.screenshot({ path: `${OUT}/ledger.png`, fullPage: true });
+
+    // Sorting then deleting: refusal for the buy, then the sale, then the buy
+    const dialogs = (d) => d.accept(); page.on("dialog", dialogs);
+    await page.click("#txTable thead th:nth-child(1)"); await page.waitForTimeout(150);
+    const del = async (kind) => { await page.locator(`#txTable tbody tr:has-text("${kind}") [data-tdel]`).click(); await page.waitForTimeout(1200); };
+    await del("buy");
+    expect("deleting a buy a sale needs is refused", /sale depends/.test(await page.textContent("#toast")), await page.textContent("#toast"));
+    await del("sell"); await del("dividend"); await del("buy");
+    expect("all gone", (await page.locator("#txTable tbody tr").count()) === 0);
+    expect("position gone", (await page.locator("#pfTable tbody tr").count()) === 0);
+    page.off("dialog", dialogs);
+  },
+
   // Text from Yahoo can't run as a script in the brief
   async xss(page) {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });

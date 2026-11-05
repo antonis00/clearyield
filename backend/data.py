@@ -347,6 +347,24 @@ def fx_on(currency, base, date):
     return None
 
 
+def fx_series(currency, base, index):
+    """Units of `base` per 1 unit of `currency` on each date of `index`, or None if Yahoo has no history for the pair."""
+    major, divisor = MINOR_UNITS.get(currency, (currency, 1.0))
+    if major == base or DEMO or fx_is_fixed(currency, base):
+        return pd.Series(fx_rate(currency, base), index=index)
+    if "USD" not in (major, base):
+        legs = fx_series(major, "USD", index), fx_series(base, "USD", index)
+        return legs[0] / legs[1] / divisor if legs[0] is not None and legs[1] is not None else None
+    for sym, invert in ((f"{major}{base}=X", False), (f"{base}{major}=X", True)):
+        try:
+            closes = history(sym, "5y")["Close"]
+        except DataError:
+            continue
+        rates = (1 / closes if invert else closes) / divisor
+        return rates.reindex(rates.index.union(index)).ffill().bfill().reindex(index)
+    return None
+
+
 def fx_is_fixed(currency, base):
     """True when the rate between two currencies doesn't move, so the purchase date doesn't matter."""
     major = MINOR_UNITS.get(currency, (currency,))[0]

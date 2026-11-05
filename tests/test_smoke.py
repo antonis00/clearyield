@@ -1174,7 +1174,7 @@ def test_old_holdings_become_transactions():
     path = Path(tempfile.mkdtemp()) / "old.db"
     old = sqlite3.connect(path)
     old.execute("CREATE TABLE holdings (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, shares REAL NOT NULL, cost REAL NOT NULL, bought TEXT DEFAULT '', note TEXT DEFAULT '')")
-    old.execute("INSERT INTO holdings (ticker, shares, cost, bought, note) VALUES ('AAPL', 10, 150, '2024-06-03', 'core'), ('SPY', 5, 400, '', '')")
+    old.execute("INSERT INTO holdings (ticker, shares, cost, bought, note) VALUES ('AAPL', 10, 150, '2024-06-03', 'core'), ('SPY', 5, 400, '', ''), ('MSFT', 1, 9, 'last spring', '')")
     old.commit()
     old.close()
     real = db.DB_PATH
@@ -1184,7 +1184,7 @@ def test_old_holdings_become_transactions():
         db.init()  # running it again must not copy anything twice
         rows = db.q("SELECT * FROM transactions ORDER BY id")
         assert [(r["ticker"], r["kind"], r["date"], r["shares"], r["price"], r["note"]) for r in rows] == [
-            ("AAPL", "buy", "2024-06-03", 10.0, 150.0, "core"), ("SPY", "buy", "", 5.0, 400.0, "")]
+            ("AAPL", "buy", "2024-06-03", 10.0, 150.0, "core"), ("SPY", "buy", "", 5.0, 400.0, ""), ("MSFT", "buy", "", 1.0, 9.0, "")]
         assert not db.q("SELECT 1 FROM sqlite_master WHERE name = 'holdings'")
     finally:
         db.DB_PATH = real
@@ -1202,6 +1202,207 @@ def test_old_holdings_become_transactions():
                "transactions": [{"ticker": "X", "kind": "sell", "date": "2025-01-02", "shares": 1, "price": 1}]}
         assert c.post("/api/backup/restore", json=bad).status_code == 400
         assert db.q("SELECT * FROM transactions")[0]["id"] == 7
+
+
+def test_realised_results_are_hand_calculated():
+    """A EUR stock: bought at EUR/USD 1.00, part sold at 1.10, a dividend at 1.10, and 1.08 today."""
+    from backend import data, db, portfolio
+    _reset()
+    rates = {"2024-06-03": 1.00, "2025-06-02": 1.10, "2025-07-01": 1.10, "2024-07-01": 1.0}
+    real = data.fx_on
+    data.fx_on = lambda currency, base, date: rates[date] if currency == "EUR" else real(currency, base, date)
+    try:
+        db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('EURO', 'buy', '2024-06-03', 10, 100), ('EURO', 'sell', '2025-06-02', 5, 110)")
+        db.x("INSERT INTO transactions (ticker, kind, date, amount) VALUES ('EURO', 'dividend', '2025-07-01', 10)")
+        db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('SOLD', 'buy', '2024-07-01', 2, 50), ('SOLD', 'sell', '2025-06-02', 2, 60)")
+        prices = {"EURO": _steps([0.0] * 300) * 1.2, "SOLD": _steps([0.0] * 300), "SPY": _steps([0.0] * 300)}
+        with _FakeMarket(prices, {"EURO": {"currency": "EUR"}}):
+            p = portfolio.summary(db.get_settings())
+    finally:
+        data.fx_on = real
+    pos = {r["ticker"]: r for r in p["positions"]}
+    assert list(pos) == ["EURO"], "a fully sold position isn't a holding"
+    assert abs(pos["EURO"]["value"] - 5 * 120 * 1.08) < 1e-6 and abs(pos["EURO"]["cost"] - 500) < 1e-6
+    assert abs(p["pnl"] - 148) < 1e-6
+    # 5 x (110 x 1.10 - 100 x 1.00) = 105 on EURO, plus 2 x (60 - 50) = 20 on SOLD
+    assert abs(p["realised"] - 125) < 1e-6
+    assert abs(p["dividends"] - 11) < 1e-6
+    assert abs(p["totalGain"] - (148 + 125 + 11)) < 1e-6
+    closed = {c["ticker"]: c for c in p["closed"]}
+    assert list(closed) == ["SOLD"] and abs(closed["SOLD"]["realised"] - 20) < 1e-6
+    assert abs(pos["EURO"]["realised"] - 105) < 1e-6 and abs(pos["EURO"]["dividends"] - 11) < 1e-6
+
+
+def test_annual_return_is_hand_calculated():
+    import datetime as dt
+
+    from backend import db, ledger, portfolio
+    day = dt.date(2025, 1, 1)
+    # 1,000 in, 1,100 out exactly a year later
+    r = ledger.xirr([(day, -1000.0), (day + dt.timedelta(days=365), 1100.0)])
+    assert abs(r - 0.10) < 1e-6
+    # A loss
+    assert abs(ledger.xirr([(day, -1000.0), (day + dt.timedelta(days=365), 900.0)]) + 0.10) < 1e-6
+    # 1,000 in, 500 back after a year, 605 after two: 10% a year
+    two = ledger.xirr([(day, -1000.0), (day + dt.timedelta(days=365), 500.0), (day + dt.timedelta(days=730), 660.0)])
+    assert abs(-1000 + 500 / (1 + two) + 660 / (1 + two) ** 2) < 1e-6
+    # Too short to annualise, or no money in, means no answer
+    assert ledger.xirr([(day, -1000.0), (day + dt.timedelta(days=10), 1100.0)]) is None
+    assert ledger.xirr([(day, 1000.0), (day + dt.timedelta(days=365), 1100.0)]) is None
+    assert ledger.xirr([]) is None
+
+    _reset()
+    today = dt.date.today()
+    year_ago = (today - dt.timedelta(days=365)).isoformat()
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('AAA', 'buy', ?, 10, 100)", (year_ago,))
+    prices = {"AAA": _steps([0.0] * 300, end=today.isoformat()) * 1.1, "SPY": _steps([0.0] * 300, end=today.isoformat())}
+    with _FakeMarket(prices):
+        assert abs(portfolio.summary(db.get_settings())["xirr"] - 0.10) < 1e-6
+    # An undated lot has no start date, so no annual return can be worked out
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('AAA', 1, 100)")
+    with _FakeMarket(prices):
+        assert portfolio.summary(db.get_settings())["xirr"] is None
+    # Nor while a holding is missing from the total
+    with _FakeMarket({**prices, "AAA": None}):
+        assert portfolio.summary(db.get_settings())["xirr"] is None
+
+
+def test_performance_follows_the_actual_transactions():
+    import datetime as dt
+
+    import pandas as pd
+
+    from backend import data, db, portfolio
+    _reset()
+    idx = pd.bdate_range(end="2026-06-01", periods=4)
+    d = [x.strftime("%Y-%m-%d") for x in idx]
+    a = pd.Series([100.0, 110.0, 110.0, 121.0], index=idx)
+    b = pd.Series([50.0, 50.0, 100.0, 100.0], index=idx)
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('A', 'buy', ?, 10, 100), ('B', 'buy', ?, 20, 50)", (d[0], d[1]))
+    with _FakeMarket({"A": a, "B": b, "SPY": a}):
+        p = portfolio.summary(db.get_settings())
+    # Day 2: only A held, +10%. Day 3: 1,100 of A and 1,000 of B become 3,100. Day 4: 3,210.
+    expected = [100.0, 110.0, 110 * 3100 / 2100, 110 * 3100 / 2100 * 3210 / 3100]
+    assert p["performance"]["dates"] == d
+    assert all(abs(x - y) < 1e-6 for x, y in zip(p["performance"]["portfolio"], expected)), p["performance"]["portfolio"]
+    assert abs(p["risk"]["return1y"] - (expected[-1] / 100 - 1)) < 1e-9
+    assert p["performance"]["start"] == d[0]
+
+    # A sale takes effect the next day, and the chart starts when something was first held
+    _reset()
+    e = pd.Series([100.0, 100.0, 100.0, 110.0, 121.0], index=pd.bdate_range(end="2026-06-01", periods=5))
+    days = [x.strftime("%Y-%m-%d") for x in e.index]
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('E', 'buy', ?, 2, 100), ('E', 'sell', ?, 2, 110)", (days[1], days[3]))
+    with _FakeMarket({"E": e, "SPY": e}):
+        p = portfolio.summary(db.get_settings())
+    assert p["performance"]["dates"] == days[1:]
+    assert all(abs(x - y) < 1e-6 for x, y in zip(p["performance"]["portfolio"], [100.0, 100.0, 110.0, 110.0]))
+
+    # Bought today: nothing to chart yet, and no error
+    _reset()
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('N', 'buy', ?, 1, 100)", (dt.date.today().isoformat(),))
+    with _FakeMarket({"N": _steps([0.0] * 30, end=dt.date.today().isoformat()), "SPY": _steps([0.0] * 30, end=dt.date.today().isoformat())}):
+        p = portfolio.summary(db.get_settings())
+    assert p["performance"] is None and p["risk"].get("return1y") is None and p["total"] > 0
+
+    # A flat EUR stock in a USD portfolio gains as the euro rises, on each day's rate
+    _reset()
+    idx = pd.bdate_range(end="2026-06-01", periods=3)
+    flat = pd.Series([100.0] * 3, index=idx)
+    rates = pd.Series([1.00, 1.05, 1.10], index=idx)
+    real = data.fx_series
+    data.fx_series = lambda currency, base, index: rates.reindex(index) if currency == "EUR" else real(currency, base, index)
+    try:
+        db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('EURO', 'buy', ?, 1, 100)", (idx[0].strftime("%Y-%m-%d"),))
+        with _FakeMarket({"EURO": flat, "SPY": flat}, {"EURO": {"currency": "EUR"}}):
+            p = portfolio.summary(db.get_settings())
+    finally:
+        data.fx_series = real
+    assert all(abs(x - y) < 1e-6 for x, y in zip(p["performance"]["portfolio"], [100.0, 105.0, 110.0]))
+
+
+def test_fx_series_reads_the_history():
+    import pandas as pd
+
+    from backend import data, db
+    idx = pd.bdate_range("2025-01-06", periods=4)
+    eur = pd.Series([1.0, 1.1], index=[idx[0], idx[2]])
+    gbp = pd.Series([1.3, 1.3], index=[idx[0], idx[3]])
+    real_demo = data.DEMO
+    data.DEMO = False
+    db.cache_clear()
+    try:
+        db.cache_set("fx:QARUSD", 0.2747)
+        with _FakeMarket({"EURUSD=X": eur, "GBPUSD=X": gbp}):
+            assert data.fx_series("EUR", "USD", idx).tolist() == [1.0, 1.0, 1.1, 1.1]  # gaps carry the last rate
+            assert [round(x, 6) for x in data.fx_series("GBp", "USD", idx)] == [0.013] * 4
+            assert data.fx_series("USD", "USD", idx).tolist() == [1.0] * 4
+            assert data.fx_series("QAR", "USD", idx).tolist() == [0.2747] * 4  # a peg needs no history
+            assert [round(x, 6) for x in data.fx_series("GBP", "EUR", idx)] == [1.3, 1.3, round(1.3 / 1.1, 6), round(1.3 / 1.1, 6)]
+            assert data.fx_series("HKD", "USD", idx) is None
+    finally:
+        data.DEMO = real_demo
+        db.cache_clear()
+
+
+def test_ledger_refuses_dates_that_would_break_it():
+    from fastapi.testclient import TestClient
+
+    from backend import ledger
+    from backend.main import app
+    for bad in ({"ticker": "A", "kind": "buy", "date": "soon", "shares": 1, "price": 1},
+                {"ticker": "A", "kind": "buy", "date": "2024-13-45", "shares": 1, "price": 1}):
+        try:
+            ledger.replay([bad])
+            raise AssertionError(f"should be refused: {bad}")
+        except ledger.LedgerError as e:
+            assert "date" in str(e)
+    buy = {"ticker": "A", "kind": "buy", "date": "", "shares": 1, "price": 1}
+    for bad in ({"ticker": "A", "kind": "sell", "date": "", "shares": 1, "price": 1}, {"ticker": "A", "kind": "dividend", "date": "", "amount": 1}):
+        try:
+            ledger.replay([buy, bad])
+            raise AssertionError(f"should be refused: {bad}")
+        except ledger.LedgerError as e:
+            assert "date" in str(e)
+    _reset()
+    backup = {"version": 2, "watchlist": [], "journal": [], "alerts": [], "settings": {},
+              "transactions": [{"ticker": "AAPL", "kind": "buy", "date": "soon", "shares": 1, "price": 1}]}
+    with TestClient(app) as c:
+        assert c.post("/api/backup/restore", json=backup).status_code == 400
+        assert c.get("/api/portfolio").status_code == 200
+
+
+def test_realised_figures_say_when_they_are_not_complete():
+    from backend import data, db, portfolio
+    _reset()
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('OK', 'buy', '2024-06-03', 2, 50), ('OK', 'sell', '2025-06-02', 2, 60)")
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('ODD', 'buy', '2024-06-03', 1, 50), ('ODD', 'sell', '2025-06-02', 1, 60)")
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('HELD', 'buy', '2024-06-03', 1, 50)")
+    flat = _steps([0.0] * 300)
+    real = data.fx_rate
+
+    def rate(currency, base="USD"):
+        if currency == "XXX":
+            raise data.DataError("No exchange rate available for XXX to USD.")
+        return real(currency, base)
+    data.fx_rate = rate
+    try:
+        with _FakeMarket({"OK": flat, "ODD": flat, "HELD": flat, "SPY": flat}, {"ODD": {"currency": "XXX"}}):
+            p = portfolio.summary(db.get_settings())
+    finally:
+        data.fx_rate = real
+    # One closed position without a rate must not wipe out the others, and has to be mentioned
+    assert abs(p["realised"] - 20) < 1e-6
+    assert any("ODD" in w and "realised" in w.lower() for w in p["warnings"]), p["warnings"]
+    assert p["xirr"] is None and p["incomplete"] is False
+
+    # A sale from an undated lot in another currency uses today's rate for its cost, and says so
+    _reset()
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('EURO', 2, 50)")
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('EURO', 'sell', '2025-06-02', 2, 60)")
+    with _FakeMarket({"EURO": flat, "SPY": flat}, {"EURO": {"currency": "EUR"}}):
+        p = portfolio.summary(db.get_settings())
+    assert any("EURO" in w and "realised" in w.lower() and "exchange rate" in w for w in p["warnings"]), p["warnings"]
 
 
 def test_minor_unit_currencies():

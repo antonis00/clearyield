@@ -57,7 +57,8 @@ def init():
             # Before the ledger there was only a table of current lots: each one becomes a buy
             if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holdings'").fetchone():
                 c.execute("INSERT INTO transactions (id, ticker, kind, date, shares, price, note) "
-                          "SELECT id, ticker, 'buy', COALESCE(bought, ''), shares, cost, COALESCE(note, '') FROM holdings")
+                          "SELECT id, ticker, 'buy', CASE WHEN bought GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' THEN bought ELSE '' END, "
+                          "shares, cost, COALESCE(note, '') FROM holdings")
                 c.execute("DROP TABLE holdings")
             for table, added in ADDED_COLUMNS.items():
                 have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}

@@ -469,7 +469,9 @@ async function loadPortfolio() {
   if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
   $("#pfKpis").innerHTML = [
     ["Total value", money(p.total, b, 0)], ["Invested", money(p.cost, b, 0)], ["Unrealised P&L", `<span class="${cls(p.pnl)}">${money(p.pnl, b, 0)}</span>`, pct(p.pnlPct)],
-    ["Today", `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`], ["Est. dividend income / yr", money(p.annualIncome, b, 0)], ["Positions", p.positions.length],
+    ["Today", `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`], ["Realised P&L", `<span class="${cls(p.realised)}">${money(p.realised, b, 0)}</span>`], ["Dividends received", money(p.dividends, b, 0)],
+    ["Annual return", isNum(p.xirr) ? cpct(p.xirr) : "—", isNum(p.xirr) ? "Your money's return, with timing" : "Needs dated transactions over a month or more"],
+    ["Est. dividend income / yr", money(p.annualIncome, b, 0)], ["Positions", p.positions.length],
   ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
   table(t, [
     { k: "ticker", label: "Ticker", fmt: symCell }, { k: "shares", label: "Shares", num: 1, fmt: (v) => num(v, v < 1 ? 4 : 2) },
@@ -485,6 +487,19 @@ async function loadPortfolio() {
     $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { if (!confirm("Delete this lot?")) return; await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
   }));
   if (p.errors?.length) toast(p.errors.join(" · "));
+  const tx = await api("/api/transactions");
+  const curOf = Object.fromEntries(p.positions.map((x) => [x.ticker, x.currency]));
+  table($("#txTable"), [
+    { k: "date", label: "Date", fmt: (v) => esc(v || "no date") }, { k: "ticker", label: "Ticker", fmt: (v) => `<span class="sym">${esc(v)}</span>` }, { k: "kind", label: "Type", fmt: (v) => esc(v) },
+    { k: "shares", label: "Shares", num: 1, fmt: (v) => (isNum(v) ? num(v, v < 1 ? 4 : 2) : "") },
+    { k: "price", label: "Price or amount", num: 1, fmt: (v, r) => money(r.kind === "dividend" ? r.amount : v, curOf[r.ticker] ?? null) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
+    { k: "id", label: "", fmt: (v) => `<button class="btn danger" data-tdel="${v}">Delete</button>` },
+  ], tx, { empty: "Nothing recorded yet." })
+  .afterDraw(() => $$("[data-tdel]", $("#txTable")).forEach((d) => d.onclick = async () => {
+    if (!confirm("Delete this transaction?")) return;
+    try { await api(`/api/transactions/${d.dataset.tdel}`, { method: "DELETE" }); loadPortfolio(); } catch (e) { toast(e.message); }
+  }));
+  $("#pfClosed").innerHTML = p.closed.length ? `<h4>Closed positions</h4><div class="statgrid">${p.closed.map((c) => `<div><span>${esc(c.ticker)}</span><span class="${cls(c.realised + c.dividends)}">${money(c.realised + c.dividends, b, 0)}</span></div>`).join("")}</div>` : "";
   $("#pfNote").textContent = p.note;
   if (!p.performance) { state.charts.pfPerf?.destroy(); delete state.charts.pfPerf; }
   if (p.performance) {
@@ -493,7 +508,7 @@ async function loadPortfolio() {
     mkChart("pfPerf", { type: "line", data: { labels: p.performance.dates, datasets: ds }, options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 8 } } } } });
   }
   const r = p.risk;
-  $("#pfRisk").innerHTML = [["1Y return", cpct(r.return1y)], ["Benchmark 1Y", cpct(r.benchmarkReturn)], ["Volatility", pct(r.volatility, 1, false)],
+  $("#pfRisk").innerHTML = [["Your return", cpct(r.return1y)], ["Benchmark", cpct(r.benchmarkReturn)], ["Volatility", pct(r.volatility, 1, false)],
     ["Max drawdown", cpct(r.maxDrawdown)], ["Sharpe", num(r.sharpe)], ["Sortino", num(r.sortino)], ["Beta", num(r.beta)]]
     .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
   $("#pfWarn").innerHTML = p.warnings.map((w) => `<li class="t-1">${esc(w)}</li>`).join("") || (p.positions.length ? `<li class="t1">No concentration warnings.</li>` : "");
@@ -506,10 +521,17 @@ async function loadPortfolio() {
     { k: "trade", label: `Amount (${b})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
 }
+$("#hKind").onchange = () => {
+  const dividend = $("#hKind").value === "dividend";
+  $("#hSharesWrap").classList.toggle("hidden", dividend);
+  $("#hCostLabel").textContent = dividend ? "Total received" : "Price / share";
+};
 $("#btnAddHolding").onclick = async () => {
+  const kind = $("#hKind").value, value = $("#hCost").value;
+  const figures = kind === "dividend" ? { amount: value } : { shares: $("#hShares").value, price: value };
   try {
-    await api("/api/holdings", { method: "POST", body: { ticker: $("#hTicker").value, shares: $("#hShares").value, cost: $("#hCost").value, bought: $("#hDate").value, note: $("#hNote").value } });
-    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); toast("Holding added"); loadPortfolio();
+    await api("/api/transactions", { method: "POST", body: { ticker: $("#hTicker").value, kind, date: $("#hDate").value, note: $("#hNote").value, ...figures } });
+    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); toast("Transaction recorded"); loadPortfolio();
   } catch (e) { toast(e.message); }
 };
 

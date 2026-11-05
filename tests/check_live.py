@@ -75,6 +75,24 @@ with TestClient(app) as c:
         yrs = (start.index[-1] - start.index[0]).days / 365.25
         check(f"{t} CAGR", s["ret5yCagr"], (start.iloc[-1] / start.iloc[0]) ** (1 / yrs) - 1, 0.01)
 
+    # A sale, and the performance line, from a fresh ledger: a EUR-based view of one USD stock
+    for t in c.get("/api/transactions").json():
+        assert c.delete(f"/api/transactions/{t['id']}").status_code == 200
+    raw = close("AAPL")
+    bought, sold = raw.index[-400].strftime("%Y-%m-%d"), raw.index[-100].strftime("%Y-%m-%d")
+    assert c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "date": bought, "shares": 10, "price": 150}).status_code == 200
+    assert c.post("/api/transactions", json={"ticker": "AAPL", "kind": "sell", "date": sold, "shares": 4, "price": 200}).status_code == 200
+    assert c.post("/api/transactions", json={"ticker": "AAPL", "kind": "dividend", "date": sold, "amount": 10}).status_code == 200
+    p2 = c.get("/api/portfolio").json()
+    check("realised on a sale", p2["realised"], 4 * (200 / at(eurusd, sold) - 150 / at(eurusd, bought)))
+    check("dividend at that day's rate", p2["dividends"], 10 / at(eurusd, sold))
+    window = raw[raw.index >= raw.index[-1] - pd.Timedelta(days=365)]
+    eur = eurusd.reindex(eurusd.index.union(window.index)).ffill().reindex(window.index)
+    in_eur = window / eur
+    held = pd.Series(10.0, index=window.index).where(window.index < pd.Timestamp(sold), 6.0).shift(1).fillna(10.0)
+    daily = (held * in_eur).div((held * in_eur.shift(1))).dropna()
+    check("performance over the year", p2["risk"]["return1y"], daily.prod() - 1, 0.01)
+
     # Weekly correlation, written out by hand, for the pair that looked low
     a, m = close("AAPL"), close("MSFT")
     j = pd.concat([a, m], axis=1, join="inner"); j = j[j.index >= j.index[-1] - pd.Timedelta(days=365)]

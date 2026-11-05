@@ -32,7 +32,7 @@ Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn o
 | **Research** | Candlestick chart with SMA 50/200, Bollinger bands, volume, RSI and MACD; factor radar with drill-down to every metric; plain-language signals; key stats; 4-year fundamentals; DCF calculator with the growth today's price assumes and a sensitivity grid; next earnings and ex-dividend dates; news with headline sentiment; AI or rule-based bull/bear brief; pre-trade check showing how a purchase would change your weights, warnings and beta, how it moves with your holdings, and a position size from your stop and risk |
 | **Compare** | Growth-of-100 chart, metrics table and return-correlation matrix for up to 8 assets |
 | **Screener** | ~100-ticker universe across 5 markets; numeric filters or a plain-language query ("cheap profitable dividend stocks in the Gulf") |
-| **Portfolio** | Multi-currency holdings converted to your base currency, P&L, 1Y performance vs benchmark, volatility/Sharpe/Sortino/beta/drawdown, allocation by asset class/region/sector/currency, concentration warnings, rebalancing vs target allocation, estimated dividend income |
+| **Portfolio** | Ledger of buys, sales and dividends, matched first in, first out. Multi-currency holdings converted to your base currency, unrealised and realised P&L at the FX rate on each date, annual return (XIRR), your actual performance vs benchmark over the past year, volatility/Sharpe/Sortino/beta/drawdown, allocation by asset class/region/sector/currency, concentration warnings, rebalancing vs target allocation, estimated dividend income |
 | **Backtest** | Buy & hold, MA crossover, RSI mean reversion, absolute momentum and monthly DCA, with next-bar execution and trading costs |
 | **Journal & Alerts** | Record thesis, invalidation condition, stop/target and review date for every decision, with a scorecard of how your buy and add decisions did against the benchmark, overall and by the stance when recorded; alerts on price, daily move, RSI or score, shown in the tab title and as optional browser notifications while the page is open. Both feed the digest |
 | **Settings** | Factor weights (balanced by default), base currency, risk-free rate, benchmark, target allocation |
@@ -65,7 +65,7 @@ Edit `backend/universe.py` to change the screener universe.
 ## Notes and limits
 
 - Data comes from Yahoo Finance via `yfinance`. It is free, unofficial and occasionally delayed or incomplete, especially for Gulf fundamentals. Responses are cached in `data/stockpilot.db`. Use **Settings → Clear data cache** to force fresh data.
-- Portfolio performance applies *current* holdings and *today's* FX rates to the past year, so it approximates rather than records your actual history.
+- The performance chart follows your actual transactions and each day's FX rate over the past year. Risk figures instead apply today's holdings to the past year, because they describe what you own now.
 - Yahoo data is for personal use. Check the terms before sharing or redistributing data from the app.
 - Run the offline test suite with: `python tests/test_smoke.py`
 - Run every check with: `python tests/run_all.py`. It adds a browser walk through every screen in demo mode and with live data, plus a comparison with raw Yahoo figures. It needs Chrome, internet and Node, once you've run `npm install` in `tests/browser`. It uses temporary databases, so your data isn't touched.
