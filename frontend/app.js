@@ -297,7 +297,7 @@ async function loadNews() {
 }
 $("#btnBrief").onclick = async () => {
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(state.ticker)}/brief`); out.classList.remove("muted"); out.innerHTML = marked.parse(r.text); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(state.ticker)}/brief`); out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
 $("#btnWatch").onclick = async () => {
