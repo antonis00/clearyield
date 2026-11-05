@@ -1,4 +1,4 @@
-"""Simple single-asset strategy backtests with next-bar execution (no look-ahead) and trading costs."""
+"""Simple single-asset strategy backtests with trading costs. A signal from a day's close trades at the next open."""
 import numpy as np
 import pandas as pd
 
@@ -66,9 +66,16 @@ def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=100
         eq = pd.Series(vals, index=close.index)
         trades = len(months)
     else:
-        pos = _positions(full, strategy, params).shift(1).fillna(0).reindex(close.index)  # act on the next bar
+        held = _positions(full, strategy, params).shift(1).fillna(0)  # decided at a close, so held from the next day
+        pos, before = held.reindex(close.index), held.shift(1).fillna(0).reindex(close.index)
         turnover = pos.diff().abs().fillna(pos.iloc[0])
-        strat_rets = pos * rets - turnover * cost_bps / 1e4
+        previous = close.shift(1)
+        opens = df["Open"].reindex(close.index).fillna(previous) if "Open" in df else previous
+        day = pos * rets
+        day = day.mask(pos > before, close / opens - 1)  # bought at the open, so only that day's open-to-close counts
+        day = day.mask(pos < before, opens / previous - 1)  # sold at the open, so only the overnight move counts
+        day.iloc[0] = 0.0
+        strat_rets = day - turnover * cost_bps / 1e4
         eq = capital * (1 + strat_rets).cumprod()
         trades = int((turnover > 0).sum())
         exposure = float(pos.mean())
