@@ -147,7 +147,7 @@ def _reset():
     """Clear the user tables so a test starts from an empty app."""
     from backend import db
     db.init()
-    for table in ("holdings", "watchlist", "journal", "alerts", "settings"):
+    for table in ("transactions", "watchlist", "journal", "alerts", "settings"):
         db.x(f"DELETE FROM {table}")
 
 
@@ -191,10 +191,10 @@ def test_new_position_keeps_the_portfolio_history():
     _reset()
     old = _steps([0.002, -0.001] * 130)
     new = _steps([0.01, -0.01] * 10)
-    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('OLD', 100, 100)")
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('OLD', 100, 100)")
     with _FakeMarket({"OLD": old, "SPY": old}):
         alone = portfolio.summary(db.get_settings())
-    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('NEW', 0.001, 100)")  # about 0.001% of the value
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('NEW', 0.001, 100)")  # about 0.001% of the value
     with _FakeMarket({"OLD": old, "NEW": new, "SPY": old}):
         both = portfolio.summary(db.get_settings())
     assert len(both["performance"]["dates"]) == len(alone["performance"]["dates"]) == 261
@@ -203,7 +203,7 @@ def test_new_position_keeps_the_portfolio_history():
     assert any("NEW" in w and "history since" in w for w in both["warnings"])
     assert not any("history since" in w for w in alone["warnings"])
     # Joining the portfolio must not itself look like a gain: a new position adds value, not return
-    db.x("UPDATE holdings SET shares = 100 WHERE ticker = 'NEW'")
+    db.x("UPDATE transactions SET shares = 100 WHERE ticker = 'NEW'")
     with _FakeMarket({"OLD": old, "NEW": new, "SPY": old}):
         half = portfolio.summary(db.get_settings())
     assert abs(half["risk"]["return1y"]) < 0.5
@@ -255,7 +255,7 @@ def test_fx_failure_never_guesses_a_rate():
         assert [p for p in scoring.factor_breakdown(hk, close)["value"] if p["label"] == "FCF yield"][0]["score"] is None
         assert "error" in insights.dcf(hk)
         # A position in that currency is reported as a problem, not valued at 1:1
-        db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('0700.HK', 100, 300)")
+        db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('0700.HK', 100, 300)")
         with _FakeMarket({"0700.HK": _steps([0.001] * 30)}, {"0700.HK": {"currency": "HKD"}}):
             p = portfolio.summary(db.get_settings())
         assert p["total"] == 0 and not p["positions"] and any("HKD" in e for e in p["errors"])
@@ -271,7 +271,7 @@ def test_cost_uses_the_exchange_rate_on_the_purchase_date():
     real = data.fx_on
     data.fx_on = lambda currency, base, date: 1.00 if currency == "EUR" else real(currency, base, date)
     try:
-        db.x("INSERT INTO holdings (ticker, shares, cost, bought) VALUES ('SAP.DE', 10, 100, '2025-01-02')")
+        db.x("INSERT INTO transactions (ticker, shares, price, date) VALUES ('SAP.DE', 10, 100, '2025-01-02')")
         with _FakeMarket({"SAP.DE": flat}, {"SAP.DE": {"currency": "EUR"}}):
             p = portfolio.summary(db.get_settings())
         pos = p["positions"][0]
@@ -279,7 +279,7 @@ def test_cost_uses_the_exchange_rate_on_the_purchase_date():
         assert pos["fxApprox"] is False and not any("exchange rate" in w for w in p["warnings"])
 
         # Two lots: one dated at 1.00, one with no date, which can only use today's 1.08 and says so
-        db.x("INSERT INTO holdings (ticker, shares, cost, bought) VALUES ('SAP.DE', 10, 100, '')")
+        db.x("INSERT INTO transactions (ticker, shares, price, date) VALUES ('SAP.DE', 10, 100, '')")
         with _FakeMarket({"SAP.DE": flat}, {"SAP.DE": {"currency": "EUR"}}):
             p = portfolio.summary(db.get_settings())
         pos = p["positions"][0]
@@ -290,7 +290,7 @@ def test_cost_uses_the_exchange_rate_on_the_purchase_date():
 
     # Same currency as the base: an undated lot is exact, so no warning
     _reset()
-    db.x("INSERT INTO holdings (ticker, shares, cost, bought) VALUES ('AAPL', 10, 100, '')")
+    db.x("INSERT INTO transactions (ticker, shares, price, date) VALUES ('AAPL', 10, 100, '')")
     with _FakeMarket({"AAPL": flat}):
         p = portfolio.summary(db.get_settings())
     assert p["positions"][0]["fxApprox"] is False and abs(p["positions"][0]["cost"] - 1000) < 1e-6
@@ -337,7 +337,7 @@ def test_failed_position_marks_the_portfolio_incomplete():
     """Advice based on totals that leave out a holding is wrong, so it must be withheld and the gap stated."""
     from backend import db, portfolio
     _reset()
-    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('AAA', 30, 100), ('SPY', 1, 100)")
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('AAA', 30, 100), ('SPY', 1, 100)")
     up = _steps([0.0] * 300)
     etf = {"SPY": {"assetClass": "ETFs", "sector": "ETFs"}}
 
@@ -460,12 +460,12 @@ def test_backup_restores_everything_or_nothing():
         r = c.get("/api/backup")
         assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
         backup = r.json()
-        assert backup["version"] == 1 and backup["holdings"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
+        assert backup["version"] == 2 and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
         assert "cache" not in backup  # market data can always be downloaded again
 
-        before = {t: db.q(f"SELECT * FROM {t}") for t in ("watchlist", "holdings", "journal", "alerts", "settings")}
+        before = {t: db.q(f"SELECT * FROM {t}") for t in ("watchlist", "transactions", "journal", "alerts", "settings")}
         _reset()
-        assert not db.q("SELECT * FROM holdings")
+        assert not db.q("SELECT * FROM transactions")
         assert c.post("/api/backup/restore", json=backup).status_code == 200
         after = {t: db.q(f"SELECT * FROM {t}") for t in before}
         assert after == before, "a restore must bring back identical rows"
@@ -477,9 +477,9 @@ def test_backup_restores_everything_or_nothing():
             assert {t: db.q(f"SELECT * FROM {t}") for t in before} == before
 
         # Unknown columns and settings can't reach the database
-        extra = {**backup, "holdings": [{"ticker": "X", "shares": 1, "cost": 1, "dropped": "; DROP TABLE holdings"}], "settings": {"hack": 1}}
+        extra = {**backup, "transactions": [{"ticker": "X", "shares": 1, "price": 1, "dropped": "; DROP TABLE holdings"}], "settings": {"hack": 1}}
         assert c.post("/api/backup/restore", json=extra).status_code == 200
-        assert [h["ticker"] for h in db.q("SELECT * FROM holdings")] == ["X"]
+        assert [h["ticker"] for h in db.q("SELECT * FROM transactions")] == ["X"]
         assert db.q("SELECT * FROM settings WHERE key = 'hack'") == []
 
 
@@ -593,9 +593,9 @@ def test_pretrade_check_is_hand_calculated_and_changes_nothing():
     prices = {"AAA": wave, "BBB": other, "NEW": new, "SPY": wave, "EUROCO": flat}
     infos = {"AAA": {"sector": "Tech"}, "BBB": {"sector": "Energy"}, "NEW": {"sector": "Tech", "region": "Europe"},
              "EUROCO": {"currency": "EUR", "sector": "Banks"}}
-    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('AAA', 90, 100), ('BBB', 10, 100)")
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('AAA', 90, 100), ('BBB', 10, 100)")
     settings = db.get_settings()
-    lots_before = db.q("SELECT * FROM holdings")
+    lots_before = db.q("SELECT * FROM transactions")
 
     with _FakeMarket(prices, infos):
         total = portfolio.summary(settings)["total"]
@@ -654,7 +654,7 @@ def test_pretrade_check_is_hand_calculated_and_changes_nothing():
     assert part["incomplete"] is True and part["missing"] == ["BBB"] and part["after"] is None and part["before"] is None
 
     # It's a what-if: nothing was saved
-    assert db.q("SELECT * FROM holdings") == lots_before
+    assert db.q("SELECT * FROM transactions") == lots_before
 
 
 def test_pretrade_route():
@@ -912,7 +912,7 @@ def test_upcoming_events_only_show_future_dates():
     _reset()
     soon, far = ts(dt.date.today() + dt.timedelta(days=5)), ts(dt.date.today() + dt.timedelta(days=60))
     flat = _steps([0.0] * 300)
-    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('SOON', 1, 100), ('FAR', 1, 100)")
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('SOON', 1, 100), ('FAR', 1, 100)")
     db.x("INSERT INTO watchlist (ticker) VALUES ('WATCHED')")
     infos = {"SOON": {"earningsTimestampStart": soon, "exDividendDate": soon}, "FAR": {"earningsTimestampStart": far}, "WATCHED": {"earningsTimestampStart": soon}}
     with _FakeMarket({"SOON": flat, "FAR": flat, "WATCHED": flat}, infos):
@@ -993,7 +993,7 @@ def test_etfs_are_not_called_a_concentrated_sector():
     from backend import db, portfolio
     _reset()
     for t in ("VTI", "VXUS", "BND", "GLD", "VNQ", "SCHD"):
-        db.x("INSERT INTO holdings (ticker, shares, cost) VALUES (?, 1, 100)", (t,))
+        db.x("INSERT INTO transactions (ticker, shares, price) VALUES (?, 1, 100)", (t,))
     flat = _steps([0.0] * 300)
     etf = {"assetClass": "ETFs", "sector": "ETFs"}
     tickers = ("VTI", "VXUS", "BND", "GLD", "VNQ", "SCHD")
@@ -1012,7 +1012,7 @@ def test_other_exchanges_are_not_treated_as_us_dollars():
     assert region_of("^GSPC") == "US" and region_of("EURUSD=X") == "US"
     # With no currency at all a position is unpriced, not valued 1:1 with USD
     _reset()
-    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('ABC.ZZ', 100, 300)")
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('ABC.ZZ', 100, 300)")
     with _FakeMarket({"ABC.ZZ": _steps([0.001] * 30)}, {"ABC.ZZ": {"currency": None}}):
         p = portfolio.summary(db.get_settings())
     assert p["missing"] == ["ABC.ZZ"] and p["total"] == 0
@@ -1070,6 +1070,138 @@ def test_only_local_addresses_are_served():
     env.write_bytes("\ufeffSTOCKPILOT_TEST_KEY=héllo\n".encode("utf-8"))
     main._load_env(env)
     assert os.environ.pop("STOCKPILOT_TEST_KEY") == "héllo"
+
+
+def test_ledger_matches_sales_to_the_oldest_lots():
+    from backend import ledger
+    rows = [
+        {"id": 1, "ticker": "A", "kind": "buy", "date": "2024-01-02", "shares": 10, "price": 100, "note": "first"},
+        {"id": 2, "ticker": "A", "kind": "buy", "date": "2024-06-03", "shares": 10, "price": 120},
+        {"id": 3, "ticker": "A", "kind": "sell", "date": "2025-01-02", "shares": 15, "price": 150},
+        {"id": 4, "ticker": "A", "kind": "dividend", "date": "2025-02-03", "amount": 12.5},
+    ]
+    a = ledger.replay(rows)["A"]
+    assert [(l["id"], l["shares"], l["cost"], l["bought"]) for l in a["lots"]] == [(2, 5, 120, "2024-06-03")]
+    assert [(s["shares"], s["cost"], s["bought"], s["price"], s["date"]) for s in a["sales"]] == [
+        (10, 100, "2024-01-02", 150, "2025-01-02"), (5, 120, "2024-06-03", 150, "2025-01-02")]
+    assert a["dividends"] == [{"id": 4, "date": "2025-02-03", "amount": 12.5}]
+    # Date order decides, not the order they were typed in, and a same-day buy comes before a sale
+    shuffled = ledger.replay([rows[2], rows[1], rows[0]])["A"]
+    assert shuffled["lots"][0]["shares"] == 5 and shuffled["sales"][0]["cost"] == 100
+    same_day = ledger.replay([{"id": 9, "ticker": "B", "kind": "sell", "date": "2025-01-02", "shares": 1, "price": 5},
+                              {"id": 10, "ticker": "B", "kind": "buy", "date": "2025-01-02", "shares": 1, "price": 4}])["B"]
+    assert same_day["lots"] == [] and same_day["sales"][0]["cost"] == 4
+    # Lots with no date count as the oldest
+    undated = ledger.replay([{"id": 1, "ticker": "C", "kind": "buy", "date": "2025-01-02", "shares": 1, "price": 9},
+                             {"id": 2, "ticker": "C", "kind": "buy", "date": "", "shares": 1, "price": 7},
+                             {"id": 3, "ticker": "C", "kind": "sell", "date": "2025-02-03", "shares": 1, "price": 8}])["C"]
+    assert undated["sales"][0]["cost"] == 7 and undated["lots"][0]["cost"] == 9
+    # You can't sell more than you held on that date
+    for bad in ([rows[0], {**rows[2], "shares": 11}], [{**rows[0], "date": "2025-06-02"}, rows[2]]):
+        try:
+            ledger.replay(bad)
+            raise AssertionError("should have been refused")
+        except ledger.LedgerError as e:
+            assert "A" in str(e)
+    for bad in ({"ticker": "A", "kind": "gift", "shares": 1, "price": 1}, {"ticker": "A", "kind": "buy", "shares": None, "price": 1},
+                {"ticker": "A", "kind": "buy", "shares": -1, "price": 1}, {"ticker": "A", "kind": "dividend", "amount": None}):
+        try:
+            ledger.replay([bad])
+            raise AssertionError(f"should have been refused: {bad}")
+        except ledger.LedgerError:
+            pass
+    assert ledger.replay([{"ticker": "A", "shares": 1, "price": 1}])["A"]["lots"][0]["shares"] == 1  # kind defaults to buy
+
+
+def test_transaction_routes_keep_the_ledger_valid():
+    import datetime as dt
+
+    from fastapi.testclient import TestClient
+
+    from backend import db, insights, ledger
+    from backend.main import app
+    _reset()
+    post = lambda c, **b: c.post("/api/transactions", json=b)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        buy = post(c, ticker="aapl", kind="buy", date="2024-06-03", shares=10, price=150, note="core")
+        assert buy.status_code == 200
+        assert post(c, ticker="AAPL", kind="sell", date="2024-01-02", shares=1, price=1).status_code == 400  # before the purchase
+        assert post(c, ticker="AAPL", kind="sell", date="2025-01-02", shares=11, price=1).status_code == 400  # more than held
+        assert post(c, ticker="AAPL", kind="sell", date="", shares=1, price=1).status_code == 400  # a sale needs a date
+        future = (dt.date.today() + dt.timedelta(days=2)).isoformat()
+        assert post(c, ticker="AAPL", kind="sell", date=future, shares=1, price=1).status_code == 400
+        assert post(c, ticker="AAPL", kind="sell", date="soon", shares=1, price=1).status_code == 400
+        assert post(c, ticker="AAPL", kind="short", date="2025-01-02", shares=1, price=1).status_code == 400
+        assert post(c, ticker="MSFT", kind="sell", date="2025-01-02", shares=1, price=1).status_code == 400  # never held
+        assert post(c, ticker="MSFT", kind="dividend", date="2025-01-02", amount=5).status_code == 400
+        assert post(c, ticker="AAPL", kind="dividend", date="2025-01-02", amount="").status_code == 400
+        sale = post(c, ticker="AAPL", kind="sell", date="2025-01-02", shares=4, price=200)
+        assert sale.status_code == 200
+        assert post(c, ticker="AAPL", kind="dividend", date="2025-02-03", amount=6.5).status_code == 200
+
+        rows = c.get("/api/transactions").json()
+        assert [r["kind"] for r in rows] == ["dividend", "sell", "buy"] and rows[-1]["note"] == "core"  # newest first
+        p = c.get("/api/portfolio").json()["positions"][0]
+        assert p["shares"] == 6 and p["avgCost"] == 150 and p["lots"][0]["shares"] == 6
+
+        # Deleting a buy its sale depends on is refused, in either route; deleting the sale first is fine
+        buy_id = buy.json()["id"]
+        assert c.delete(f"/api/transactions/{buy_id}").status_code == 400
+        assert c.delete(f"/api/holdings/{buy_id}").status_code == 400
+        assert c.delete(f"/api/transactions/{sale.json()['id']}").status_code == 200
+        assert c.get("/api/portfolio").json()["positions"][0]["shares"] == 10
+        assert c.delete(f"/api/holdings/{buy_id}").status_code == 200
+
+        # The older form still adds a buy
+        assert c.post("/api/holdings", json={"ticker": "SPY", "shares": 2, "cost": 400, "bought": "2025-01-02"}).status_code == 200
+        assert db.q("SELECT kind, date, shares, price FROM transactions WHERE ticker = 'SPY'") == [{"kind": "buy", "date": "2025-01-02", "shares": 2.0, "price": 400.0}]
+
+    # The digest treats only what's still open as a holding
+    _reset()
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('GONE', 'buy', '2024-01-02', 1, 1), ('GONE', 'sell', '2024-06-03', 1, 2), ('KEPT', 'buy', '2024-01-02', 1, 1)")
+    assert ledger.held_tickers() == ["KEPT"]
+
+
+def test_old_holdings_become_transactions():
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from backend import db
+    from backend.main import app
+    path = Path(tempfile.mkdtemp()) / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE holdings (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, shares REAL NOT NULL, cost REAL NOT NULL, bought TEXT DEFAULT '', note TEXT DEFAULT '')")
+    old.execute("INSERT INTO holdings (ticker, shares, cost, bought, note) VALUES ('AAPL', 10, 150, '2024-06-03', 'core'), ('SPY', 5, 400, '', '')")
+    old.commit()
+    old.close()
+    real = db.DB_PATH
+    db.DB_PATH = path
+    try:
+        db.init()
+        db.init()  # running it again must not copy anything twice
+        rows = db.q("SELECT * FROM transactions ORDER BY id")
+        assert [(r["ticker"], r["kind"], r["date"], r["shares"], r["price"], r["note"]) for r in rows] == [
+            ("AAPL", "buy", "2024-06-03", 10.0, 150.0, "core"), ("SPY", "buy", "", 5.0, 400.0, "")]
+        assert not db.q("SELECT 1 FROM sqlite_master WHERE name = 'holdings'")
+    finally:
+        db.DB_PATH = real
+
+    # A backup made before the ledger still restores
+    _reset()
+    v1 = {"version": 1, "watchlist": [], "journal": [], "alerts": [], "settings": {},
+          "holdings": [{"id": 7, "ticker": "AAPL", "shares": 10, "cost": 150, "bought": "2024-06-03", "note": "core"}]}
+    with TestClient(app) as c:
+        assert c.post("/api/backup/restore", json=v1).status_code == 200
+        r = db.q("SELECT * FROM transactions")[0]
+        assert (r["id"], r["kind"], r["price"], r["date"], r["note"]) == (7, "buy", 150.0, "2024-06-03", "core")
+        # A backup whose sales don't add up is refused, and nothing changes
+        bad = {"version": 2, "watchlist": [], "journal": [], "alerts": [], "settings": {},
+               "transactions": [{"ticker": "X", "kind": "sell", "date": "2025-01-02", "shares": 1, "price": 1}]}
+        assert c.post("/api/backup/restore", json=bad).status_code == 400
+        assert db.q("SELECT * FROM transactions")[0]["id"] == 7
 
 
 def test_minor_unit_currencies():

@@ -28,7 +28,7 @@ from fastapi import Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import ai, backtest, data, db, insights, portfolio, scoring  # noqa: E402
+from . import ai, backtest, data, db, insights, ledger, portfolio, scoring  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import MACRO, UNIVERSE, name_of, search as uni_search  # noqa: E402
 
@@ -282,24 +282,42 @@ def get_portfolio():
 
 @app.post("/api/holdings")
 def add_holding(body: dict = Body(...)):
-    t = _ticker(body)
-    shares, cost = _number(body, "shares"), _number(body, "cost")
-    _hist_or_404(t, "1y")
-    if shares <= 0 or cost < 0:
-        raise HTTPException(400, "Shares must be positive and cost non-negative.")
-    if body.get("bought"):
-        try:
-            dt.date.fromisoformat(body["bought"])
-        except ValueError:
-            raise HTTPException(400, "Purchase date must look like 2025-01-31.")
-    hid = db.x("INSERT INTO holdings (ticker, shares, cost, bought, note) VALUES (?,?,?,?,?)",
-               (t, shares, cost, body.get("bought", ""), body.get("note", "")))
-    return ok({"id": hid})
+    # A shorter way to record a purchase, used by the form on Research
+    return _record({"ticker": body.get("ticker"), "kind": "buy", "date": body.get("bought", ""), "shares": body.get("shares"),
+                    "price": body.get("cost"), "note": body.get("note", "")})
 
 
-@app.delete("/api/holdings/{hid}")
-def del_holding(hid: int):
-    db.x("DELETE FROM holdings WHERE id=?", (hid,))
+def _record(body):
+    t, kind = _ticker(body), body.get("kind", "buy")
+    if kind == "dividend":
+        shares, price, amount = None, None, _number(body, "amount")
+    else:
+        shares, price, amount = _number(body, "shares"), _number(body, "price"), None
+    try:
+        if kind == "buy":
+            _hist_or_404(t, "1y")
+        return ok({"id": ledger.add(t, kind, body.get("date", ""), shares, price, amount, body.get("note", ""))})
+    except ledger.LedgerError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/transactions")
+def transactions():
+    return ok(ledger.transactions())
+
+
+@app.post("/api/transactions")
+def add_transaction(body: dict = Body(...)):
+    return _record(body)
+
+
+@app.delete("/api/transactions/{tid}")
+@app.delete("/api/holdings/{tid}")
+def delete_transaction(tid: int):
+    try:
+        ledger.delete(tid)
+    except ledger.LedgerError as e:
+        raise HTTPException(400, f"A later sale depends on this. Delete the sale first. ({e})")
     return ok({"ok": True})
 
 
@@ -434,8 +452,9 @@ def backup():
 @app.post("/api/backup/restore")
 def backup_restore(body: dict = Body(...)):
     try:
+        ledger.replay(db.read_backup(body)["transactions"])  # LedgerError is a ValueError
         db.restore_user_data(body)
-    except ValueError as e:
+    except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
     return ok({"ok": True})
 

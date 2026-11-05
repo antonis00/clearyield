@@ -1,4 +1,4 @@
-"""SQLite storage: cache, watchlist, holdings, journal, alerts, settings."""
+"""SQLite storage: cache, watchlist, transactions, journal, alerts, settings."""
 import json
 import os
 import sqlite3
@@ -12,9 +12,9 @@ _lock = threading.Lock()
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS watchlist (ticker TEXT PRIMARY KEY, tags TEXT DEFAULT '', note TEXT DEFAULT '', added REAL);
-CREATE TABLE IF NOT EXISTS holdings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, shares REAL NOT NULL,
-    cost REAL NOT NULL, bought TEXT DEFAULT '', note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'buy', date TEXT DEFAULT '',
+    shares REAL, price REAL, amount REAL, note TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ticker TEXT, action TEXT, price REAL,
     thesis TEXT DEFAULT '', invalidation TEXT DEFAULT '', stop_price REAL, target_price REAL,
@@ -54,6 +54,11 @@ def init():
         try:
             c.executescript(SCHEMA)
             # Columns added after the first release: databases created earlier gain them here
+            # Before the ledger there was only a table of current lots: each one becomes a buy
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'holdings'").fetchone():
+                c.execute("INSERT INTO transactions (id, ticker, kind, date, shares, price, note) "
+                          "SELECT id, ticker, 'buy', COALESCE(bought, ''), shares, cost, COALESCE(note, '') FROM holdings")
+                c.execute("DROP TABLE holdings")
             for table, added in ADDED_COLUMNS.items():
                 have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
                 for col, kind in added.items():
@@ -106,8 +111,8 @@ def cache_clear():
 
 
 # ---- backup ----
-USER_TABLES = ("watchlist", "holdings", "journal", "alerts")
-BACKUP_VERSION = 1
+USER_TABLES = ("watchlist", "transactions", "journal", "alerts")
+BACKUP_VERSION = 2
 
 
 def export_user_data():
@@ -117,15 +122,27 @@ def export_user_data():
     return out
 
 
-def restore_user_data(backup):
-    """Replace all user data in one transaction, so a bad file changes nothing. Raises ValueError if it can't be used."""
-    if not isinstance(backup, dict) or backup.get("version") != BACKUP_VERSION:
+def read_backup(backup):
+    """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
+    if not isinstance(backup, dict) or backup.get("version") not in (1, BACKUP_VERSION):
         raise ValueError("This isn't a StockPilot backup, or it's from a different version.")
+    if backup["version"] == 1:  # before the ledger, when there was a table of current lots
+        lots = backup.get("holdings")
+        if not isinstance(lots, list) or not all(isinstance(r, dict) for r in lots):
+            raise ValueError("The backup's holdings section isn't usable.")
+        backup = {**backup, "transactions": [{"id": r.get("id"), "ticker": r.get("ticker"), "kind": "buy", "date": r.get("bought") or "",
+                                              "shares": r.get("shares"), "price": r.get("cost"), "note": r.get("note") or ""} for r in lots]}
     for t in USER_TABLES:
         if not isinstance(backup.get(t), list) or not all(isinstance(r, dict) for r in backup[t]):
             raise ValueError(f"The backup's {t} section isn't usable.")
     if not isinstance(backup.get("settings"), dict):
         raise ValueError("The backup's settings section isn't usable.")
+    return backup
+
+
+def restore_user_data(backup):
+    """Replace all user data in one transaction, so a bad file changes nothing."""
+    backup = read_backup(backup)
     with _lock:
         c = _connect()
         try:

@@ -73,17 +73,17 @@ const CHECKS = {
     const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#btnBackup")]);
     const path = `${OUT}/backup_test.json`; await dl.saveAs(path);
     expect("backup file name", /^stockpilot-backup-\d{4}-\d{2}-\d{2}\.json$/.test(dl.suggestedFilename()), dl.suggestedFilename());
-    const hid = (await post(page, "/api/backup", null, "GET")).body.holdings[0].id;
+    const hid = (await post(page, "/api/backup", null, "GET")).body.transactions[0].id;
     await post(page, `/api/holdings/${hid}`, null, "DELETE");
     const dialogs = []; page.on("dialog", (d) => { dialogs.push(d.message()); d.accept(); });
     await page.setInputFiles("#restoreFile", path); await page.waitForTimeout(2500);
-    expect("asks first and says what is in the file", dialogs[0]?.includes("1 lots") && dialogs[0]?.includes("1 journal"), dialogs[0]);
+    expect("asks first and says what is in the file", dialogs[0]?.includes("1 transactions") && dialogs[0]?.includes("1 journal"), dialogs[0]);
     const after = (await post(page, "/api/backup", null, "GET")).body;
-    expect("holding is back", after.holdings.length === 1 && after.holdings[0].note === "core");
+    expect("holding is back", after.transactions.length === 1 && after.transactions[0].note === "core");
     expect("journal is intact", after.journal[0].thesis === "services growth");
     await page.setInputFiles("#restoreFile", { name: "x.json", mimeType: "application/json", buffer: Buffer.from("not json") }); await page.waitForTimeout(500);
     expect("rejects a broken file", (await page.textContent("#toast")).includes("isn't a StockPilot backup"));
-    expect("data untouched by broken file", (await post(page, "/api/backup", null, "GET")).body.holdings.length === 1);
+    expect("data untouched by broken file", (await post(page, "/api/backup", null, "GET")).body.transactions.length === 1);
   },
 
   // A fired alert shows in the digest with a working Dismiss button

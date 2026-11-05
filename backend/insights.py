@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pandas as pd
 
-from . import data, db, scoring
+from . import data, db, ledger, scoring
 from . import indicators as ind
 from .universe import tickers_for
 
@@ -276,7 +276,7 @@ def scorecard(settings):
 
 # ---------------------------------------------------------------- digest
 def digest(settings):
-    held = [r["ticker"] for r in db.q("SELECT DISTINCT ticker FROM holdings")]
+    held = ledger.held_tickers()
     watched = [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
     tickers = list(dict.fromkeys(held + watched))
     items = []

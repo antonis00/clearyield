@@ -184,7 +184,7 @@ const SLOW = 150000;
   await research("SAP.DE");
   expect("settings: app refetches after clearing the cache", (await txt("#rPrice")).length > 0, await txt("#rPrice"));
   const end = await p.evaluate(async () => (await fetch("/api/backup")).json());
-  expect("settings: clearing the cache keeps your data", end.holdings.length >= 3, `${end.holdings.length} lots`);
+  expect("settings: clearing the cache keeps your data", end.transactions.length >= 3, `${end.transactions.length} transactions`);
 
   expect("no uncaught JS errors in the whole walk", errs.length === 0, errs.slice(0, 4).join(" | "));
   expect("no failed requests in the whole walk", http.length === 0, http.slice(0, 6).join(" | "));

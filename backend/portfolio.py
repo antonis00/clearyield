@@ -5,18 +5,15 @@ from collections import defaultdict
 
 import pandas as pd
 
-from . import data, db
+from . import data, db, ledger
 from . import indicators as ind
 
 
 def positions(extra=None):
-    lots = db.q("SELECT * FROM holdings ORDER BY ticker, id") + ([extra] if extra else [])
-    agg = defaultdict(lambda: {"shares": 0.0, "costTotal": 0.0, "lots": []})
-    for lot in lots:
-        a = agg[lot["ticker"]]
-        a["shares"] += lot["shares"]
-        a["costTotal"] += lot["shares"] * lot["cost"]
-        a["lots"].append(lot)
+    """What's held now, from the ledger. `extra` is a hypothetical purchase, which is never saved."""
+    agg = {}
+    for t, p in ledger.replay(db.q("SELECT * FROM transactions") + ([extra] if extra else [])).items():
+        agg[t] = {**p, "shares": sum(lot["shares"] for lot in p["lots"]), "costTotal": sum(lot["shares"] * lot["cost"] for lot in p["lots"])}
     return agg
 
 
@@ -182,7 +179,7 @@ def pretrade(settings, ticker, amount=None, entry=None, stop=None, risk=None):
 
     today = dt.date.today().isoformat()
     before = summary(settings)
-    after = summary(settings, {"ticker": ticker, "shares": shares, "cost": price, "bought": today})
+    after = summary(settings, {"ticker": ticker, "kind": "buy", "shares": shares, "price": price, "date": today})
 
     def weights(s):
         if s["incomplete"] or not s["total"]:
