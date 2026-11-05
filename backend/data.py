@@ -110,13 +110,13 @@ def slice_period(df, period):
 
 # ---------------------------------------------------------------- info / fundamentals
 INFO_KEYS = [
-    "longName", "shortName", "sector", "industry", "country", "currency", "quoteType", "exchange",
+    "longName", "shortName", "sector", "industry", "currency", "quoteType",
     "marketCap", "trailingPE", "forwardPE", "priceToBook", "enterpriseToEbitda", "freeCashflow",
-    "operatingCashflow", "totalRevenue", "profitMargins", "operatingMargins", "grossMargins",
-    "returnOnEquity", "returnOnAssets", "debtToEquity", "currentRatio", "revenueGrowth", "earningsGrowth",
+    "totalRevenue", "profitMargins", "operatingMargins",
+    "returnOnEquity", "debtToEquity", "currentRatio", "revenueGrowth", "earningsGrowth",
     "dividendYield", "payoutRatio", "beta", "sharesOutstanding", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
-    "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "website", "financialCurrency",
+    "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "financialCurrency",
     "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate",
 ]
 
@@ -125,7 +125,7 @@ MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.
 
 
 def info(ticker):
-    key = f"info:v5:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v6:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -283,28 +283,12 @@ def news(ticker, limit=12):
                 if not when and c.get("providerPublishTime"):
                     when = dt.datetime.utcfromtimestamp(c["providerPublishTime"]).isoformat() + "Z"
                 out.append({"title": title, "url": url, "publisher": pub, "time": when,
-                            "summary": c.get("summary") or "", "sentiment": headline_sentiment(title + " " + (c.get("summary") or ""))})
+                            "summary": c.get("summary") or ""})
         except Exception as e:
             log.warning("news failed for %s: %s", ticker, e)
             return db.cache_get_stale(key) or []
     db.cache_set(key, out)
     return out
-
-
-POS_WORDS = {"beat", "beats", "surge", "surges", "soar", "soars", "record", "upgrade", "upgraded", "raises", "raised",
-             "growth", "strong", "rally", "rallies", "jump", "jumps", "gain", "gains", "outperform", "buyback", "profit",
-             "approval", "approved", "wins", "expands", "bullish", "tops", "higher"}
-NEG_WORDS = {"miss", "misses", "plunge", "plunges", "drop", "drops", "fall", "falls", "downgrade", "downgraded", "cuts",
-             "cut", "lawsuit", "probe", "investigation", "weak", "loss", "losses", "layoffs", "recall", "bearish",
-             "slump", "slumps", "warning", "warns", "fraud", "fine", "fined", "lower", "decline", "declines", "sinks"}
-
-
-def headline_sentiment(text):
-    words = {w.strip(".,:;!?'\"()").lower() for w in text.split()}
-    p, n = len(words & POS_WORDS), len(words & NEG_WORDS)
-    if p == n:
-        return 0
-    return 1 if p > n else -1
 
 
 # ---------------------------------------------------------------- FX
@@ -442,12 +426,12 @@ def _demo_info(ticker):
         rev = mcap * rng.uniform(0.15, 1.5)
         margin = rng.uniform(-0.05, 0.35)
         d.update({
-            "sector": SECTORS[_seed(ticker) % len(SECTORS)], "industry": "Demo industry", "country": region_of(ticker),
+            "sector": SECTORS[_seed(ticker) % len(SECTORS)], "industry": "Demo industry",
             "marketCap": mcap, "sharesOutstanding": shares, "totalRevenue": rev,
             "trailingPE": mcap / (rev * margin) if margin > 0.01 else None,
             "forwardPE": rng.uniform(8, 40), "priceToBook": rng.uniform(0.8, 14), "enterpriseToEbitda": rng.uniform(5, 30),
             "freeCashflow": rev * rng.uniform(-0.03, 0.28), "profitMargins": margin, "operatingMargins": margin + rng.uniform(0, 0.1),
-            "grossMargins": rng.uniform(0.25, 0.75), "returnOnEquity": rng.uniform(-0.05, 0.45), "debtToEquity": rng.uniform(0.0, 2.5),
+            "returnOnEquity": rng.uniform(-0.05, 0.45), "debtToEquity": rng.uniform(0.0, 2.5),
             "currentRatio": rng.uniform(0.6, 3.0), "revenueGrowth": rng.uniform(-0.08, 0.35), "earningsGrowth": rng.uniform(-0.2, 0.5),
             "dividendYield": rng.choice([0, 0, rng.uniform(0.005, 0.06)]), "payoutRatio": rng.uniform(0.1, 0.9),
             "beta": rng.uniform(0.5, 1.8), "targetMeanPrice": price * rng.uniform(0.85, 1.35),
@@ -486,4 +470,4 @@ def _demo_news(ticker):
              f"{n} faces regulatory probe in key market", f"{n} announces expanded buyback programme",
              f"Sector rotation weighs on {n} shares"]
     return [{"title": h, "url": None, "publisher": "Demo Wire", "time": (today - dt.timedelta(hours=7 * i)).isoformat() + "Z",
-             "summary": "", "sentiment": headline_sentiment(h)} for i, h in enumerate(heads)]
+             "summary": ""} for i, h in enumerate(heads)]

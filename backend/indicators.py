@@ -38,10 +38,10 @@ def bollinger(s, n=20, k=2):
 def bundle(df):
     c = df["Close"]
     m, sig, hist = macd(c)
-    bu, bm, bl = bollinger(c)
+    bu, _, bl = bollinger(c)
     return pd.DataFrame({
-        "sma20": sma(c, 20), "sma50": sma(c, 50), "sma200": sma(c, 200), "rsi": rsi(c),
-        "macd": m, "macdSignal": sig, "macdHist": hist, "bbUpper": bu, "bbMid": bm, "bbLower": bl,
+        "sma50": sma(c, 50), "sma200": sma(c, 200), "rsi": rsi(c),
+        "macd": m, "macdSignal": sig, "macdHist": hist, "bbUpper": bu, "bbLower": bl,
     }, index=df.index)
 
 
@@ -151,9 +151,9 @@ def correlation(a, b):
 def stats(close, rf=0.04):
     one_y = window(close, 252)
     return {
-        "ret1w": ret_over(close, 5), "ret1m": ret_over(close, 21), "ret3m": ret_over(close, 63),
-        "ret6m": ret_over(close, 126), "ret1y": ret_over(close, 252), "ytd": ytd_return(close),
+        "ret1m": ret_over(close, 21), "ret3m": ret_over(close, 63),
+        "ret1y": ret_over(close, 252), "ytd": ytd_return(close),
         "ret5yCagr": cagr(window(close, 1260)) if (close.index[-1] - close.index[0]).days >= 4.5 * 365.25 else None,
-        "vol1y": volatility(close), "maxDD1y": max_drawdown(one_y), "maxDD5y": max_drawdown(window(close, 1260)),
-        "sharpe1y": sharpe(one_y, rf), "sortino1y": sortino(one_y, rf),
+        "vol1y": volatility(close), "maxDD1y": max_drawdown(one_y),
+        "sharpe1y": sharpe(one_y, rf),
     }

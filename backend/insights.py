@@ -138,13 +138,11 @@ def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
         growth = float(np.clip(g if g is not None else 0.05, 0.0, 0.15))
     if discount <= terminal:
         return {"error": "Discount rate must be above terminal growth."}
-    flows, pv = [], 0.0
+    pv = 0.0
     cf = fcf
     for yr in range(1, years + 1):
         cf *= 1 + growth
-        d = cf / (1 + discount) ** yr
-        pv += d
-        flows.append({"year": yr, "fcf": cf, "pv": d})
+        pv += cf / (1 + discount) ** yr
     tv = cf * (1 + terminal) / (discount - terminal)
     tv_pv = tv / (1 + discount) ** years
     cash, debt = inf.get("totalCash") or 0, inf.get("totalDebt") or 0
@@ -153,8 +151,8 @@ def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
     minor = data.MINOR_UNITS.get(inf.get("currency"), (None, 1.0))[1]
     fair = equity / shares * fx * minor
     return {"fairValue": fair, "statementCurrency": inf.get("financialCurrency"), "growth": growth, "years": years, "discount": discount, "terminal": terminal,
-            "pvFlows": pv, "pvTerminal": tv_pv, "terminalShare": tv_pv / (pv + tv_pv), "netCash": cash - debt,
-            "flows": flows, "startFcf": fcf}
+            "terminalShare": tv_pv / (pv + tv_pv), "netCash": cash - debt,
+            "startFcf": fcf}
 
 
 def implied_growth(inf, price, years=5, discount=0.09, terminal=0.025):
@@ -297,31 +295,32 @@ def digest(settings):
             continue
         tag = "holding" if t in held else "watchlist"
         if r["day"] is not None and abs(r["day"]) >= 0.03:
-            items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "text": f"{t} ({tag}) moved {r['day']:+.1%} {r['moveDay']}."})
+            items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "priority": 5, "text": f"{t} ({tag}) moved {r['day']:+.1%} {r['moveDay']}."})
         if r["rsi"] >= 70:
-            items.append({"tone": -1, "ticker": t, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
+            items.append({"tone": -1, "ticker": t, "priority": 6, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
         elif r["rsi"] <= 30:
-            items.append({"tone": 1, "ticker": t, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
+            items.append({"tone": 1, "ticker": t, "priority": 6, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
         ev = r["events"]
         if t in held and ev["earningsDays"] is not None and ev["earningsDays"] <= 14:
-            items.append({"tone": 0, "ticker": t, "text": f"{t} reports earnings in {ev['earningsDays']} days ({ev['earnings']})."})
+            items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} reports earnings in {ev['earningsDays']} days ({ev['earnings']})."})
         if t in held and ev["exDividendDays"] is not None and ev["exDividendDays"] <= 7:
-            items.append({"tone": 0, "ticker": t, "text": f"{t} goes ex-dividend in {ev['exDividendDays']} days ({ev['exDividend']})."})
+            items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} goes ex-dividend in {ev['exDividendDays']} days ({ev['exDividend']})."})
         if r["stance"] in ("Weak",) and t in held:
-            items.append({"tone": -1, "ticker": t, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
+            items.append({"tone": -1, "ticker": t, "priority": 4, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
     today = dt.date.today().isoformat()
     for j in open_entries:
         r = rows.get(j["ticker"])
         if r:
             if j["stop_price"] and r["price"] <= j["stop_price"]:
-                items.append({"tone": -1, "ticker": j["ticker"], "text": f"{j['ticker']} hit your thesis stop ({j['stop_price']}). Invalidation: {j['invalidation'] or 'n/a'}"})
+                items.append({"tone": -1, "ticker": j["ticker"], "priority": 1, "text": f"{j['ticker']} hit your thesis stop ({j['stop_price']}). Invalidation: {j['invalidation'] or 'n/a'}"})
             if j["target_price"] and r["price"] >= j["target_price"]:
-                items.append({"tone": 1, "ticker": j["ticker"], "text": f"{j['ticker']} reached your target ({j['target_price']}). Time to re-evaluate."})
+                items.append({"tone": 1, "ticker": j["ticker"], "priority": 1, "text": f"{j['ticker']} reached your target ({j['target_price']}). Time to re-evaluate."})
         if j["review_date"] and j["review_date"] <= today:
-            items.append({"tone": 0, "ticker": j["ticker"], "text": f"Journal review due for {j['ticker']} ({j['action']} on {dt.date.fromtimestamp(j['ts']).isoformat()})."})
+            items.append({"tone": 0, "ticker": j["ticker"], "priority": 2, "text": f"Journal review due for {j['ticker']} ({j['action']} on {dt.date.fromtimestamp(j['ts']).isoformat()})."})
     check_alerts(settings)
     fired = db.q("SELECT * FROM alerts WHERE triggered IS NOT NULL AND dismissed = 0 ORDER BY triggered DESC")
-    items = [{"tone": 0, "ticker": a["ticker"], "text": "Alert: " + a["message"], "alertId": a["id"]} for a in fired] + items
+    items = [{"tone": 0, "ticker": a["ticker"], "priority": 0, "text": "Alert: " + a["message"], "alertId": a["id"]} for a in fired] + items
+    items.sort(key=lambda i: i["priority"])  # what needs a decision first, then what's coming, then what's just of note
     if not tickers:
         items.append({"tone": 0, "ticker": None, "text": "Add stocks to your watchlist or portfolio to get a personalised digest."})
-    return {"items": items, "rows": list(rows.values())}
+    return {"items": items}

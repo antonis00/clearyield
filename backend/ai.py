@@ -49,11 +49,6 @@ def rule_brief(ctx):
         lines.append("**Supportive:** " + " ".join(pos))
     if neg:
         lines.append("**Cautionary:** " + " ".join(neg))
-    news = ctx.get("news") or []
-    if news:
-        s = sum(n["sentiment"] for n in news)
-        tone = "mostly positive" if s > 1 else "mostly negative" if s < -1 else "mixed"
-        lines.append(f"Recent headlines ({len(news)}) read {tone}.")
     lines.append("_Rule-based summary. Add an ANTHROPIC_API_KEY in .env for AI-written analysis._")
     return "\n\n".join(lines)
 

@@ -28,9 +28,9 @@ from fastapi import Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import ai, backtest, data, db, insights, ledger, portfolio, scoring  # noqa: E402
+from . import ai, backtest, data, db, insights, ledger, portfolio  # noqa: E402
 from . import indicators as ind  # noqa: E402
-from .universe import MACRO, UNIVERSE, name_of, search as uni_search  # noqa: E402
+from .universe import MACRO, UNIVERSE, search as uni_search  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stockpilot")
@@ -144,7 +144,7 @@ def _hist_or_404(t, period="5y"):
 # ---------------------------------------------------------------- meta / search / macro
 @app.get("/api/meta")
 def meta():
-    return ok({"demo": data.DEMO, "ai": ai.available(), "aiModel": ai.MODEL if ai.available() else None,
+    return ok({"demo": data.DEMO, "ai": ai.available(),
                "settings": db.get_settings(), "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
@@ -176,9 +176,10 @@ def macro():
 def stock(ticker: str, period: str = "1y"):
     t = T(ticker)
     settings = db.get_settings()
-    full = _hist_or_404(t, "5y")
-    inf = data.info(t)
-    sc = scoring.evaluate(inf, full["Close"], settings.get("weights"))
+    try:
+        full, inf, sc = insights.evaluate_ticker(t, settings)
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
     ib = ind.bundle(full)
     view = data.slice_period(full, period)
     ib = ib.loc[view.index]
@@ -194,7 +195,7 @@ def stock(ticker: str, period: str = "1y"):
                   "high52": inf.get("fiftyTwoWeekHigh") or float(last_year["High"].max()),
                   "low52": inf.get("fiftyTwoWeekLow") or float(last_year["Low"].min()),
                   "asOf": c.index[-1].strftime("%Y-%m-%d"), "stale": data.is_stale(t),
-                  "rsi": float(ind.rsi(c).iloc[-1]), "avgVolume": float(full["Volume"].iloc[-60:].mean())})
+                  "rsi": float(ind.rsi(c).iloc[-1])})
     try:
         bench = data.history(settings.get("benchmark", "SPY"), "5y")["Close"]
         stats["betaCalc"] = ind.beta(ind.window(c, 504), bench)
@@ -203,6 +204,12 @@ def stock(ticker: str, period: str = "1y"):
     watched = bool(db.q("SELECT 1 FROM watchlist WHERE ticker=?", (t,)))
     return ok({"ticker": t, "info": inf, "stats": stats, "scores": sc, "candles": candles,
                "financials": data.financials(t), "watched": watched, "events": insights.upcoming(inf)})
+
+
+@app.get("/api/quote/{ticker}")
+def quote(ticker: str):
+    t = T(ticker)
+    return ok({"ticker": t, "price": float(_hist_or_404(t, "1mo")["Close"].iloc[-1]), "currency": data.info(t).get("currency")})
 
 
 @app.get("/api/stock/{ticker}/news")
@@ -214,10 +221,12 @@ def stock_news(ticker: str):
 def stock_brief(ticker: str):
     t = T(ticker)
     settings = db.get_settings()
-    full = _hist_or_404(t)
-    inf = data.info(t)
-    ctx = {"ticker": t, "info": inf, "scores": scoring.evaluate(inf, full["Close"], settings.get("weights")),
-           "stats": ind.stats(full["Close"]), "news": data.news(t), "financials": data.financials(t)}
+    try:
+        full, inf, sc = insights.evaluate_ticker(t, settings)
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
+    ctx = {"ticker": t, "info": inf, "scores": sc, "stats": ind.stats(full["Close"], settings.get("risk_free_rate", 0.04)),
+           "news": data.news(t), "financials": data.financials(t)}
     return ok(ai.brief(ctx))
 
 

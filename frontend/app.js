@@ -79,7 +79,10 @@ function show(view, push = true) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
-  if (push) history.replaceState(null, "", view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`);
+  if (push) {
+    const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
+    if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
+  }
   ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings }[view] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
@@ -263,7 +266,14 @@ function renderPrice(s) {
     state.lw.forEach((dst) => dst !== src && dst.timeScale().setVisibleLogicalRange(rng)); syncing = false;
   }));
 }
-$$("#periodSeg button").forEach((b) => b.onclick = () => { $$("#periodSeg button").forEach((x) => x.classList.toggle("on", x === b)); state.period = b.dataset.p; openStock(state.ticker); });
+// A new period only changes the chart, so your brief, DCF inputs and pre-trade check stay as they are
+$$("#periodSeg button").forEach((b) => b.onclick = async () => {
+  $$("#periodSeg button").forEach((x) => x.classList.toggle("on", x === b));
+  state.period = b.dataset.p;
+  const request = ++state.stockRequest;
+  const s = await api(`/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}`);
+  if (request === state.stockRequest) { state.stock = s; renderPrice(s); }
+});
 ["#tSma", "#tBb", "#tVol"].forEach((id) => $(id).onchange = () => state.stock && renderPrice(state.stock));
 
 function fmtBound(v, fmt) {
@@ -302,7 +312,8 @@ function renderStats(s) {
     ["Payout ratio", pct(i.payoutRatio, 0, false)], ["Analyst target", money(i.targetMeanPrice, cur)], ["Consensus", esc((i.recommendationKey || "—").replace("_", " "))],
     ...(i.assetClass === "Stocks" ? [["Next earnings", esc(s.events.earnings || "not announced")], ["Ex-dividend", esc(s.events.exDividend || "not announced")]] : []),
   ];
-  $("#statGrid").innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+  const shown = i.assetClass === "Stocks" ? rows : rows.filter(([, v]) => String(v).replace(/<[^>]+>/g, "") !== "—"); // funds have no fundamentals
+  $("#statGrid").innerHTML = shown.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
 }
 function renderFin(s) {
   const f = s.financials || [];
@@ -338,7 +349,7 @@ async function loadNews() {
   const ul = $("#newsList"); loading(ul);
   const n = await api(`/api/stock/${encodeURIComponent(ticker)}/news`).catch(() => []);
   if (ticker !== state.ticker) return;
-  ul.innerHTML = n.length ? n.map((x) => `<li><span class="${x.sentiment > 0 ? "up" : x.sentiment < 0 ? "down" : "muted"}">${x.sentiment > 0 ? "▲" : x.sentiment < 0 ? "▼" : "•"}</span> ${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<div class="meta">${esc(x.publisher || "")} · ${x.time ? new Date(x.time).toLocaleString() : ""}</div></li>`).join("") : "<li class='muted'>No recent headlines.</li>";
+  ul.innerHTML = n.length ? n.map((x) => `<li>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<div class="meta">${esc(x.publisher || "")} · ${x.time ? new Date(x.time).toLocaleString() : ""}</div></li>`).join("") : "<li class='muted'>No recent headlines.</li>";
 }
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
@@ -522,6 +533,17 @@ async function loadPortfolio() {
     { k: "trade", label: `Amount (${b})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
 }
+let formQuote = null;
+$("#hTicker").onchange = async () => {
+  const hint = $("#hHint"), t = $("#hTicker").value.trim();
+  formQuote = null; hint.textContent = "";
+  if (!t) return;
+  const q = await api(`/api/quote/${encodeURIComponent(t)}`).catch(() => null);
+  if (!q || $("#hTicker").value.trim() !== t) return;
+  formQuote = q;
+  const unit = { GBp: " (pence, 1/100 of a pound)", GBX: " (pence, 1/100 of a pound)", ZAc: " (cents, 1/100 of a rand)", ILA: " (agorot, 1/100 of a shekel)", KWF: " (fils, 1/1000 of a dinar)" }[q.currency] || "";
+  hint.textContent = `${q.ticker} trades in ${q.currency}${unit}. Latest price ${num(q.price)}.`;
+};
 $("#hKind").onchange = () => {
   const dividend = $("#hKind").value === "dividend";
   $("#hSharesWrap").classList.toggle("hidden", dividend);
@@ -530,9 +552,12 @@ $("#hKind").onchange = () => {
 $("#btnAddHolding").onclick = async () => {
   const kind = $("#hKind").value, value = $("#hCost").value;
   const figures = kind === "dividend" ? { amount: value } : { shares: $("#hShares").value, price: value };
+  // A price far from the market is often the wrong unit, such as pounds for a stock quoted in pence
+  if (kind !== "dividend" && formQuote && value && (Number(value) > formQuote.price * 5 || Number(value) < formQuote.price / 5)
+      && !confirm(`${value} is far from the latest price of ${num(formQuote.price)} ${formQuote.currency}. Save it anyway?`)) return;
   try {
     await api("/api/transactions", { method: "POST", body: { ticker: $("#hTicker").value, kind, date: $("#hDate").value, note: $("#hNote").value, ...figures } });
-    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); toast("Transaction recorded"); loadPortfolio();
+    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); $("#hHint").textContent = ""; formQuote = null; toast("Transaction recorded"); loadPortfolio();
   } catch (e) { toast(e.message); }
 };
 

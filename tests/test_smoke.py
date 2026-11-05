@@ -134,9 +134,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v5:EMPTY.X") is None
-        db.cache_set("info:v5:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v5:OLD.X'")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v6:EMPTY.X") is None
+        db.cache_set("info:v6:OLD.X", {"trailingPE": 12.0})
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v6:OLD.X'")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -1573,6 +1573,64 @@ def test_idle_cash_earns_the_risk_free_rate_in_backtests():
     # Buy & hold pays its one trade
     held = backtest.run(flat, "buy_hold", {}, 10, 0.0)
     assert abs(held["benchmark"]["totalReturn"] + 0.001) < 1e-9 and abs(held["strategy"]["totalReturn"] + 0.001) < 1e-9
+
+
+def test_digest_puts_urgent_items_first():
+    from fastapi.testclient import TestClient
+
+    from backend import db, insights
+    from backend.main import app
+    _reset()
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('AAA', 1, 100)")
+    rising = _steps([0.01] * 300)  # overbought, and +1% is below the move threshold
+    db.x("INSERT INTO journal (ts, ticker, action, price, stop_price, review_date) VALUES (1, 'AAA', 'buy', 100, 1000000, '2000-01-01')")
+    db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES ('AAA', 'price_above', 1, 1)")
+    with _FakeMarket({"AAA": rising}):
+        d = insights.digest(db.get_settings())
+    texts = [i["text"] for i in d["items"]]
+    assert [t.split()[0] for t in texts[:2]] == ["Alert:", "AAA"] and "hit your thesis stop" in texts[1]
+    assert "review due" in texts[2] and "overbought" in texts[-1], texts
+    assert "rows" not in d
+
+
+def test_quote_for_the_portfolio_form():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    with TestClient(app) as c:
+        q = c.get("/api/quote/azn.l").json()
+        assert q["ticker"] == "AZN.L" and q["currency"] == "GBp" and q["price"] > 0
+        with _FakeMarket({}):
+            assert c.get("/api/quote/NOPE").status_code == 404
+
+
+def test_news_has_no_keyword_sentiment():
+    from backend import ai, data
+    item = data.news("AAPL")[0]
+    assert "sentiment" not in item and item["title"]
+    assert not hasattr(data, "headline_sentiment")
+    text = ai.rule_brief({"ticker": "A", "info": {"name": "A"}, "stats": {}, "news": [item], "scores": {"factors": {}, "composite": 1, "stance": "x", "signals": []}})
+    assert "headlines" not in text.lower()
+
+
+def test_brief_uses_your_risk_free_rate():
+    from fastapi.testclient import TestClient
+
+    from backend import ai
+    from backend.main import app
+    _reset()
+    seen = {}
+    real = ai.brief
+    ai.brief = lambda ctx: seen.update(ctx) or {"source": "rules", "text": "x"}
+    try:
+        with TestClient(app) as c:
+            c.get("/api/stock/AAPL/brief")
+            low = seen["stats"]["sharpe1y"]
+            c.post("/api/settings", json={"risk_free_rate": 0.20})
+            c.get("/api/stock/AAPL/brief")
+            assert seen["stats"]["sharpe1y"] < low
+    finally:
+        ai.brief = real
 
 
 def test_minor_unit_currencies():

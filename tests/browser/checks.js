@@ -263,6 +263,87 @@ const CHECKS = {
     page.off("dialog", dialogs);
   },
 
+  // The chart period buttons change the chart and nothing else
+  async periods(page) {
+    await page.evaluate(() => { location.hash = "#research/AAPL"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.waitForTimeout(800);
+    await page.fill("#dGrowth", "7.5"); await page.fill("#ptAmount", "1234");
+    await page.click("#btnBrief"); await page.waitForFunction(() => !document.querySelector("#btnBrief").disabled, null, { timeout: 60000 });
+    const brief = await page.innerText("#briefOut");
+    const bars = () => page.evaluate(() => state.stock.candles.time.length);
+    const year = await bars();
+    await page.click('#periodSeg button[data-p="3mo"]'); await page.waitForFunction((n) => state.stock.candles.time.length !== n, year, { timeout: 30000 }); await page.waitForTimeout(300);
+    expect("chart shows the new period", (await bars()) < year, `${year} -> ${await bars()}`);
+    expect("button marked", await page.evaluate(() => document.querySelector('#periodSeg button[data-p="3mo"]').classList.contains("on")));
+    expect("brief is kept", (await page.innerText("#briefOut")) === brief);
+    expect("DCF input is kept", (await page.inputValue("#dGrowth")) === "7.5");
+    expect("pre-trade input is kept", (await page.inputValue("#ptAmount")) === "1234");
+    expect("chart still drawn", (await page.locator("#priceChart canvas").count()) > 0);
+  },
+
+  // The browser's Back and Forward move between screens
+  async backbutton(page) {
+    await page.click('[data-view="portfolio"]'); await page.waitForTimeout(200);
+    await page.click('[data-view="journal"]'); await page.waitForTimeout(200);
+    const visible = () => page.evaluate(() => [...document.querySelectorAll(".view")].find((v) => !v.classList.contains("hidden")).id);
+    await page.goBack(); await page.waitForTimeout(300);
+    expect("Back returns to Portfolio", (await visible()) === "view-portfolio", await visible());
+    await page.goForward(); await page.waitForTimeout(300);
+    expect("Forward returns to Journal", (await visible()) === "view-journal", await visible());
+    await page.evaluate(() => { location.hash = "#research/AAPL"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL", null, { timeout: 60000 });
+    await page.click('[data-view="screener"]'); await page.waitForTimeout(200);
+    await page.goBack(); await page.waitForTimeout(600);
+    expect("Back returns to the stock", (await visible()) === "view-research" && (await page.textContent("#rSym")) === "AAPL");
+    await page.goBack(); await page.waitForTimeout(300);
+    expect("and back again to Journal, without a loop", (await visible()) === "view-journal", await visible());
+    // A symbol that needs encoding doesn't trap you
+    await page.evaluate(() => { location.hash = "#research/%5EVIX"; }); await page.waitForTimeout(1500);
+    const before = await page.evaluate(() => history.length);
+    await page.waitForTimeout(300);
+    expect("no extra history entries", (await page.evaluate(() => history.length)) === before);
+    await page.goBack(); await page.waitForTimeout(400);
+    expect("Back leaves that page", (await visible()) === "view-journal", await visible());
+  },
+
+  // The form shows the currency and price, and questions a figure in the wrong unit
+  async pence(page) {
+    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(400);
+    await page.fill("#hTicker", "azn.l"); await page.press("#hTicker", "Tab");
+    await page.waitForFunction(() => /GBp/.test(document.querySelector("#hHint").textContent), null, { timeout: 30000 });
+    const hint = await page.textContent("#hHint");
+    expect("shows the currency and that it's pence", /GBp/.test(hint) && /pence/.test(hint), hint);
+    const price = await page.evaluate(async () => (await (await fetch("/api/quote/AZN.L")).json()).price);
+    await page.fill("#hShares", "10"); await page.fill("#hDate", "2025-01-02");
+    await page.fill("#hCost", String(price / 100));
+    let asked = null;
+    page.once("dialog", (d) => { asked = d.message(); d.dismiss(); });
+    await page.click("#btnAddHolding"); await page.waitForTimeout(600);
+    expect("a price 100x off is questioned", /far from/.test(asked || ""), asked);
+    expect("saying no saves nothing", (await post(page, "/api/transactions", null, "GET")).body.length === 0);
+    await page.fill("#hCost", String(price * 0.9));
+    await page.click("#btnAddHolding"); await page.waitForTimeout(1500);
+    expect("a normal price saves without asking", (await post(page, "/api/transactions", null, "GET")).body.length === 1);
+    expect("hint clears with the form", (await page.textContent("#hHint")) === "");
+    await page.fill("#hTicker", "NOSUCH.ZZ"); await page.press("#hTicker", "Tab"); await page.waitForTimeout(500);
+    expect("no crash on a ticker without data", true);
+  },
+
+  // Fund pages only show rows that mean something
+  async fundrows(page) {
+    await page.evaluate(() => { location.hash = "#research/SPY"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "SPY" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.waitForTimeout(500);
+    const rows = await page.evaluate(() => [...document.querySelectorAll("#statGrid > div")].map((d) => [d.children[0].textContent, d.children[1].textContent]));
+    expect("no empty rows", !rows.some(([, v]) => v === "—"), JSON.stringify(rows.filter(([, v]) => v === "—")));
+    expect("still has returns", rows.some(([k]) => k === "1Y"));
+    await page.evaluate(() => { location.hash = "#research/AAPL"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.waitForTimeout(300);
+    expect("stocks keep all their rows", (await page.locator("#statGrid > div").count()) > 20);
+  },
+
   // Text from Yahoo can't run as a script in the brief
   async xss(page) {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });
