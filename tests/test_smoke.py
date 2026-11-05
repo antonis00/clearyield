@@ -20,6 +20,8 @@ from backend.main import app  # noqa: E402
 def test_all():
     with TestClient(app) as c:
         assert c.get("/").status_code == 200
+        for path in ("/", "/static/app.js", "/api/meta"):
+            assert c.get(path).headers["cache-control"] == "no-cache", path
         m = c.get("/api/meta").json()
         assert m["demo"] is True
         assert c.get("/api/search?q=qnb").json()[0]["ticker"] == "QNBK.QA"

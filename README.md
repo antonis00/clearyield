@@ -9,7 +9,7 @@ A personal, self-hosted investing dashboard: live prices, charts, transparent fa
 Requires Python 3.10+.
 
 ```bash
-./run.sh            # macOS / Linux  -> http://localhost:8000
+./run.sh            # macOS / Linux  -> http://localhost:8001
 run.bat             # Windows
 ./run.sh --demo     # synthetic offline data, to try the UI without internet
 ```
@@ -19,7 +19,7 @@ Or manually:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn backend.main:app --reload
+uvicorn backend.main:app --reload --port 8001
 ```
 
 Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn on AI-written research briefs and smarter plain-language screening. Without a key, the app uses a rule-based brief and a keyword parser.

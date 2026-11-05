@@ -1,4 +1,4 @@
-"""StockPilot API + static frontend.  Run:  uvicorn backend.main:app --reload"""
+"""StockPilot API + static frontend.  Run:  uvicorn backend.main:app --reload --port 8001"""
 import asyncio
 import logging
 import math
@@ -77,6 +77,16 @@ async def lifespan(app):
 
 app = FastAPI(title="StockPilot", lifespan=lifespan)
 FRONT = ROOT / "frontend"
+
+
+@app.middleware("http")
+async def always_revalidate(request, call_next):
+    """Without this, browsers can reuse an old page, or another app's page on the same port, without asking."""
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=FRONT), name="static")
 
 
