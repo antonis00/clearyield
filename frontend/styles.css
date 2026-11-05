@@ -93,6 +93,11 @@ td.num, th.num { text-align: right; font-family: var(--mono); }
 tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel2); }
 td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size: 11px; display: block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 
+/* keep Score and Stance on screen: real names and sectors are long */
+#scrTable th, #scrTable td { padding-left: 6px; padding-right: 6px; }
+#scrTable td .sub { max-width: 110px; }
+#scrTable .clip { display: block; max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
+
 /* stance badges / scores */
 .badge { display: inline-block; padding: 2px 9px; border-radius: 99px; font: 600 11px var(--mono); }
 .b-Strong { background: #3fb68b26; color: var(--up); } .b-Favorable { background: #4fb3bf26; color: var(--accent2); }

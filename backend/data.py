@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from . import db
+from . import indicators as ind
 from .universe import currency_guess, name_of, region_of
 
 log = logging.getLogger("stockpilot.data")
@@ -82,14 +83,13 @@ def _fetch_history(ticker, period):
 
 
 def slice_period(df, period):
-    if period in ("max", "5y", "10y") or df.empty:
-        return df if period != "5y" else df.iloc[-1260:]
+    if period in ("max", "10y") or df.empty:
+        return df
     if period == "ytd":
         start = pd.Timestamp(dt.date.today().year, 1, 1)
         out = df[df.index >= start]
         return out if len(out) > 1 else df.iloc[-5:]
-    n = PERIOD_DAYS.get(period, 252)
-    return df.iloc[-n:]
+    return ind.window(df, PERIOD_DAYS.get(period, 252))
 
 
 # ---------------------------------------------------------------- info / fundamentals
@@ -100,12 +100,16 @@ INFO_KEYS = [
     "returnOnEquity", "returnOnAssets", "debtToEquity", "currentRatio", "revenueGrowth", "earningsGrowth",
     "dividendYield", "payoutRatio", "beta", "sharesOutstanding", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
-    "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "website",
+    "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "website", "financialCurrency",
+    "impliedSharesOutstanding",
 ]
+
+# Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
+MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.0), "ILA": ("ILS", 100.0)}
 
 
 def info(ticker):
-    key = f"info:{ticker}"
+    key = f"info:v2:{ticker}"  # v2: adds statementFx and corrects dividendYield
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -117,9 +121,10 @@ def info(ticker):
             raw = _yf().Ticker(ticker).info or {}
         except Exception as e:
             log.warning("info failed for %s: %s", ticker, e)
-            stale = db.cache_get_stale(key)
-            if stale:
-                return stale
+        # Yahoo answers a rate limit or an unknown quote with an almost empty dict. Caching that
+        # would blank the fundamentals for hours, so fall back to old data and retry next time.
+        if not any(raw.get(k) is not None for k in INFO_KEYS):
+            return db.cache_get_stale(key) or _normalize_info(ticker, {k: None for k in INFO_KEYS})
         out = {k: raw.get(k) for k in INFO_KEYS}
         out = _normalize_info(ticker, out)
     db.cache_set(key, out)
@@ -130,9 +135,9 @@ def _normalize_info(ticker, d):
     for k, v in list(d.items()):
         if isinstance(v, (int, float)):
             d[k] = _num(v)
-    # yfinance reports dividendYield in percent in recent versions; normalise to a fraction
+    # yfinance reports dividendYield in percent at every size (0.08 means 0.08%)
     dy = d.get("dividendYield")
-    if dy is not None and dy > 0.25:
+    if dy is not None:
         d["dividendYield"] = dy / 100
     # debtToEquity is reported as a percentage (150 => 1.5x)
     de = d.get("debtToEquity")
@@ -140,12 +145,26 @@ def _normalize_info(ticker, d):
         d["debtToEquity"] = de / 100
     d["name"] = d.get("longName") or d.get("shortName") or name_of(ticker)
     d["currency"] = d.get("currency") or currency_guess(ticker)
+    d["financialCurrency"] = d.get("financialCurrency") or MINOR_UNITS.get(d["currency"], (d["currency"],))[0]
+    d["statementFx"] = statement_fx(d)
+    # Yahoo divides an EV in the quote currency by EBITDA in the statement currency. Its P/E and
+    # forward EPS are already converted, so they stay as they are.
+    if d.get("enterpriseToEbitda") is not None:
+        d["enterpriseToEbitda"] /= d["statementFx"]
     qt = d.get("quoteType") or ("CRYPTOCURRENCY" if ticker.endswith("-USD") else "EQUITY")
     d["quoteType"] = qt
     d["assetClass"] = asset_class(qt)
     d["region"] = region_of(ticker, qt)
     d["ticker"] = ticker
     return d
+
+
+def statement_fx(d):
+    """Main quote-currency units per 1 unit of the currency the financial statements are in."""
+    quote = MINOR_UNITS.get(d["currency"], (d["currency"],))[0]
+    if d["financialCurrency"] == quote:
+        return 1.0
+    return fx_rate(d["financialCurrency"], "USD") / fx_rate(quote, "USD")
 
 
 def asset_class(quote_type):
@@ -179,9 +198,12 @@ def financials(ticker):
             fcf = row(cf, "Free Cash Flow")
             cols = sorted(set(rev) | set(ni) | set(fcf))
             for c in cols:
-                out.append({"year": str(pd.Timestamp(c).year), "revenue": rev.get(c), "netIncome": ni.get(c), "fcf": fcf.get(c)})
+                # Yahoo often adds an extra old year with every value empty
+                if any(x.get(c) is not None for x in (rev, ni, fcf)):
+                    out.append({"year": str(pd.Timestamp(c).year), "revenue": rev.get(c), "netIncome": ni.get(c), "fcf": fcf.get(c)})
         except Exception as e:
             log.warning("financials failed for %s: %s", ticker, e)
+            return db.cache_get_stale(key) or []
     db.cache_set(key, out)
     return out
 
@@ -210,6 +232,7 @@ def news(ticker, limit=12):
                             "summary": c.get("summary") or "", "sentiment": headline_sentiment(title + " " + (c.get("summary") or ""))})
         except Exception as e:
             log.warning("news failed for %s: %s", ticker, e)
+            return db.cache_get_stale(key) or []
     db.cache_set(key, out)
     return out
 
@@ -235,13 +258,7 @@ def fx_rate(currency, base="USD"):
     """Units of `base` per 1 unit of `currency`. Handles pence quotes (GBp, ZAc, ILA)."""
     if not currency:
         return 1.0
-    divisor = 1.0
-    if currency in ("GBp", "GBX"):
-        currency, divisor = "GBP", 100.0
-    elif currency == "ZAc":
-        currency, divisor = "ZAR", 100.0
-    elif currency == "ILA":
-        currency, divisor = "ILS", 100.0
+    currency, divisor = MINOR_UNITS.get(currency, (currency, 1.0))
     if currency == base:
         return 1.0 / divisor
     key = f"fx:{currency}{base}"
@@ -311,12 +328,13 @@ def _demo_info(ticker):
               "longBusinessSummary": f"Demo data for {name_of(ticker)}. Prices and fundamentals are synthetic."})
     if qt == "EQUITY":
         shares = rng.uniform(2e8, 5e9)
-        rev = price * shares * rng.uniform(0.15, 1.5)
+        mcap = price / MINOR_UNITS.get(d["currency"], (None, 1.0))[1] * shares  # as on Yahoo: never in pence
+        rev = mcap * rng.uniform(0.15, 1.5)
         margin = rng.uniform(-0.05, 0.35)
         d.update({
             "sector": SECTORS[_seed(ticker) % len(SECTORS)], "industry": "Demo industry", "country": region_of(ticker),
-            "marketCap": price * shares, "sharesOutstanding": shares, "totalRevenue": rev,
-            "trailingPE": (price * shares) / (rev * margin) if margin > 0.01 else None,
+            "marketCap": mcap, "sharesOutstanding": shares, "totalRevenue": rev,
+            "trailingPE": mcap / (rev * margin) if margin > 0.01 else None,
             "forwardPE": rng.uniform(8, 40), "priceToBook": rng.uniform(0.8, 14), "enterpriseToEbitda": rng.uniform(5, 30),
             "freeCashflow": rev * rng.uniform(-0.03, 0.28), "profitMargins": margin, "operatingMargins": margin + rng.uniform(0, 0.1),
             "grossMargins": rng.uniform(0.25, 0.75), "returnOnEquity": rng.uniform(-0.05, 0.45), "debtToEquity": rng.uniform(0.0, 2.5),
@@ -327,7 +345,9 @@ def _demo_info(ticker):
         })
     elif qt == "ETF":
         d.update({"dividendYield": rng.uniform(0.0, 0.04), "beta": rng.uniform(0.2, 1.2), "trailingPE": rng.uniform(12, 32)})
-    return _normalize_info(ticker, {**d, "debtToEquity": d["debtToEquity"] * 100 if d["debtToEquity"] is not None else None})
+    # Same raw units as Yahoo: both of these are percentages until normalised
+    pct = {k: d[k] * 100 for k in ("debtToEquity", "dividendYield") if d[k] is not None}
+    return _normalize_info(ticker, {**d, **pct})
 
 
 def _etfs():

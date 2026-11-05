@@ -43,7 +43,7 @@ def factor_breakdown(info, close):
         _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), lin(g("enterpriseToEbitda"), 25, 6) if (g("enterpriseToEbitda") or 0) > 0 else None)
         fcf, mc = g("freeCashflow"), g("marketCap")
         if fcf is not None and mc:
-            fy = fcf / mc
+            fy = fcf * (g("statementFx") or 1.0) / mc  # FCF is in the statement currency, market cap is not
             _part(f["value"], "FCF yield", fy, lin(fy, 0, 0.08), "pct")
         # --- quality
         _part(f["quality"], "Return on equity", g("returnOnEquity"), lin(g("returnOnEquity"), 0, 0.30), "pct")
@@ -76,7 +76,7 @@ def factor_breakdown(info, close):
     vol = ind.volatility(close)
     crypto = info.get("assetClass") == "Crypto"
     _part(f["risk"], "Volatility (1y, ann.)", vol, lin(vol, 0.9 if crypto else 0.6, 0.35 if crypto else 0.15), "pct")
-    dd = ind.max_drawdown(close.iloc[-252:])
+    dd = ind.max_drawdown(ind.window(close, 252))
     _part(f["risk"], "Max drawdown (1y)", dd, lin(dd, -0.6 if crypto else -0.5, -0.15 if crypto else -0.08), "pct")
     if is_equity and g("beta") is not None:
         _part(f["risk"], "Beta", g("beta"), lin(g("beta"), 2.0, 0.6), "x")
@@ -140,7 +140,7 @@ def signals(info, close):
             add(-1, f"RSI {r:.0f}: overbought, short-term pullback risk is elevated.")
         elif r <= 30:
             add(1, f"RSI {r:.0f}: oversold, a rebound is possible but trend may still be down.")
-    hi = float(close.iloc[-252:].max())
+    hi = float(ind.window(close, 252).max())
     off = price / hi - 1
     if off <= -0.30:
         add(0, f"Trading {abs(off):.0%} below its 52-week high.")

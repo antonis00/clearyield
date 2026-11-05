@@ -102,7 +102,7 @@ document.addEventListener("click", (e) => { const g = e.target.closest("[data-go
 
 /* ---------------------------------------------------------------- dashboard */
 function spark(vals, up) {
-  if (!vals?.length) return "";
+  if (!(vals?.length > 1)) return "";
   const mn = Math.min(...vals), mx = Math.max(...vals), w = 120, h = 26;
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - ((v - mn) / (mx - mn || 1)) * (h - 2) - 1}`).join(" ");
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="${up ? C("--up") : C("--down")}" stroke-width="1.5" points="${pts}"/></svg>`;
@@ -174,7 +174,7 @@ function renderHeader(s) {
   $("#rSym").textContent = s.ticker; $("#rName").textContent = i.name || "";
   $("#rTags").innerHTML = [i.assetClass, i.region, i.sector, i.currency].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
   $("#rPrice").textContent = money(st.price, i.currency);
-  $("#rChange").innerHTML = `<span class="${cls(st.change)}">${st.change >= 0 ? "+" : ""}${num(st.change)} (${pct(st.changePct, 2)})</span> <span class="muted sm">1D</span>`;
+  $("#rChange").innerHTML = `<span class="${cls(st.change)}">${st.change > 0 ? "+" : ""}${num(st.change)} (${pct(st.changePct, 2)})</span> <span class="muted sm">1D</span>`;
   const sc = s.scores.composite;
   $("#rScore").textContent = num(sc, 0);
   $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, #243042 0)`;
@@ -280,7 +280,7 @@ async function runDcf() {
     if (d.error) { out.innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
     const cur = state.stock.info.currency;
     out.innerHTML = `<div class="dcf-big"><div>${money(d.fairValue, cur)}<small>Fair value / share</small></div><div>${money(d.price, cur)}<small>Price</small></div><div class="${cls(d.marginOfSafety)}">${pct(d.marginOfSafety)}<small>Upside to fair value</small></div></div>
-      <div class="muted sm">Starting FCF ${big(d.startFcf)} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)}.</div>`;
+      <div class="muted sm">Starting FCF ${big(d.startFcf)} ${esc(d.statementCurrency || "")} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)} ${esc(d.statementCurrency || "")}.${d.statementCurrency && !cur.startsWith(d.statementCurrency.slice(0, 2)) ? ` Fair value is converted from ${esc(d.statementCurrency)} at today's rate.` : ""}</div>`;
   } catch (e) { out.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
 $("#btnDcf").onclick = runDcf;
@@ -350,7 +350,7 @@ async function runScreen(body) {
     const f = d.filters;
     $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. Filters: <code>${esc(JSON.stringify(Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== null))))}</code>${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}`;
     table(el, [
-      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => esc(v || r.assetClass) },
+      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
       { k: "revGrowth", label: "Rev g.", num: 1, fmt: (v) => cpct(v) }, { k: "roe", label: "ROE", num: 1, fmt: (v) => pct(v, 0, false) },

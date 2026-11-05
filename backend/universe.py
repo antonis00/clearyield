@@ -17,7 +17,7 @@ UNIVERSE = {
     },
     "Europe": {
         "ASML.AS": "ASML", "SAP.DE": "SAP", "MC.PA": "LVMH", "NESN.SW": "Nestle", "NOVO-B.CO": "Novo Nordisk",
-        "ROG.SW": "Roche", "SIE.DE": "Siemens", "AZN.L": "AstraZeneca", "SHEL.L": "Shell", "OR.PA": "L'Oreal",
+        "RO.SW": "Roche", "SIE.DE": "Siemens", "AZN.L": "AstraZeneca", "SHEL.L": "Shell", "OR.PA": "L'Oreal",
         "TTE.PA": "TotalEnergies", "ULVR.L": "Unilever", "ALV.DE": "Allianz", "SAN.MC": "Banco Santander",
         "AIR.PA": "Airbus", "HSBA.L": "HSBC", "BMW.DE": "BMW", "ENEL.MI": "Enel", "RMS.PA": "Hermes",
         "IBE.MC": "Iberdrola",
@@ -27,7 +27,6 @@ UNIVERSE = {
         "ORDS.QA": "Ooredoo", "MARK.QA": "Masraf Al Rayan", "QGTS.QA": "Nakilat",
         "2222.SR": "Saudi Aramco", "1120.SR": "Al Rajhi Bank", "2010.SR": "SABIC", "7010.SR": "STC",
         "1180.SR": "Saudi National Bank", "EMAAR.AE": "Emaar Properties", "DIB.AE": "Dubai Islamic Bank",
-        "FAB.AE": "First Abu Dhabi Bank", "ADNOCDIST.AE": "ADNOC Distribution",
     },
     "ETFs": {
         "SPY": "S&P 500 ETF", "QQQ": "Nasdaq-100 ETF", "VTI": "Total US Market ETF", "VXUS": "Intl ex-US ETF",

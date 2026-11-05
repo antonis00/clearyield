@@ -46,10 +46,33 @@ def bundle(df):
 
 
 # ---------------------------------------------------------------- risk / return stats
+def _calendar_days(bars):
+    return round(bars * 365.25 / TRADING_DAYS)
+
+
+def window(obj, bars):
+    """The last `bars` trading days' worth of a series or frame, measured in calendar time.
+
+    Counting rows is wrong for real data: crypto has about 365 bars a year and UAE symbols about 208.
+    """
+    return obj[obj.index >= obj.index[-1] - pd.Timedelta(days=_calendar_days(bars))]
+
+
+def bars_per_year(s):
+    """Observed bars per year, used to annualise. Normal exchange calendars all count as 252."""
+    years = (s.index[-1] - s.index[0]).days / 365.25 if len(s) >= 30 else 0
+    if years <= 0:
+        return TRADING_DAYS
+    n = (len(s) - 1) / years
+    return TRADING_DAYS if 235 <= n <= 270 else round(n)
+
+
 def ret_over(close, days):
-    if len(close) <= days:
-        return None
-    return float(close.iloc[-1] / close.iloc[-1 - days] - 1)
+    """Return over `days` trading days' worth of calendar time (`days=1` is simply the previous bar)."""
+    if days <= 1:
+        return float(close.iloc[-1] / close.iloc[-2] - 1) if len(close) > 1 else None
+    base = close[close.index <= close.index[-1] - pd.Timedelta(days=_calendar_days(days))]
+    return None if base.empty else float(close.iloc[-1] / base.iloc[-1] - 1)
 
 
 def ytd_return(close):
@@ -61,8 +84,9 @@ def ytd_return(close):
 
 
 def volatility(close, days=252):
-    r = close.pct_change().dropna().iloc[-days:]
-    return float(r.std() * math.sqrt(TRADING_DAYS)) if len(r) > 20 else None
+    w = window(close, days)
+    r = w.pct_change().dropna()
+    return float(r.std() * math.sqrt(bars_per_year(w))) if len(r) > 20 else None
 
 
 def max_drawdown(close):
@@ -85,8 +109,9 @@ def sharpe(close, rf=0.04):
     r = close.pct_change().dropna()
     if len(r) < 20 or r.std() == 0:
         return None
-    ex = r - rf / TRADING_DAYS
-    return float(ex.mean() / r.std() * math.sqrt(TRADING_DAYS))
+    n = bars_per_year(close)
+    ex = r - rf / n
+    return float(ex.mean() / r.std() * math.sqrt(n))
 
 
 def sortino(close, rf=0.04):
@@ -94,22 +119,29 @@ def sortino(close, rf=0.04):
     down = r[r < 0]
     if len(r) < 20 or len(down) < 5 or down.std() == 0:
         return None
-    return float((r.mean() - rf / TRADING_DAYS) / down.std() * math.sqrt(TRADING_DAYS))
+    n = bars_per_year(close)
+    return float((r.mean() - rf / n) / down.std() * math.sqrt(n))
 
 
 def beta(close, bench_close):
-    a = pd.concat([close.pct_change(), bench_close.pct_change()], axis=1, join="inner").dropna()
+    """Beta from weekly returns on shared dates. Same-day returns understate it for markets that
+    close before the US does, because they only react to the US session on the next bar."""
+    px = pd.concat([close, bench_close], axis=1, join="inner").dropna()
+    if px.empty:
+        return None
+    weekly = px.resample("W-FRI").last().dropna().pct_change().dropna()
+    a = weekly if len(weekly) >= 30 else px.pct_change().dropna()
     if len(a) < 30 or a.iloc[:, 1].var() == 0:
         return None
     return float(a.iloc[:, 0].cov(a.iloc[:, 1]) / a.iloc[:, 1].var())
 
 
 def stats(close, rf=0.04):
-    one_y = close.iloc[-252:]
+    one_y = window(close, 252)
     return {
         "ret1w": ret_over(close, 5), "ret1m": ret_over(close, 21), "ret3m": ret_over(close, 63),
         "ret6m": ret_over(close, 126), "ret1y": ret_over(close, 252), "ytd": ytd_return(close),
-        "ret5yCagr": cagr(close.iloc[-1260:]) if len(close) > 500 else None,
-        "vol1y": volatility(close), "maxDD1y": max_drawdown(one_y), "maxDD5y": max_drawdown(close.iloc[-1260:]),
+        "ret5yCagr": cagr(window(close, 1260)) if len(close) > 500 else None,
+        "vol1y": volatility(close), "maxDD1y": max_drawdown(one_y), "maxDD5y": max_drawdown(window(close, 1260)),
         "sharpe1y": sharpe(one_y, rf), "sortino1y": sortino(one_y, rf),
     }

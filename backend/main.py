@@ -138,17 +138,18 @@ def stock(ticker: str, period: str = "1y"):
     view = data.slice_period(full, period)
     ib = ib.loc[view.index]
     c = full["Close"]
-    price, prev = float(c.iloc[-1]), float(c.iloc[-2]) if len(c) > 1 else float(c.iloc[-1])
+    price, prev = float(c.iloc[-1]), float(c.iloc[-2]) if len(c) > 1 else None  # some Yahoo indices have one row
     candles = {"time": [d.strftime("%Y-%m-%d") for d in view.index], "open": view["Open"].tolist(), "high": view["High"].tolist(),
                "low": view["Low"].tolist(), "close": view["Close"].tolist(), "volume": view["Volume"].tolist(),
                **{k: ib[k].tolist() for k in ib.columns}}
     stats = ind.stats(c, settings.get("risk_free_rate", 0.04))
-    stats.update({"price": price, "change": price - prev, "changePct": price / prev - 1 if prev else None,
-                  "high52": float(full["High"].iloc[-252:].max()), "low52": float(full["Low"].iloc[-252:].min()),
+    last_year = ind.window(full, 252)
+    stats.update({"price": price, "change": price - prev if prev else None, "changePct": price / prev - 1 if prev else None,
+                  "high52": float(last_year["High"].max()), "low52": float(last_year["Low"].min()),
                   "rsi": float(ind.rsi(c).iloc[-1]), "avgVolume": float(full["Volume"].iloc[-60:].mean())})
     try:
         bench = data.history(settings.get("benchmark", "SPY"), "5y")["Close"]
-        stats["betaCalc"] = ind.beta(c.iloc[-504:], bench)
+        stats["betaCalc"] = ind.beta(ind.window(c, 504), bench)
     except data.DataError:
         pass
     watched = bool(db.q("SELECT 1 FROM watchlist WHERE ticker=?", (t,)))
