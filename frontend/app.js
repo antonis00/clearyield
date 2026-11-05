@@ -47,8 +47,8 @@ function mkChart(id, cfg) { state.charts[id]?.destroy(); const ctx = document.ge
 
 /* Generic sortable table. cols: {k,label,fmt(v,row),num,sort} */
 function table(el, cols, rows, { onClick, empty = "Nothing here yet." } = {}) {
-  if (!rows.length) { el.innerHTML = `<div class="muted">${empty}</div>`; return; }
-  let sortK = null, dir = -1;
+  if (!rows.length) { el.innerHTML = `<div class="muted">${empty}</div>`; return { afterDraw() {} }; }
+  let sortK = null, dir = -1, after = () => {};
   const draw = () => {
     const data = [...rows];
     if (sortK) data.sort((a, b) => { const x = a[sortK], y = b[sortK]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
@@ -56,8 +56,11 @@ function table(el, cols, rows, { onClick, empty = "Nothing here yet." } = {}) {
       <tbody>${data.map((r, i) => `<tr class="${onClick ? "click" : ""}" data-i="${rows.indexOf(r)}">${cols.map((c) => `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     $$("th", el).forEach((th) => th.onclick = () => { const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } draw(); });
     if (onClick) $$("tbody tr", el).forEach((tr) => tr.onclick = (e) => { if (e.target.closest("button")) return; onClick(rows[+tr.dataset.i]); });
+    after();
   };
   draw();
+  // Sorting rebuilds the rows, so anything bound to them has to be bound again each time
+  return { afterDraw(fn) { after = fn; fn(); } };
 }
 const symCell = (v, r) => `<span class="sym">${esc(v)}</span><span class="sub">${esc(r.name || "")}</span>`;
 
@@ -137,8 +140,8 @@ async function loadDashboard() {
       { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) }, { k: "rsi", label: "RSI", num: 1, fmt: (v) => num(v, 0) },
       { k: "composite", label: "Score", num: 1, fmt: (v) => `${num(v, 0)}` }, { k: "stance", label: "Stance", fmt: badge },
       { k: "ticker", label: "", fmt: (v) => `<button class="btn danger" data-rm="${esc(v)}">Remove</button>` },
-    ], w, { onClick: (r) => openStock(r.ticker), empty: "Your watchlist is empty. Research a ticker and click “+ Watchlist”." });
-    $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); });
+    ], w, { onClick: (r) => openStock(r.ticker), empty: "Your watchlist is empty. Research a ticker and click “+ Watchlist”." })
+    .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
 async function loadDigest() {
@@ -388,12 +391,12 @@ async function loadPortfolio() {
     { k: "pnl", label: "P&L", num: 1, fmt: (v) => `<span class="${cls(v)}">${money(v, b, 0)}</span>` }, { k: "pnlPct", label: "P&L %", num: 1, fmt: (v) => cpct(v) },
     { k: "weight", label: "Weight", num: 1, fmt: (v) => pct(v, 1, false) },
     { k: "ticker", label: "", fmt: (v) => `<button class="btn danger" data-lots="${esc(v)}">Lots</button>` },
-  ], p.positions, { onClick: (r) => openStock(r.ticker), empty: "No holdings yet — add one above." });
-  $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
+  ], p.positions, { onClick: (r) => openStock(r.ticker), empty: "No holdings yet — add one above." })
+  .afterDraw(() => $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
     const pos = p.positions.find((x) => x.ticker === btn.dataset.lots);
     modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);
     $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
-  });
+  }));
   if (p.errors?.length) toast(p.errors.join(" · "));
   $("#pfNote").textContent = p.note;
   if (p.performance) {
@@ -458,8 +461,8 @@ async function loadJournal() {
     { k: "ticker", label: "Ticker", fmt: (v) => `<span class="sym">${esc(v)}</span>` }, { k: "kind", label: "Condition", fmt: (v) => esc(state.meta.alertKinds[v] || v) },
     { k: "value", label: "Value", num: 1, fmt: (v) => num(v) }, { k: "active", label: "Status", fmt: (v, r) => v ? `<span class="pill on">active</span>` : `<span class="pill warn" title="${esc(r.message)}">triggered</span>` },
     { k: "message", label: "Last trigger", fmt: (v) => `<span class="muted sm">${esc(v || "")}</span>` }, { k: "id", label: "", fmt: (v) => `<button class="btn danger" data-adel="${v}">Delete</button>` },
-  ], a, { empty: "No alerts yet." });
-  $$("[data-adel]").forEach((b) => b.onclick = async () => { await api(`/api/alerts/${b.dataset.adel}`, { method: "DELETE" }); loadJournal(); });
+  ], a, { empty: "No alerts yet." })
+  .afterDraw(() => $$("[data-adel]").forEach((b) => b.onclick = async () => { await api(`/api/alerts/${b.dataset.adel}`, { method: "DELETE" }); loadJournal(); }));
 }
 $("#btnJournalAdd").onclick = async () => {
   if (!$("#jTicker").value.trim()) return toast("Ticker is required");
