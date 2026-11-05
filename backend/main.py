@@ -1,6 +1,7 @@
 """StockPilot API + static frontend.  Run:  uvicorn backend.main:app --reload --port 8001"""
 import asyncio
 import datetime as dt
+import json
 import logging
 import math
 import os
@@ -289,11 +290,22 @@ def journal_add(body: dict = Body(...)):
     def num(k):
         v = body.get(k)
         return float(v) if v not in (None, "") else None
-    jid = db.x("INSERT INTO journal (ts, ticker, action, price, thesis, invalidation, stop_price, target_price, review_date) "
-               "VALUES (?,?,?,?,?,?,?,?,?)",
-               (time.time(), T(body["ticker"]), body.get("action", "buy"), num("price"), body.get("thesis", ""),
-                body.get("invalidation", ""), num("stop_price"), num("target_price"), body.get("review_date", "")))
+    t, settings = T(body["ticker"]), db.get_settings()
+    try:
+        _, _, sc = insights.evaluate_ticker(t, settings)
+    except data.DataError:  # the note matters more than the snapshot
+        sc = {"composite": None, "stance": None, "factors": None}
+    jid = db.x("INSERT INTO journal (ts, ticker, action, price, thesis, invalidation, stop_price, target_price, review_date, "
+               "score, stance, factors, benchmark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               (time.time(), t, body.get("action", "buy"), num("price"), body.get("thesis", ""),
+                body.get("invalidation", ""), num("stop_price"), num("target_price"), body.get("review_date", ""),
+                sc["composite"], sc["stance"], json.dumps(sc["factors"]) if sc["factors"] else None, settings.get("benchmark", "SPY")))
     return ok({"id": jid})
+
+
+@app.get("/api/journal/scorecard")
+def journal_scorecard():
+    return ok(insights.scorecard(db.get_settings()))
 
 
 @app.patch("/api/journal/{jid}")

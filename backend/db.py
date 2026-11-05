@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 """
 
+# The score and benchmark when a decision was recorded, so the scorecard can judge it later
+JOURNAL_ADDED = {"score": "REAL", "stance": "TEXT", "factors": "TEXT", "benchmark": "TEXT"}
+
 DEFAULT_SETTINGS = {
     "base_currency": "USD",
     "risk_free_rate": 0.04,
@@ -46,6 +49,11 @@ def init():
         c = _connect()
         try:
             c.executescript(SCHEMA)
+            # Columns added after the first release: databases created earlier gain them here
+            have = {r["name"] for r in c.execute("PRAGMA table_info(journal)")}
+            for col, kind in JOURNAL_ADDED.items():
+                if col not in have:
+                    c.execute(f"ALTER TABLE journal ADD COLUMN {col} {kind}")
             c.commit()
         finally:
             c.close()

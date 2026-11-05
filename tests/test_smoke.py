@@ -483,6 +483,102 @@ def test_backup_restores_everything_or_nothing():
         assert db.q("SELECT * FROM settings WHERE key = 'hack'") == []
 
 
+def test_old_database_gains_the_new_columns():
+    """Upgrading must keep existing journal entries."""
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    from backend import db
+    path = Path(tempfile.mkdtemp()) / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE journal (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ticker TEXT, action TEXT, price REAL, "
+                "thesis TEXT DEFAULT '', invalidation TEXT DEFAULT '', stop_price REAL, target_price REAL, review_date TEXT DEFAULT '', outcome TEXT DEFAULT '')")
+    old.execute("INSERT INTO journal (ts, ticker, action, price, thesis) VALUES (1, 'AAPL', 'buy', 150, 'kept')")
+    old.commit()
+    old.close()
+    real = db.DB_PATH
+    db.DB_PATH = path
+    try:
+        db.init()
+        db.init()  # running it again must be harmless
+        row = db.q("SELECT * FROM journal")[0]
+        assert row["thesis"] == "kept" and row["score"] is None and "benchmark" in row and "stance" in row and "factors" in row
+    finally:
+        db.DB_PATH = real
+
+
+def test_journal_snapshots_the_score_when_saved():
+    from fastapi.testclient import TestClient
+
+    from backend import db
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        c.post("/api/settings", json={"benchmark": "QQQ"})
+        assert c.post("/api/journal", json={"ticker": "AAPL", "action": "buy", "price": 150}).status_code == 200
+        e = db.q("SELECT * FROM journal")[0]
+        assert e["score"] is not None and e["stance"] and "value" in e["factors"] and e["benchmark"] == "QQQ"
+        # A symbol with no data still saves: the note matters more than the snapshot
+        with _FakeMarket({"AAPL": None}):
+            assert c.post("/api/journal", json={"ticker": "AAPL", "action": "watch", "thesis": "no data today"}).status_code == 200
+        kept = db.q("SELECT * FROM journal WHERE action = 'watch'")[0]
+        assert kept["thesis"] == "no data today" and kept["score"] is None and kept["benchmark"] == "QQQ"
+
+
+def test_scorecard_is_hand_calculated():
+    import datetime as dt
+
+    import pandas as pd
+
+    from backend import db, insights
+    _reset()
+    idx = pd.bdate_range("2026-01-05", periods=100)
+    rising = pd.Series([100 + i * 20 / 99 for i in range(100)], index=idx)  # 100 to 120
+    falling = pd.Series([100 - i * 10 / 99 for i in range(100)], index=idx)  # 100 to 90
+    bench = pd.Series([100 + i * 10 / 99 for i in range(100)], index=idx)  # 100 to 110
+    ts = dt.datetime(2026, 1, 5, 18, 0).timestamp()
+
+    def add(ticker, action, price, stance, **kw):
+        cols = {"ts": ts, "ticker": ticker, "action": action, "price": price, "stance": stance, "benchmark": "SPY", **kw}
+        db.x(f"INSERT INTO journal ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", list(cols.values()))
+
+    add("UP", "buy", 100, "Strong", target_price=115)  # +20% against +10%: excess +10%, target reached
+    add("DOWN", "add", 100, "Weak", stop_price=95)  # -10% against +10%: excess -20%, stop hit
+    add("UP", "sell", 100, "Strong")  # a sale isn't a call to be judged the same way
+    add("UP", "watch", None, None)
+    add("GONE", "buy", 100, "Strong")  # no data: reported, not counted
+    add("UP", "buy", None, "Neutral", ts=dt.datetime(2026, 1, 5, 18, 0).timestamp() - 0)  # no price: uses that day's close, 100
+
+    with _FakeMarket({"UP": rising, "DOWN": falling, "SPY": bench}):
+        card = insights.scorecard(db.get_settings())
+    rows = {(e["ticker"], e["action"], e["stance"]): e for e in card["entries"]}
+    up = rows[("UP", "buy", "Strong")]
+    assert abs(up["returnSince"] - 0.20) < 1e-9 and abs(up["benchmarkReturn"] - 0.10) < 1e-9 and abs(up["excess"] - 0.10) < 1e-9
+    assert up["status"] == "Target reached" and up["benchmark"] == "SPY" and up["counted"] is True
+    down = rows[("DOWN", "add", "Weak")]
+    assert abs(down["returnSince"] + 0.10) < 1e-9 and abs(down["excess"] + 0.20) < 1e-9 and down["status"] == "Stop hit"
+    assert rows[("UP", "sell", "Strong")]["counted"] is False and rows[("UP", "watch", None)]["counted"] is False
+    assert rows[("GONE", "buy", "Strong")]["error"] and rows[("GONE", "buy", "Strong")]["counted"] is False
+    assert abs(rows[("UP", "buy", "Neutral")]["returnSince"] - 0.20) < 1e-9
+
+    s = card["summary"]
+    assert s["counted"] == 3 and abs(s["hitRate"] - 2 / 3) < 1e-9
+    assert abs(s["avgExcess"] - (0.10 - 0.20 + 0.10) / 3) < 1e-9 and abs(s["avgReturn"] - (0.20 - 0.10 + 0.20) / 3) < 1e-9
+    assert s["benchmarks"] == ["SPY"]
+    bands = {b["stance"]: b for b in s["byStance"]}
+    assert list(bands) == ["Strong", "Neutral", "Weak"]  # best to worst, only those with entries
+    assert bands["Strong"]["n"] == 1 and abs(bands["Strong"]["avgExcess"] - 0.10) < 1e-9 and bands["Strong"]["hitRate"] == 1.0
+    assert bands["Weak"]["hitRate"] == 0.0
+
+    # A decision made today has had no time to work, so it isn't judged yet
+    _reset()
+    add("UP", "buy", 100, "Strong", ts=dt.datetime.now().timestamp())
+    with _FakeMarket({"UP": rising, "SPY": bench}):
+        fresh = insights.scorecard(db.get_settings())
+    assert fresh["entries"][0]["counted"] is False and fresh["summary"]["counted"] == 0 and fresh["summary"]["hitRate"] is None
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

@@ -165,6 +165,66 @@ def check_alerts(settings):
     return fired
 
 
+# ---------------------------------------------------------------- journal scorecard
+JUDGED_ACTIONS = ("buy", "add")
+STANCE_ORDER = ["Strong", "Favorable", "Neutral", "Caution", "Weak"]
+
+
+def _since(ticker, date):
+    """(last close at or before `date`, latest close). Raises DataError when the ticker has no data."""
+    c = data.history(ticker, "max")["Close"]
+    past = c[c.index <= pd.Timestamp(date)]
+    return (float(past.iloc[-1]) if not past.empty else None), float(c.iloc[-1])
+
+
+def _entry_result(j, default_benchmark):
+    date = dt.date.fromtimestamp(j["ts"])
+    out = {"id": j["id"], "ticker": j["ticker"], "action": j["action"], "stance": j["stance"], "score": j["score"],
+           "benchmark": j["benchmark"] or default_benchmark, "counted": False, "status": "Closed" if j["outcome"] else "Open"}
+    try:
+        then, now = _since(j["ticker"], date)
+    except data.DataError as e:
+        return {**out, "error": str(e)}
+    entry = j["price"] or then
+    if not entry:
+        return {**out, "error": "No price from the day of this entry."}
+    out["returnSince"] = now / entry - 1
+    if j["stop_price"] and now <= j["stop_price"]:
+        out["status"] = "Stop hit"
+    elif j["target_price"] and now >= j["target_price"]:
+        out["status"] = "Target reached"
+    try:
+        b_then, b_now = _since(out["benchmark"], date)
+    except data.DataError:
+        return out
+    if b_then:
+        out["benchmarkReturn"] = b_now / b_then - 1
+        out["excess"] = out["returnSince"] - out["benchmarkReturn"]
+        # Only decisions to own something, and only once they have had time to work
+        out["counted"] = j["action"] in JUDGED_ACTIONS and date < dt.date.today()
+    return out
+
+
+def _stats(rows):
+    if not rows:
+        return {"counted": 0, "hitRate": None, "avgReturn": None, "avgExcess": None}
+    return {"counted": len(rows), "hitRate": sum(r["excess"] > 0 for r in rows) / len(rows),
+            "avgReturn": sum(r["returnSince"] for r in rows) / len(rows), "avgExcess": sum(r["excess"] for r in rows) / len(rows)}
+
+
+def scorecard(settings):
+    """How journalled decisions have done against the benchmark, overall and by the stance when they were made."""
+    entries = [_entry_result(j, settings.get("benchmark", "SPY")) for j in db.q("SELECT * FROM journal ORDER BY ts DESC")]
+    counted = [e for e in entries if e["counted"]]
+    by_stance = []
+    for stance in STANCE_ORDER + ["Not recorded"]:
+        rows = [e for e in counted if (e["stance"] or "Not recorded") == stance]
+        if rows:
+            st = _stats(rows)
+            by_stance.append({"stance": stance, "n": st["counted"], "hitRate": st["hitRate"], "avgReturn": st["avgReturn"], "avgExcess": st["avgExcess"]})
+    return {"entries": entries, "summary": {**_stats(counted), "benchmarks": sorted({e["benchmark"] for e in counted}), "byStance": by_stance}}
+
+
 # ---------------------------------------------------------------- digest
 def digest(settings):
     held = [r["ticker"] for r in db.q("SELECT DISTINCT ticker FROM holdings")]

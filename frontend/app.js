@@ -455,12 +455,33 @@ $("#btnBt").onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- journal & alerts */
+function renderScorecard(card) {
+  const s = card.summary;
+  if (!s.counted) { $("#jScore").innerHTML = `<div class="muted">Record a buy or add decision and check back after a day or more to see how it compares with the benchmark.</div>`; return; }
+  const kpis = [["Decisions judged", s.counted], [`Beat ${esc(s.benchmarks.join(", "))}`, pct(s.hitRate, 0, false)], ["Average return", cpct(s.avgReturn)], ["Average vs benchmark", cpct(s.avgExcess)]];
+  $("#jScore").innerHTML = `<div class="kpis">${kpis.map(([l, v]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join("")}</div>
+    ${s.counted < 20 ? `<p class="muted sm">Only ${s.counted} decision${s.counted === 1 ? "" : "s"} so far. That's too few to conclude anything yet.</p>` : ""}
+    <div class="tablewrap" id="jBands"></div>`;
+  table($("#jBands"), [
+    { k: "stance", label: "Stance when recorded", fmt: badge }, { k: "n", label: "Decisions", num: 1 }, { k: "hitRate", label: "Beat benchmark", num: 1, fmt: (v) => pct(v, 0, false) },
+    { k: "avgReturn", label: "Avg return", num: 1, fmt: (v) => cpct(v) }, { k: "avgExcess", label: "Avg vs benchmark", num: 1, fmt: (v) => cpct(v) },
+  ], s.byStance);
+}
+function entryResult(r) {
+  if (!r) return "";
+  if (r.error) return `<span class="pill warn" title="${esc(r.error)}">no data</span>`;
+  const vs = isNum(r.excess) ? ` · <span class="${cls(r.excess)}">${pct(r.excess)} vs ${esc(r.benchmark)}</span>` : "";
+  const flag = r.status === "Stop hit" || r.status === "Target reached" ? `<span class="pill warn">${esc(r.status)}</span>` : "";
+  return `<span class="pill">since entry <span class="${cls(r.returnSince)}">${pct(r.returnSince)}</span>${vs}</span>${flag}${r.stance ? `<span class="muted sm">${esc(r.stance)} when recorded (${num(r.score, 0)})</span>` : ""}`;
+}
 async function loadJournal() {
-  const [j, a] = await Promise.all([api("/api/journal"), api("/api/alerts")]);
+  const [j, a, card] = await Promise.all([api("/api/journal"), api("/api/alerts"), api("/api/journal/scorecard").catch(() => null)]);
+  const results = Object.fromEntries((card?.entries || []).map((r) => [r.id, r]));
+  if (card) renderScorecard(card); else $("#jScore").innerHTML = `<div class="muted">The scorecard couldn't be loaded.</div>`;
   $("#journalList").innerHTML = j.length ? j.map((e) => `<div class="jentry"><div class="jh"><span class="sym" style="font-family:var(--mono);font-weight:600">${esc(e.ticker)}</span>
     <span class="pill ${e.action === "buy" || e.action === "add" ? "on" : "warn"}">${esc(e.action)}</span><span class="muted sm">${new Date(e.ts * 1000).toLocaleDateString()} ${e.price ? "@ " + num(e.price) : ""}</span>
     ${e.stop_price ? `<span class="pill">stop ${num(e.stop_price)}</span>` : ""}${e.target_price ? `<span class="pill">target ${num(e.target_price)}</span>` : ""}${e.review_date ? `<span class="pill">review ${esc(e.review_date)}</span>` : ""}
-    <span style="margin-left:auto"></span><button class="btn ghost sm" data-out="${e.id}">${e.outcome ? "Edit outcome" : "Record outcome"}</button><button class="btn danger" data-jdel="${e.id}">Delete</button></div>
+    ${entryResult(results[e.id])}<span style="margin-left:auto"></span><button class="btn ghost sm" data-out="${e.id}">${e.outcome ? "Edit outcome" : "Record outcome"}</button><button class="btn danger" data-jdel="${e.id}">Delete</button></div>
     ${e.thesis ? `<p><b>Thesis:</b> ${esc(e.thesis)}</p>` : ""}${e.invalidation ? `<p class="muted"><b>Wrong if:</b> ${esc(e.invalidation)}</p>` : ""}${e.outcome ? `<p class="up"><b>Outcome:</b> ${esc(e.outcome)}</p>` : ""}</div>`).join("")
     : `<div class="muted">No entries yet. A decision journal is the best way to learn from your own track record.</div>`;
   $$("[data-jdel]").forEach((b) => b.onclick = async () => { if (confirm("Delete this entry?")) { await api(`/api/journal/${b.dataset.jdel}`, { method: "DELETE" }); loadJournal(); } });
