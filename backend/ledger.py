@@ -1,6 +1,8 @@
 """The transaction ledger: every buy, sale and dividend. Open lots and realised results are worked out from it,
 matching each sale to the oldest shares still held (first in, first out)."""
+import csv
 import datetime as dt
+import io
 import math
 
 from . import db
@@ -112,6 +114,54 @@ def add(ticker, kind, date="", shares=None, price=None, amount=None, note=""):
     replay(rows + [row])
     return db.x("INSERT INTO transactions (ticker, kind, date, shares, price, amount, note) VALUES (?,?,?,?,?,?,?)",
                 (ticker, kind, date, shares, price, amount, note))
+
+
+def parse_csv(text):
+    """Turn pasted lines of ticker,shares,price,date,type,note into transaction rows. Type defaults to buy, and for a
+    dividend the price column holds the total received. Raises LedgerError naming the line."""
+    rows = []
+    for number, cells in enumerate(csv.reader(io.StringIO(text.strip())), 1):
+        cells = [c.strip() for c in cells]
+        if not any(cells) or (number == 1 and cells[0].lower() == "ticker"):
+            continue
+        try:
+            if len(cells) < 3:
+                raise LedgerError("expected at least ticker, shares and price.")
+            cells += [""] * (6 - len(cells))
+            ticker, shares, price, date, kind, note = cells[:6]
+            kind = (kind or "buy").lower()
+            if not ticker:
+                raise LedgerError("the ticker is missing.")
+            if kind not in KINDS:
+                raise LedgerError(f"unknown type '{kind}'.")
+            date = _valid_date({"ticker": ticker, "date": date}, required=kind != "buy")
+            if date and dt.date.fromisoformat(date) > dt.date.today():
+                raise LedgerError("the date is in the future.")
+            amount_or_price = float(price.replace(",", ""))
+            row = {"ticker": ticker.upper(), "kind": kind, "date": date, "note": note, "shares": None, "price": None, "amount": None}
+            if kind == "dividend":
+                row["amount"] = amount_or_price
+            else:
+                row["shares"], row["price"] = float(shares.replace(",", "")), amount_or_price
+            _positive(row, "amount") if kind == "dividend" else (_positive(row, "shares"), _positive(row, "price", True))
+        except ValueError as e:  # includes LedgerError
+            raise LedgerError(f"Line {number}: {e}" if isinstance(e, LedgerError) else f"Line {number}: shares and price must be numbers.")
+        rows.append({**row, "id": (1 << 60) + number})
+    if not rows:
+        raise LedgerError("There's nothing to add. Paste lines like: AAPL,10,150,2024-06-03")
+    return rows
+
+
+def add_many(rows):
+    """Record several transactions if the ledger still adds up with all of them. Adds all or none."""
+    existing = db.q("SELECT * FROM transactions")
+    for r in rows:
+        if r["kind"] != "buy" and not any(x["ticker"] == r["ticker"] and (x.get("kind") or "buy") == "buy" for x in existing + rows):
+            raise LedgerError(f"There's no purchase of {r['ticker']} to go with its {r['kind']}.")
+    replay(existing + rows)
+    db.x_many("INSERT INTO transactions (ticker, kind, date, shares, price, amount, note) VALUES (?,?,?,?,?,?,?)",
+              [(r["ticker"], r["kind"], r["date"], r["shares"], r["price"], r["amount"], r["note"]) for r in rows])
+    return len(rows)
 
 
 def delete(tid):

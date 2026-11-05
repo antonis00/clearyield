@@ -93,6 +93,22 @@ with TestClient(app) as c:
     daily = (held * in_eur).div((held * in_eur.shift(1))).dropna()
     check("performance over the year", p2["risk"]["return1y"], daily.prod() - 1, 0.01)
 
+    # Looking through a fund, in the same base currency: AAPL's share of SPY, on top of AAPL held directly
+    funds = yf.Ticker("SPY").funds_data
+    assert c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": bought, "shares": 5, "price": 400}).status_code == 200
+    p3 = c.get("/api/portfolio").json()
+    pos3 = {r["ticker"]: r for r in p3["positions"]}
+    check("AAPL held through SPY", pos3["AAPL"]["throughFunds"], pos3["SPY"]["value"] * float(funds.top_holdings.loc["AAPL", "Holding Percent"]))
+    check("Technology through SPY and AAPL", p3["allocation"]["sectorLookThrough"]["Technology"], pos3["SPY"]["value"] * funds.sector_weightings["technology"] + pos3["AAPL"]["value"])
+    check("look-through adds up to the total", sum(p3["allocation"]["sectorLookThrough"].values()), p3["total"])
+    fund_card = c.get("/api/stock/SPY/fund").json()
+    check("SPY's yearly cost", fund_card["expenseRatio"], yf.Ticker("SPY").info["netExpenseRatio"] / 100)
+    raw_earn = yf.Ticker("AAPL").earnings_history.iloc[-1]
+    latest = c.get("/api/stock/AAPL/earnings").json()[0]
+    check("latest earnings surprise", latest["surprise"], float(raw_earn["surprisePercent"]))
+    # The published 52-week range, not one from adjusted prices
+    check("52-week high", c.get("/api/stock/XOM").json()["stats"]["high52"], yf.Ticker("XOM").info["fiftyTwoWeekHigh"])
+
     # Weekly correlation, written out by hand, for the pair that looked low
     a, m = close("AAPL"), close("MSFT")
     j = pd.concat([a, m], axis=1, join="inner"); j = j[j.index >= j.index[-1] - pd.Timedelta(days=365)]

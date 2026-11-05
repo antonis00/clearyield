@@ -196,7 +196,7 @@ async function openStock(t, period) {
     $("#ptAmountLabel").textContent = `Amount (${state.meta.settings.base_currency})`;
     $("#ptRiskLabel").textContent = `Most I'd lose (${state.meta.settings.base_currency})`;
     const g = s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
-    runDcf(); loadNews();
+    runDcf(); loadNews(); loadEarnings(); loadFund(s); renderHistory(s);
   } catch (e) {
     if (request !== state.stockRequest) return;
     body.style.opacity = 1; body.classList.add("hidden"); $("#researchEmpty").classList.remove("hidden");
@@ -344,6 +344,29 @@ async function runDcf() {
   } catch (e) { out.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
 $("#btnDcf").onclick = runDcf;
+async function loadEarnings() {
+  const ticker = state.ticker, el = $("#rEarnings"); el.innerHTML = "";
+  const e = await api(`/api/stock/${encodeURIComponent(ticker)}/earnings`).catch(() => []);
+  if (ticker !== state.ticker || !e.length) return;
+  el.innerHTML = `<h4>Earnings against expectations</h4><table><tr><th>Quarter to</th><th class="num">Reported</th><th class="num">Expected</th><th>Result</th></tr>${e.map((q) => `<tr><td>${esc(q.quarter)}</td><td class="num">${num(q.actual)}</td><td class="num">${num(q.estimate)}</td><td class="${cls(q.surprise)}">${isNum(q.surprise) ? `${q.surprise >= 0 ? "Beat" : "Missed"} by ${pct(Math.abs(q.surprise), 1, false)}` : "—"}</td></tr>`).join("")}</table>`;
+}
+async function loadFund(s) {
+  const ticker = state.ticker, card = $("#rFundCard");
+  card.classList.toggle("hidden", s.info.assetClass !== "ETFs");
+  $("#rFund").innerHTML = "";
+  if (s.info.assetClass !== "ETFs") return;
+  const f = await api(`/api/stock/${encodeURIComponent(ticker)}/fund`).catch(() => null);
+  if (ticker !== state.ticker || !f) return;
+  const sectors = Object.entries(f.sectors).sort((a, b) => b[1] - a[1]);
+  $("#rFund").innerHTML = `<div class="statgrid"><div><span>Yearly cost</span><span>${pct(f.expenseRatio, 2, false)}</span></div></div>
+    ${sectors.length ? `<h4>Sectors</h4><div class="statgrid">${sectors.map(([k, v]) => `<div><span>${esc(k)}</span><span>${pct(v, 1, false)}</span></div>`).join("")}</div>` : `<p class="muted sm">Yahoo has no sector data for this fund.</p>`}
+    ${f.holdings.length ? `<h4>Top holdings</h4><div class="statgrid">${f.holdings.map((h) => `<div><span>${esc(h.ticker)}</span><span>${pct(h.weight, 1, false)}</span></div>`).join("")}</div>` : ""}`;
+}
+function renderHistory(s) {
+  const h = s.scoreHistory || [], vals = h.map((x) => x.composite);
+  $("#rHistory").innerHTML = !h.length ? (s.watched ? "" : "Score history builds up daily for what you hold or watch.")
+    : `Score history since ${esc(h[0].date)}: ${vals.length > 1 ? spark(vals, vals[vals.length - 1] >= vals[0]) : "one day so far."}`;
+}
 async function loadNews() {
   const ticker = state.ticker;
   const ul = $("#newsList"); loading(ul);
@@ -526,7 +549,7 @@ async function loadPortfolio() {
   $("#pfWarn").innerHTML = p.warnings.map((w) => `<li class="t-1">${esc(w)}</li>`).join("") || (p.positions.length ? `<li class="t1">No concentration warnings.</li>` : "");
   const pie = (id, obj) => mkChart(id, { type: "doughnut", data: { labels: Object.keys(obj), datasets: [{ data: Object.values(obj), backgroundColor: PALETTE, borderColor: C("--panel"), borderWidth: 2 }] },
     options: { cutout: "62%", plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } }, tooltip: { callbacks: { label: (c) => `${c.label}: ${pct(c.raw / p.total, 1, false)}` } } } } });
-  pie("aAsset", p.allocation.assetClass); pie("aRegion", p.allocation.region); pie("aSector", p.allocation.sector); pie("aCur", p.allocation.currency);
+  pie("aAsset", p.allocation.assetClass); pie("aRegion", p.allocation.region); pie("aSector", p.allocation.sectorLookThrough); pie("aCur", p.allocation.currency);
   table($("#pfRebal"), [
     { k: "assetClass", label: "Asset class" }, { k: "target", label: "Target", num: 1, fmt: (v) => pct(v, 1, false) }, { k: "actual", label: "Actual", num: 1, fmt: (v) => pct(v, 1, false) },
     { k: "drift", label: "Drift", num: 1, fmt: (v) => cpct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
@@ -543,6 +566,12 @@ $("#hTicker").onchange = async () => {
   formQuote = q;
   const unit = { GBp: " (pence, 1/100 of a pound)", GBX: " (pence, 1/100 of a pound)", ZAc: " (cents, 1/100 of a rand)", ILA: " (agorot, 1/100 of a shekel)", KWF: " (fils, 1/1000 of a dinar)" }[q.currency] || "";
   hint.textContent = `${q.ticker} trades in ${q.currency}${unit}. Latest price ${num(q.price)}.`;
+};
+$("#btnPaste").onclick = async () => {
+  try {
+    const r = await api("/api/transactions/import", { method: "POST", body: { text: $("#hPaste").value } });
+    $("#hPaste").value = ""; toast(`Added ${r.added} transaction${r.added === 1 ? "" : "s"}`); loadPortfolio();
+  } catch (e) { toast(e.message); }
 };
 $("#hKind").onchange = () => {
   const dividend = $("#hKind").value === "dividend";

@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, kind TEXT, value REAL,
     active INTEGER DEFAULT 1, created REAL, triggered REAL, message TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS score_history (
+    date TEXT NOT NULL, ticker TEXT NOT NULL, composite REAL, stance TEXT, factors TEXT, PRIMARY KEY (date, ticker));
 """
 
 ADDED_COLUMNS = {
@@ -79,6 +81,17 @@ def q(sql, params=()):
             c.close()
 
 
+def x_many(sql, rows):
+    """Insert several rows in one transaction, so a failure adds none of them."""
+    with _lock:
+        c = _connect()
+        try:
+            c.executemany(sql, rows)
+            c.commit()
+        finally:
+            c.close()
+
+
 def x(sql, params=()):
     with _lock:
         c = _connect()
@@ -117,8 +130,9 @@ def cache_clear():
 
 
 # ---- backup ----
-USER_TABLES = ("watchlist", "transactions", "journal", "alerts")
-BACKUP_VERSION = 2
+# Score history is here because Yahoo has no past fundamentals, so it could never be rebuilt
+USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history")
+BACKUP_VERSION = 3
 
 
 def export_user_data():
@@ -130,7 +144,7 @@ def export_user_data():
 
 def read_backup(backup):
     """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
-    if not isinstance(backup, dict) or backup.get("version") not in (1, BACKUP_VERSION):
+    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, BACKUP_VERSION):
         raise ValueError("This isn't a StockPilot backup, or it's from a different version.")
     if backup["version"] == 1:  # before the ledger, when there was a table of current lots
         lots = backup.get("holdings")
@@ -138,6 +152,8 @@ def read_backup(backup):
             raise ValueError("The backup's holdings section isn't usable.")
         backup = {**backup, "transactions": [{"id": r.get("id"), "ticker": r.get("ticker"), "kind": "buy", "date": r.get("bought") or "",
                                               "shares": r.get("shares"), "price": r.get("cost"), "note": r.get("note") or ""} for r in lots]}
+    if backup["version"] < 3:
+        backup = {**backup, "score_history": []}
     for t in USER_TABLES:
         if not isinstance(backup.get(t), list) or not all(isinstance(r, dict) for r in backup[t]):
             raise ValueError(f"The backup's {t} section isn't usable.")

@@ -344,6 +344,41 @@ const CHECKS = {
     expect("stocks keep all their rows", (await page.locator("#statGrid > div").count()) > 20);
   },
 
+  // Pasting a list, and what the new Research sections show
+  async features(page) {
+    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(500);
+    await page.locator("#pasteBox summary").click();
+    await page.fill("#hPaste", "SPY,1,100,2024-06-03\nSPY,abc,100,2024-06-04"); await page.click("#btnPaste"); await page.waitForTimeout(800);
+    expect("a bad line is named and nothing is added", /Line 2/.test(await page.textContent("#toast")) && (await post(page, "/api/transactions", null, "GET")).body.length === 0, await page.textContent("#toast"));
+    expect("the text stays so you can fix it", /abc/.test(await page.inputValue("#hPaste")));
+    await page.fill("#hPaste", "ticker,shares,price,date,type\nSPY,5,400,2024-06-03\nAAPL,10,150,2024-06-03\nAAPL,2,200,2025-01-02,sell"); await page.click("#btnPaste"); await page.waitForTimeout(2500);
+    expect("pasted transactions are listed", (await page.locator("#txTable tbody tr").count()) === 3, await page.textContent("#toast"));
+    expect("box clears", (await page.inputValue("#hPaste")) === "");
+    expect("sector chart opens up funds", await page.evaluate(() => state.charts.aSector.data.labels.some((l) => l !== "ETFs")), await page.evaluate(() => state.charts.aSector.data.labels.join(", ")));
+
+    await page.evaluate(() => { location.hash = "#research/AAPL"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.waitForSelector("#rEarnings table", { timeout: 20000 });
+    expect("stock shows its earnings record", /Beat|Missed/.test(await page.innerText("#rEarnings")), (await page.innerText("#rEarnings")).slice(0, 90));
+    expect("stock has no fund card", !(await page.isVisible("#rFundCard")));
+    await page.screenshot({ path: `${OUT}/features_stock.png`, fullPage: true });
+
+    await page.evaluate(() => { location.hash = "#research/SPY"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "SPY" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.waitForSelector("#rFund .statgrid", { timeout: 20000 });
+    const fund = await page.innerText("#rFund");
+    expect("fund shows its costs, sectors and top holdings", /Yearly cost/i.test(fund) && /Top holdings/i.test(fund) && /Sectors/i.test(fund), fund.slice(0, 120));
+    expect("fund shows no earnings", (await page.innerText("#rEarnings")) === "");
+    await page.screenshot({ path: `${OUT}/features_fund.png`, fullPage: true });
+
+    // The digest starts the score history, which then shows on Research
+    await page.evaluate(() => { location.hash = "#dashboard"; }); await page.waitForTimeout(2500);
+    await page.evaluate(() => { location.hash = "#research/AAPL"; });
+    await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
+    await page.waitForTimeout(400);
+    expect("score history is explained from day one", /Score history/.test(await page.innerText("#rHistory")), await page.innerText("#rHistory"));
+  },
+
   // Text from Yahoo can't run as a script in the brief
   async xss(page) {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });

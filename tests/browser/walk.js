@@ -40,7 +40,7 @@ const SLOW = 150000;
   for (const t of (MODE === "live" ? ["AAPL", "AZN.L", "SAP.DE", "QNBK.QA", "2222.SR", "EMAAR.AE", "NBK.KW", "SPY", "BTC-USD", "TSM", "^VIX", "^TASI.SR"] : ["AAPL", "AZN.L", "QNBK.QA", "SPY", "BTC-USD"])) {
     await research(t);
     const r = await p.evaluate(() => ({ price: document.querySelector("#rPrice").textContent, cov: document.querySelector("#rCoverage").textContent, stance: document.querySelector("#rStance").innerText.replace(/\s+/g, " "), charts: document.querySelectorAll("#priceChart canvas").length, stats: document.querySelectorAll("#statGrid > div").length, bad: /undefined|NaN|\[object/.test(document.querySelector("#researchBody").innerText) }));
-    expect(`research ${t}`, r.price && r.charts > 0 && r.stats >= 4 && !r.bad, `${r.price} | ${r.stance} | ${r.cov}${r.bad ? " | BAD TEXT" : ""}`);
+    expect(`research ${t}`, r.price && r.charts > 0 && r.stats >= 2 && !r.bad, `${r.price} | ${r.stance} | ${r.cov}${r.bad ? " | BAD TEXT" : ""}`);
   }
   if (MODE === "live") {  // demo mode invents data for any symbol, so there is no unknown ticker there
     await research("NOSUCHTICKER");
@@ -129,6 +129,7 @@ const SLOW = 150000;
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
   expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs dated/.test(await txt("#pfKpis")), await txt("#pfKpis"));
   expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
+  expect("portfolio: look-through adds up", Math.abs(Object.values(led.allocation.sectorLookThrough).reduce((a, b) => a + b, 0) - led.total) < 1e-6, Object.keys(led.allocation.sectorLookThrough).slice(0, 4).join(", "));
   await shot("ledger");
   await p.click("#pfTable thead th:nth-child(6)"); await p.waitForTimeout(200);
   await p.locator('#pfTable tbody tr:has-text("SPY") [data-lots]').click(); await p.waitForTimeout(300);

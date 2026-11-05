@@ -62,6 +62,7 @@ async def _alert_loop():
         await asyncio.sleep(ALERT_INTERVAL)
         try:
             fired = await asyncio.to_thread(insights.check_alerts, db.get_settings())
+            await asyncio.to_thread(insights.record_today, db.get_settings())
             for a in fired:
                 log.info("ALERT: %s", a["message"])
         except Exception as e:
@@ -203,13 +204,27 @@ def stock(ticker: str, period: str = "1y"):
         pass
     watched = bool(db.q("SELECT 1 FROM watchlist WHERE ticker=?", (t,)))
     return ok({"ticker": t, "info": inf, "stats": stats, "scores": sc, "candles": candles,
-               "financials": data.financials(t), "watched": watched, "events": insights.upcoming(inf)})
+               "financials": data.financials(t), "watched": watched, "events": insights.upcoming(inf), "scoreHistory": insights.score_history(t)})
 
 
 @app.get("/api/quote/{ticker}")
 def quote(ticker: str):
     t = T(ticker)
     return ok({"ticker": t, "price": float(_hist_or_404(t, "1mo")["Close"].iloc[-1]), "currency": data.info(t).get("currency")})
+
+
+@app.get("/api/stock/{ticker}/earnings")
+def stock_earnings(ticker: str):
+    return ok(data.earnings_record(T(ticker)))
+
+
+@app.get("/api/stock/{ticker}/fund")
+def stock_fund(ticker: str):
+    t = T(ticker)
+    inf = data.info(t)
+    if inf.get("assetClass") != "ETFs":
+        return ok({"sectors": {}, "holdings": [], "expenseRatio": None})
+    return ok({**data.fund(t), "expenseRatio": inf.get("netExpenseRatio")})
 
 
 @app.get("/api/stock/{ticker}/news")
@@ -321,6 +336,20 @@ def transactions():
 @app.post("/api/transactions")
 def add_transaction(body: dict = Body(...)):
     return _record(body)
+
+
+@app.post("/api/transactions/import")
+def import_transactions(body: dict = Body(...)):
+    try:
+        rows = ledger.parse_csv(str(body.get("text") or ""))
+        for t in {r["ticker"] for r in rows if r["kind"] == "buy"}:
+            try:
+                data.history(t, "1y")
+            except data.DataError:
+                raise ledger.LedgerError(f"No price data for {t}. Check the symbol.")
+        return ok({"added": ledger.add_many(rows)})
+    except ledger.LedgerError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.delete("/api/transactions/{tid}")

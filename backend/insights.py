@@ -1,5 +1,6 @@
 """Higher-level analysis: stock snapshot, screener, comparison, DCF, alerts and the daily digest."""
 import datetime as dt
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -282,6 +283,41 @@ def scorecard(settings):
 
 
 # ---------------------------------------------------------------- digest
+# ---------------------------------------------------------------- score history
+def record_scores(rows, day=None):
+    """Keep one score a day per asset. Yahoo has no past fundamentals, so this can only build up from now on."""
+    day = day or dt.date.today().isoformat()
+    for r in rows:
+        if r.get("composite") is not None:
+            factors = {k[2:]: v for k, v in r.items() if k.startswith("f_")}
+            db.x("INSERT OR IGNORE INTO score_history (date, ticker, composite, stance, factors) VALUES (?,?,?,?,?)",
+                 (day, r["ticker"], r["composite"], r["stance"], json.dumps(factors)))
+
+
+def record_today(settings):
+    """Keep the daily score going while the app runs, even if the dashboard isn't opened."""
+    tickers = list(dict.fromkeys(ledger.held_tickers() + [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]))
+    record_scores([r for r in rows_for(tickers, settings) if "error" not in r])
+
+
+def score_history(ticker):
+    return db.q("SELECT date, composite, stance FROM score_history WHERE ticker = ? ORDER BY date", (ticker,))
+
+
+def score_change(ticker):
+    """A sentence if the stance changed between the last two recorded days, naming the factor that moved most."""
+    last = db.q("SELECT * FROM score_history WHERE ticker = ? ORDER BY date DESC LIMIT 2", (ticker,))
+    if len(last) < 2 or last[0]["stance"] == last[1]["stance"]:
+        return None
+    now, was = json.loads(last[0]["factors"]), json.loads(last[1]["factors"])
+    moved = [(k, was[k], now[k]) for k in now if now.get(k) is not None and was.get(k) is not None]
+    text = f"{ticker} went from {last[1]['stance']} to {last[0]['stance']} ({last[1]['composite']:.0f} to {last[0]['composite']:.0f})"
+    if moved:
+        k, a, b = max(moved, key=lambda m: abs(m[2] - m[1]))
+        text += f", mostly on {k} ({a:.0f} to {b:.0f})"
+    return text + "."
+
+
 def digest(settings):
     held = ledger.held_tickers()
     watched = [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
@@ -307,6 +343,11 @@ def digest(settings):
             items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} goes ex-dividend in {ev['exDividendDays']} days ({ev['exDividend']})."})
         if r["stance"] in ("Weak",) and t in held:
             items.append({"tone": -1, "ticker": t, "priority": 4, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
+    record_scores([r for t, r in rows.items() if t in tickers])
+    for t in tickers:
+        change = score_change(t)
+        if change:
+            items.append({"tone": 0, "ticker": t, "priority": 4, "text": change})
     today = dt.date.today().isoformat()
     for j in open_entries:
         r = rows.get(j["ticker"])

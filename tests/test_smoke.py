@@ -134,9 +134,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v6:EMPTY.X") is None
-        db.cache_set("info:v6:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v6:OLD.X'")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v7:EMPTY.X") is None
+        db.cache_set("info:v7:OLD.X", {"trailingPE": 12.0})
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v7:OLD.X'")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -147,7 +147,7 @@ def _reset():
     """Clear the user tables so a test starts from an empty app."""
     from backend import db
     db.init()
-    for table in ("transactions", "watchlist", "journal", "alerts", "settings"):
+    for table in ("transactions", "watchlist", "journal", "alerts", "settings", "score_history"):
         db.x(f"DELETE FROM {table}")
 
 
@@ -460,7 +460,7 @@ def test_backup_restores_everything_or_nothing():
         r = c.get("/api/backup")
         assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
         backup = r.json()
-        assert backup["version"] == 2 and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
+        assert backup["version"] == 3 and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
         assert "cache" not in backup  # market data can always be downloaded again
 
         before = {t: db.q(f"SELECT * FROM {t}") for t in ("watchlist", "transactions", "journal", "alerts", "settings")}
@@ -1631,6 +1631,185 @@ def test_brief_uses_your_risk_free_rate():
             assert seen["stats"]["sharpe1y"] < low
     finally:
         ai.brief = real
+
+
+def test_paste_several_transactions():
+    from fastapi.testclient import TestClient
+
+    from backend import db
+    from backend.main import app
+    _reset()
+    send = lambda c, text: c.post("/api/transactions/import", json={"text": text})
+    with TestClient(app) as c:
+        good = """ticker,shares,price,date,type,note
+aapl,10,150,2024-06-03
+AAPL,4,200,2025-01-02,sell,trim
+AAPL,,6.5,2025-02-03,dividend
+
+MSFT,2,"1,000.50",2024-06-03,buy,"note, with comma"
+"""
+        r = send(c, good)
+        assert r.status_code == 200 and r.json()["added"] == 4, r.text
+        rows = db.q("SELECT ticker, kind, date, shares, price, amount, note FROM transactions ORDER BY id")
+        assert rows[0] == {"ticker": "AAPL", "kind": "buy", "date": "2024-06-03", "shares": 10.0, "price": 150.0, "amount": None, "note": ""}
+        assert rows[1]["kind"] == "sell" and rows[1]["note"] == "trim"
+        assert rows[2]["kind"] == "dividend" and rows[2]["amount"] == 6.5 and rows[2]["shares"] is None
+        assert rows[3]["price"] == 1000.5 and rows[3]["note"] == "note, with comma"
+        assert c.get("/api/portfolio").json()["positions"][0]["shares"] in (6.0, 2.0)
+
+        # No header is fine too, and a problem anywhere means nothing is added, naming the line
+        count = len(db.q("SELECT * FROM transactions"))
+        for text, line in (("SPY,1,100,2025-01-02\nSPY,abc,100,2025-01-03", "Line 2"), ("SPY,1,100,soon", "Line 1"), ("SPY,1", "Line 1"),
+                           ("SPY,1,100,2025-01-02\nSPY,1,100,2025-01-03,gift", "Line 2")):
+            bad = send(c, text)
+            assert bad.status_code == 400 and line in bad.json()["detail"], (text, bad.text)
+        assert send(c, "SPY,1,100,2025-01-02\nSPY,5,100,2025-01-03,sell").status_code == 400  # sells more than held
+        with _FakeMarket({}):
+            unknown = send(c, "NOPE,1,100,2025-01-02")
+        assert unknown.status_code == 400 and "NOPE" in unknown.json()["detail"]
+        assert send(c, "").status_code == 400 and send(c, "ticker,shares,price,date\n").status_code == 400
+        assert len(db.q("SELECT * FROM transactions")) == count
+        assert send(c, "SPY,1,100,2025-01-02").json()["added"] == 1
+
+
+def test_earnings_record():
+    import pandas as pd
+
+    from fastapi.testclient import TestClient
+
+    from backend import data, db
+    from backend.main import app
+
+    class Listing:
+        earnings_history = pd.DataFrame({"epsActual": [1.0, 2.1], "epsEstimate": [1.1, 2.0], "surprisePercent": [-0.0909, 0.05]},
+                                        index=pd.to_datetime(["2026-06-30", "2026-09-30"]))
+
+    class YF:
+        Ticker = staticmethod(lambda t: Listing())
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    db.cache_clear()
+    try:
+        r = data.earnings_record("X")
+        assert r[0] == {"quarter": "2026-09-30", "actual": 2.1, "estimate": 2.0, "surprise": 0.05}, "newest first"
+        assert r[1]["surprise"] == -0.0909
+        Listing.earnings_history = pd.DataFrame()
+        assert data.earnings_record("EMPTY") == []
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        db.cache_clear()
+    with TestClient(app) as c:
+        assert c.get("/api/stock/AAPL/earnings").json()[0]["quarter"]
+        assert c.get("/api/stock/SPY/earnings").json() == []
+
+
+def test_fund_facts_and_look_through():
+    from fastapi.testclient import TestClient
+
+    from backend import data, db, portfolio
+    from backend.main import app
+    # From Yahoo's shape to names matching stock sectors
+    import pandas as pd
+
+    class Funds:
+        top_holdings = pd.DataFrame({"Name": ["Apple Inc"], "Holding Percent": [0.08]}, index=pd.Index(["AAPL"], name="Symbol"))
+        sector_weightings = {"technology": 0.4, "realestate": 0.1, "financial_services": 0.2}
+
+    class Listing:
+        funds_data = Funds()
+
+    class YF:
+        Ticker = staticmethod(lambda t: Listing())
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    db.cache_clear()
+    try:
+        f = data.fund("SPYX")
+        assert f["sectors"] == {"Technology": 0.4, "Real Estate": 0.1, "Financial Services": 0.2}
+        assert f["holdings"] == [{"ticker": "AAPL", "name": "Apple Inc", "weight": 0.08}]
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        db.cache_clear()
+
+    # Hand-calculated: 1,000 of a stock in Tech, 2,000 of a fund that's 50% Tech, 25% Energy, top holding 10% that same stock
+    _reset()
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('AAA', 10, 100), ('FUND', 10, 200), ('BOND', 10, 100)")
+    flat = _steps([0.0] * 300)
+    infos = {"AAA": {"sector": "Technology"}, "FUND": {"assetClass": "ETFs", "sector": "ETFs"}, "BOND": {"assetClass": "ETFs", "sector": "ETFs"}}
+    funds = {"FUND": {"sectors": {"Technology": 0.5, "Energy": 0.25}, "holdings": [{"ticker": "AAA", "name": "A", "weight": 0.10}]},
+             "BOND": {"sectors": {}, "holdings": []}}
+    real = data.fund
+    data.fund = lambda t: funds.get(t, {"sectors": {}, "holdings": []})
+    try:
+        with _FakeMarket({"AAA": flat, "FUND": flat * 2, "BOND": flat}, infos):
+            p = portfolio.summary(db.get_settings())
+    finally:
+        data.fund = real
+    lt = p["allocation"]["sectorLookThrough"]
+    assert lt["Technology"] == 2000 and lt["Energy"] == 500
+    assert lt["Funds: other or no sector data"] == 500 + 1000
+    assert abs(sum(lt.values()) - p["total"]) < 1e-6
+    assert p["allocation"]["sector"]["ETFs"] == 3000, "the plain view stays as it was"
+    # 50% in Technology once funds are opened up: a real concentration
+    assert any("50% of value is in one sector (Technology), counting what funds hold" in w for w in p["warnings"]), p["warnings"]
+    aaa = [r for r in p["positions"] if r["ticker"] == "AAA"][0]
+    assert aaa["throughFunds"] == 200
+    # AAA alone is 25%, and through the fund 30%
+    assert any("AAA is 30% of the portfolio" in w and "through funds" in w for w in p["warnings"]), p["warnings"]
+
+    with TestClient(app) as c:
+        d = c.get("/api/stock/SPY/fund").json()
+        assert d["sectors"] and d["holdings"] and "expenseRatio" in d
+        assert c.get("/api/stock/AAPL/fund").json() == {"sectors": {}, "holdings": [], "expenseRatio": None}
+    assert abs(data._normalize_info("SPY", {"quoteType": "ETF", "netExpenseRatio": 0.0945})["netExpenseRatio"] - 0.000945) < 1e-12
+
+
+def test_score_history_starts_now_and_notes_changes():
+    import datetime as dt
+
+    from fastapi.testclient import TestClient
+
+    from backend import db, insights
+    from backend.main import app
+    _reset()
+    row = lambda c, s, m: {"ticker": "AAA", "composite": c, "stance": s, "f_value": 50.0, "f_quality": 50.0, "f_growth": 50.0, "f_momentum": m, "f_risk": 50.0}
+    insights.record_scores([row(62.0, "Favorable", 80.0)], "2026-01-02")
+    insights.record_scores([row(99.0, "Strong", 90.0)], "2026-01-02")  # one a day: the first stands
+    assert db.q("SELECT composite FROM score_history") == [{"composite": 62.0}]
+    assert insights.score_change("AAA") is None, "one day has nothing to compare with"
+    insights.record_scores([row(48.0, "Neutral", 62.0)], "2026-01-03")
+    assert insights.score_change("AAA") == "AAA went from Favorable to Neutral (62 to 48), mostly on momentum (80 to 62)."
+    insights.record_scores([row(47.0, "Neutral", 61.0)], "2026-01-04")
+    assert insights.score_change("AAA") is None, "only a change of stance is news"
+    insights.record_scores([{"ticker": "NONE", "composite": None, "stance": "Not scored"}], "2026-01-04")
+    assert not db.q("SELECT 1 FROM score_history WHERE ticker = 'NONE'")
+
+    # The digest records today's score and reports a change
+    _reset()
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('AAA', 1, 100)")
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    insights.record_scores([row(1.0, "Weak", 1.0)], yesterday)
+    with _FakeMarket({"AAA": _steps([0.001] * 300)}):
+        items = insights.digest(db.get_settings())["items"]
+        assert any("AAA went from Weak to" in i["text"] for i in items), [i["text"] for i in items]
+        assert len(db.q("SELECT * FROM score_history WHERE ticker = 'AAA'")) == 2
+        insights.digest(db.get_settings())
+        assert len(db.q("SELECT * FROM score_history WHERE ticker = 'AAA'")) == 2
+
+    # Research gets it, and it can't be rebuilt, so backups keep it
+    with TestClient(app) as c:
+        hist = c.get("/api/stock/AAA").json()["scoreHistory"]
+        assert [h["date"] for h in hist][0] == yesterday and hist[0]["composite"] == 1.0
+        backup = c.get("/api/backup").json()
+        assert len(backup["score_history"]) >= 1
+        _reset()
+        assert c.post("/api/backup/restore", json=backup).status_code == 200
+        assert db.q("SELECT composite FROM score_history WHERE date = ?", (yesterday,)) == [{"composite": 1.0}]
+        # An older backup has none, which is fine
+        older = {k: v for k, v in backup.items() if k != "score_history"}
+        assert c.post("/api/backup/restore", json={**older, "version": 2}).status_code == 200
 
 
 def test_minor_unit_currencies():

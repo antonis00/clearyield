@@ -17,6 +17,9 @@ def positions(extra=None):
     return agg
 
 
+NO_SECTOR = "Funds: other or no sector data"
+
+
 def _value_index(series):
     """Daily index of the portfolio, starting at 1. Each day uses only positions priced on both that day and
     the one before, so a position with a short history joins when it starts rather than cutting the rest."""
@@ -174,6 +177,22 @@ def summary(settings, extra=None):
 
     allocation = {"assetClass": alloc("assetClass"), "region": alloc("region"), "sector": alloc("sector"), "currency": alloc("currency")}
 
+    # Looking through funds: their sectors, and the single stocks among their top holdings (Yahoo only lists 10, so that part is partial)
+    through = defaultdict(float)
+    for r in rows:
+        if r["assetClass"] == "ETFs":
+            f = data.fund(r["ticker"])
+            for s, w in f["sectors"].items():
+                through[s] += r["value"] * w
+            through[NO_SECTOR] += r["value"] * (1 - sum(f["sectors"].values()))
+            for h in f["holdings"]:
+                r_held = next((x for x in rows if x["ticker"] == h["ticker"]), None)
+                if r_held:
+                    r_held["throughFunds"] = r_held.get("throughFunds", 0.0) + r["value"] * h["weight"]
+        else:
+            through[r["sector"] or "Unknown"] += r["value"]
+    allocation["sectorLookThrough"] = dict(sorted(((k, v) for k, v in through.items() if v > 1e-6), key=lambda kv: -kv[1]))
+
     perf, risk = None, {}
     try:
         bench_close = data.history(bench_t, "1y")["Close"] if series else None
@@ -218,8 +237,14 @@ def summary(settings, extra=None):
     # Weights are meaningless while a holding is missing from the total, so nothing is advised on them
     incomplete = bool(missing)
     for r in rows:
-        if r["weight"] > 0.20 and not incomplete:
-            warnings.append(f"{r['ticker']} is {r['weight']:.0%} of the portfolio - single-position concentration above 20%.")
+        with_funds = (r["value"] + r.get("throughFunds", 0.0)) / total if total else 0
+        if with_funds > 0.20 and not incomplete:
+            detail = f", counting {r['throughFunds'] / total:.0%} through funds" if r.get("throughFunds") else ""
+            warnings.append(f"{r['ticker']} is {with_funds:.0%} of the portfolio{detail} - single-position concentration above 20%.")
+    for name, v in allocation["sectorLookThrough"].items():
+        fund_part = any(r["assetClass"] == "ETFs" for r in rows)
+        if fund_part and name != NO_SECTOR and total and v / total > 0.40 and len(rows) > 2 and not incomplete and allocation["sector"].get(name, 0) / total <= 0.40:
+            warnings.append(f"{v / total:.0%} of value is in one sector ({name}), counting what funds hold.")
     for k, label in (("sector", "sector"), ("region", "region"), ("currency", "currency")):
         for name, v in allocation[k].items():
             if k == "sector" and name == "ETFs":  # a label for funds, not one sector: six broad funds aren't concentrated

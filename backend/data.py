@@ -117,7 +117,7 @@ INFO_KEYS = [
     "dividendYield", "payoutRatio", "beta", "sharesOutstanding", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
     "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "financialCurrency",
-    "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate",
+    "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate", "netExpenseRatio",
 ]
 
 # Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
@@ -125,7 +125,7 @@ MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.
 
 
 def info(ticker):
-    key = f"info:v6:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v7:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -157,6 +157,8 @@ def _normalize_info(ticker, d):
     dy = d.get("dividendYield")
     if dy is not None:
         d["dividendYield"] = dy / 100
+    if d.get("netExpenseRatio") is not None:  # also a percentage
+        d["netExpenseRatio"] /= 100
     # debtToEquity is reported as a percentage (150 => 1.5x)
     de = d.get("debtToEquity")
     if de is not None:
@@ -258,6 +260,51 @@ def financials(ticker):
                 return old
             db.cache_set(key, out, ts=time.time() - TTL["fin"] + 3600)
             return out
+    db.cache_set(key, out)
+    return out
+
+
+def earnings_record(ticker):
+    """Reported against expected earnings per share in recent quarters, newest first."""
+    key = f"earn:{ticker}"
+    cached = db.cache_get(key, TTL["fin"])
+    if cached is not None:
+        return cached
+    if DEMO:
+        return _demo_earnings(ticker)
+    try:
+        hist = _yf().Ticker(ticker).earnings_history
+        out = [{"quarter": pd.Timestamp(q).strftime("%Y-%m-%d"), "actual": _num(r["epsActual"]), "estimate": _num(r["epsEstimate"]), "surprise": _num(r["surprisePercent"])}
+               for q, r in hist.iterrows()][::-1] if hist is not None and not hist.empty else []
+    except Exception as e:  # Yahoo has none for funds, and answers with an error
+        log.info("no earnings history for %s: %s", ticker, e)
+        out = []
+    db.cache_set(key, out, ts=None if out else time.time() - TTL["fin"] + 3600)
+    return out
+
+
+FUND_SECTORS = {"realestate": "Real Estate", "consumer_cyclical": "Consumer Cyclical", "basic_materials": "Basic Materials",
+                "consumer_defensive": "Consumer Defensive", "technology": "Technology", "communication_services": "Communication Services",
+                "financial_services": "Financial Services", "utilities": "Utilities", "industrials": "Industrials", "energy": "Energy", "healthcare": "Healthcare"}
+
+
+def fund(ticker):
+    """A fund's sector split and top holdings. Yahoo only gives the top 10, and nothing for bond or gold funds."""
+    key = f"fund:{ticker}"
+    cached = db.cache_get(key, 7 * 24 * 3600)
+    if cached is not None:
+        return cached
+    if DEMO:
+        return _demo_fund(ticker)
+    try:
+        f = _yf().Ticker(ticker).funds_data
+        sectors = {FUND_SECTORS[k]: _num(v) for k, v in (f.sector_weightings or {}).items() if k in FUND_SECTORS and _num(v)}
+        top = f.top_holdings
+        holdings = [{"ticker": str(sym), "name": r["Name"], "weight": _num(r["Holding Percent"])} for sym, r in top.iterrows()] if top is not None else []
+    except Exception as e:
+        log.info("no fund data for %s: %s", ticker, e)
+        return {"sectors": {}, "holdings": []}
+    out = {"sectors": sectors, "holdings": holdings}
     db.cache_set(key, out)
     return out
 
@@ -461,6 +508,30 @@ def _demo_financials(ticker):
         m = rng.uniform(0.02, 0.3)
         out.append({"year": str(year + i), "revenue": rev, "netIncome": rev * m, "fcf": rev * m * rng.uniform(0.6, 1.3)})
     return out
+
+
+def _demo_earnings(ticker):
+    if ticker.endswith("-USD") or ticker in _etfs() or ticker in MACRO:
+        return []
+    rng = np.random.default_rng(_seed(ticker) + 3)
+    end = pd.Timestamp.today().to_period("Q").start_time - pd.Timedelta(days=1)
+    out = []
+    for i in range(4):
+        est = float(rng.uniform(0.5, 4))
+        act = est * float(rng.uniform(0.85, 1.2))
+        out.append({"quarter": (end - pd.DateOffset(months=3 * i)).strftime("%Y-%m-%d"), "actual": round(act, 2), "estimate": round(est, 2), "surprise": act / est - 1})
+    return out
+
+
+def _demo_fund(ticker):
+    if ticker not in _etfs():
+        return {"sectors": {}, "holdings": []}
+    rng = np.random.default_rng(_seed(ticker) + 4)
+    names = list(FUND_SECTORS.values())
+    weights = rng.dirichlet(np.ones(len(names)))
+    picks = rng.choice(["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO", "JPM", "XOM", "LLY"], 5, replace=False)
+    return {"sectors": {n: float(w) for n, w in zip(names, weights)},
+            "holdings": [{"ticker": str(p), "name": name_of(str(p)), "weight": float(rng.uniform(0.01, 0.08))} for p in picks]}
 
 
 def _demo_news(ticker):

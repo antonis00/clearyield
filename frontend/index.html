@@ -115,13 +115,14 @@
         <div class="card">
           <div class="card-h"><h3>Signals</h3></div>
           <ul id="signalList" class="signals"></ul>
+          <div id="rHistory" class="muted sm"></div>
           <div class="card-h" style="margin-top:14px"><h3>Research brief</h3><button class="btn sm" id="btnBrief">Generate</button></div>
           <div id="briefOut" class="brief muted">Combines scores, price action, fundamentals and headlines into a bull/bear summary.</div>
         </div>
       </div>
 
       <div class="grid2">
-        <div class="card"><div class="card-h"><h3>Key statistics</h3></div><div id="statGrid" class="statgrid"></div></div>
+        <div class="card"><div class="card-h"><h3>Key statistics</h3></div><div id="statGrid" class="statgrid"></div><div id="rEarnings"></div></div>
         <div class="card">
           <div class="card-h"><h3>Fundamentals trend</h3></div>
           <canvas id="finChart" height="220"></canvas>
@@ -146,6 +147,7 @@
           <ul id="newsList" class="news"></ul>
         </div>
       </div>
+      <div class="card hidden" id="rFundCard"><div class="card-h"><h3>Inside this fund</h3><span class="muted sm">Yahoo lists the top 10 holdings only</span></div><div id="rFund"></div></div>
       <div class="card">
         <div class="card-h"><h3>Pre-trade check</h3><span class="muted sm">A what-if on your portfolio. Nothing is saved or traded.</span></div>
         <div class="form-row">
@@ -218,6 +220,11 @@
         <button class="btn" id="btnAddHolding">Record</button>
       </div>
       <div id="hHint" class="muted sm"></div>
+      <details id="pasteBox"><summary class="muted sm">Paste several at once</summary>
+        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total in price. If any line has a problem, nothing is added.</p>
+        <textarea id="hPaste" rows="5" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
+        <div class="form-row"><button class="btn ghost" id="btnPaste">Add these</button></div>
+      </details>
     </div>
     <div class="card"><div class="card-h"><h3>Positions</h3></div><div id="pfTable" class="tablewrap"></div></div>
     <div class="grid2">
@@ -227,7 +234,7 @@
     <div class="grid4">
       <div class="card"><h4>Asset class</h4><canvas id="aAsset"></canvas></div>
       <div class="card"><h4>Region</h4><canvas id="aRegion"></canvas></div>
-      <div class="card"><h4>Sector</h4><canvas id="aSector"></canvas></div>
+      <div class="card"><h4>Sector, opening up funds</h4><canvas id="aSector"></canvas></div>
       <div class="card"><h4>Currency</h4><canvas id="aCur"></canvas></div>
     </div>
     <div class="card">
