@@ -32,6 +32,7 @@ def _quick_row(t, settings):
         "revGrowth": inf.get("revenueGrowth"), "roe": inf.get("returnOnEquity"), "de": inf.get("debtToEquity"),
         "marketCap": inf.get("marketCap"), "vol": ind.volatility(c), "rsi": float(ind.rsi(c).iloc[-1]),
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
+        "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only",
     }
 
 
@@ -62,6 +63,9 @@ def screen(body, settings):
     sort = f.get("sort", "composite")
     key = {"divYield": "divYield"}.get(sort, "composite" if sort == "composite" else f"f_{sort}")
     out.sort(key=lambda r: -(r.get(key) if r.get(key) is not None else -1))
+    if key == "composite":  # ETFs and crypto have no value, quality or growth score, so each class ranks on its own
+        order = ["Stocks", "ETFs", "Crypto"]
+        out.sort(key=lambda r: order.index(r["assetClass"]) if r["assetClass"] in order else len(order))
     return {"rows": out, "failed": failed, "filters": {**f, "markets": markets}, "scanned": len(rows)}
 
 

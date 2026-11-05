@@ -354,7 +354,7 @@ async function runScreen(body) {
   try {
     const d = await api("/api/screener", { method: "POST", body });
     const f = d.filters;
-    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. Filters: <code>${esc(JSON.stringify(Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== null))))}</code>${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}`;
+    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. Filters: <code>${esc(JSON.stringify(Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== null))))}</code>${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
       { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
@@ -363,7 +363,7 @@ async function runScreen(body) {
       { k: "f_value", label: "Val", num: 1, fmt: (v) => num(v, 0) }, { k: "f_quality", label: "Qual", num: 1, fmt: (v) => num(v, 0) },
       { k: "f_growth", label: "Grow", num: 1, fmt: (v) => num(v, 0) }, { k: "f_momentum", label: "Mom", num: 1, fmt: (v) => num(v, 0) },
       { k: "f_risk", label: "Risk", num: 1, fmt: (v) => num(v, 0) }, { k: "composite", label: "Score", num: 1, fmt: (v) => `<b>${num(v, 0)}</b>` },
-      { k: "stance", label: "Stance", fmt: badge },
+      { k: "stance", label: "Stance", fmt: (v, r) => `${badge(v)}${r.scoredOn !== "All factors" ? `<span class="sub">${esc(r.scoredOn)}</span>` : ""}` },
     ], d.rows, { onClick: (r) => openStock(r.ticker), empty: "No matches — loosen the filters." });
   } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; } finally { $$("#btnScr,#btnScrQuery").forEach((b) => b.disabled = false); }
 }

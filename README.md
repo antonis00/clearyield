@@ -47,7 +47,7 @@ Each asset gets five factor scores from 0 to 100. Every metric maps linearly bet
 - **Momentum:** 12-1 month return, price vs 200-day average, 3-month return
 - **Risk** (higher = calmer): volatility, 1Y max drawdown, beta
 
-The composite is a weighted average of the factors that have data. ETFs and crypto have no fundamentals, so they are scored on momentum and risk only. Stances follow the composite: ≥70 Strong, ≥58 Favorable, ≥45 Neutral, ≥35 Caution, otherwise Weak. The thresholds live in `backend/scoring.py` if you want to tune them.
+The composite is a weighted average of the factors that have data. ETFs and crypto have no fundamentals, so they are scored on momentum and risk only, and the screener ranks each asset class separately. Stances follow the composite: ≥70 Strong, ≥58 Favorable, ≥45 Neutral, ≥35 Caution, otherwise Weak. The thresholds live in `backend/scoring.py` if you want to tune them.
 
 ## Tickers
 

@@ -375,6 +375,27 @@ def test_ev_ebitda_is_calculated_in_one_currency():
         assert blank["enterpriseToEbitda"] is None, gap
 
 
+def test_screener_ranks_each_asset_class_separately():
+    """ETFs and crypto are scored on trend and risk only, so their composite can't be ranked against a stock's."""
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        rows = c.post("/api/screener", json={"markets": ["US", "ETFs", "Crypto"], "filters": {"sort": "composite"}}).json()["rows"]
+        classes = [r["assetClass"] for r in rows]
+        assert classes == sorted(classes, key=["Stocks", "ETFs", "Crypto"].index), "asset classes should not be mixed"
+        for cls in ("Stocks", "ETFs", "Crypto"):
+            scores = [r["composite"] for r in rows if r["assetClass"] == cls]
+            assert scores and scores == sorted(scores, reverse=True), cls
+        assert all(r["scoredOn"] == "Trend & risk only" for r in rows if r["assetClass"] != "Stocks")
+        assert all(r["scoredOn"] == "All factors" for r in rows if r["assetClass"] == "Stocks")
+        # Yield means the same thing for every asset, so that sort stays a single list
+        mixed = c.post("/api/screener", json={"markets": ["US", "ETFs"], "filters": {"sort": "divYield"}}).json()["rows"]
+        yields = [r["divYield"] or 0 for r in mixed]
+        assert yields == sorted(yields, reverse=True)
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data
