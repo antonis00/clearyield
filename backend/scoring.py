@@ -97,10 +97,12 @@ def evaluate(info, close, weights=None):
     used = {k: weights.get(k, 0) for k, s in scores.items() if s is not None and weights.get(k, 0) > 0}
     total_w = sum(used.values())
     composite = round(sum(scores[k] * w for k, w in used.items()) / total_w, 1) if total_w else None
+    if info.get("assetClass") == "Other":  # an index, currency or future: its trend is shown, but it isn't a holding to rate
+        composite = None
     parts = [p for v in bd.values() for p in v]
     scored = sum(p["score"] is not None for p in parts)
     return {
-        "composite": composite, "stance": stance(composite), "factors": scores, "breakdown": bd,
+        "composite": composite, "stance": "Not scored" if info.get("assetClass") == "Other" else stance(composite), "factors": scores, "breakdown": bd,
         "coverage": round(scored / len(parts), 2), "metricsScored": scored, "metricsTotal": len(parts), "signals": signals(info, close),
     }
 

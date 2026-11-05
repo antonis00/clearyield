@@ -103,8 +103,13 @@ def cache_get_stale(key):
     return json.loads(rows[0]["value"]) if rows else None
 
 
-def cache_set(key, value):
-    x("INSERT OR REPLACE INTO cache (key, value, ts) VALUES (?,?,?)", (key, json.dumps(value), time.time()))
+def cache_set(key, value, ts=None):
+    x("INSERT OR REPLACE INTO cache (key, value, ts) VALUES (?,?,?)", (key, json.dumps(value), ts or time.time()))
+
+
+def cache_expire():
+    """Make everything refresh on its next use, keeping old values to fall back on if Yahoo fails."""
+    x("UPDATE cache SET ts = 0")
 
 
 def cache_clear():

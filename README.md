@@ -74,7 +74,7 @@ Edit `backend/universe.py` to change the screener universe.
 
 ## Notes and limits
 
-- Data comes from Yahoo Finance via `yfinance`. It is free, unofficial and occasionally delayed or incomplete, especially for Gulf fundamentals. Responses are cached in `data/stockpilot.db`. Use **Settings → Clear data cache** to force fresh data.
+- Data comes from Yahoo Finance via `yfinance`. It is free, unofficial and occasionally delayed or incomplete, especially for Gulf fundamentals. Responses are cached in `data/stockpilot.db`. Use **Settings → Refresh all data** to force fresh data. If Yahoo fails, the app keeps using the last data it has and says so.
 - The performance chart follows your actual transactions and each day's FX rate over the past year. Risk figures instead apply today's holdings to the past year, because they describe what you own now.
 - Yahoo data is for personal use. Check the terms before sharing or redistributing data from the app.
 - Sales are matched to your oldest shares first. Check whether that matches the rule that applies to you before using the figures for tax.

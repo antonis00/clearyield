@@ -59,19 +59,24 @@ def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=100
     if len(close) < 60:
         raise ValueError("Not enough history for a backtest (need 60+ trading days).")
     rets = close.pct_change().fillna(0)
-    bh = capital * (1 + rets).cumprod()
+    per_bar = rf / ind.bars_per_year(close)  # what money not in the market earns
+    bought = rets.copy()
+    bought.iloc[0] = -cost_bps / 1e4  # buy & hold pays its one trade as well
+    bh = capital * (1 + bought).cumprod()
+    bh.iloc[0] = capital
 
     if strategy == "dca":
         months = close.groupby(close.index.to_period("M")).head(1).index
         per = capital / len(months)
-        units, cash_in, vals, invested = 0.0, 0.0, [], []
+        units, cash, vals = 0.0, float(capital), []
         buy_days = set(months)
-        for d, px in close.items():
+        for i, (d, px) in enumerate(close.items()):
+            if i:
+                cash *= 1 + per_bar
             if d in buy_days:
                 units += per * (1 - cost_bps / 1e4) / px
-                cash_in += per
-            vals.append(units * px + (capital - cash_in))
-            invested.append(cash_in)
+                cash -= per
+            vals.append(units * px + cash)
         eq = pd.Series(vals, index=close.index)
         trades = len(months)
     else:
@@ -84,7 +89,9 @@ def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=100
         day = day.mask(pos > before, close / opens - 1)  # bought at the open, so only that day's open-to-close counts
         day = day.mask(pos < before, opens / previous - 1)  # sold at the open, so only the overnight move counts
         day.iloc[0] = 0.0
-        strat_rets = day - turnover * cost_bps / 1e4
+        idle = (1 - pos) * per_bar
+        idle.iloc[0] = 0.0  # interest starts after the first day
+        strat_rets = day + idle - turnover * cost_bps / 1e4
         eq = capital * (1 + strat_rets).cumprod()
         trades = int((turnover > 0).sum())
         exposure = float(pos.mean())
@@ -95,7 +102,7 @@ def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=100
         "buyHold": [float(v) for v in bh], "strategy": _metrics(eq, rf, trades), "benchmark": _metrics(bh, rf, 1),
         "label": STRATEGIES.get(strategy, {}).get("label", strategy),
         "caveats": [
-            "Single-asset backtest on adjusted prices: excludes taxes, slippage beyond the cost setting, and dividends timing.",
+            "Single-asset backtest on adjusted prices: excludes taxes, slippage beyond the cost setting, and dividends timing. Money not in the market earns the risk-free rate from Settings.",
             "Survivorship bias: you are testing a ticker that still exists today.",
             "Parameters tuned on the same history overfit easily - check other periods and tickers before trusting a result.",
         ],

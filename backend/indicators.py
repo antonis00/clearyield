@@ -17,10 +17,10 @@ def ema(s, n):
 
 def rsi(s, n=14):
     d = s.diff()
-    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
-    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False, min_periods=n).mean()  # blank until there are n moves
+    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False, min_periods=n).mean()
     rs = up / dn.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    return (100 - 100 / (1 + rs)).where(~(dn == 0) | up.isna(), 100.0)
 
 
 def macd(s, fast=12, slow=26, signal=9):

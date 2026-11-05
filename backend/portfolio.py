@@ -144,7 +144,7 @@ def summary(settings, extra=None):
             "dayPct": price / prev - 1 if prev else None, "sector": inf.get("sector") or inf.get("assetClass"),
             "region": inf.get("region"), "assetClass": inf.get("assetClass"),
             "dividendYield": inf.get("dividendYield") or 0, "lots": p["lots"],
-            "fxApprox": not all(exact for _, exact in lot_fx),
+            "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),
         })
         series[t] = close * p["shares"] * fx
 
@@ -197,6 +197,11 @@ def summary(settings, extra=None):
                 risk["benchmarkReturn"] = float(b.iloc[-1] / b.iloc[0] - 1)
 
     warnings = []
+    for r in rows:
+        if r["stale"]:
+            warnings.append(f"{r['ticker']}'s price is old: Yahoo isn't responding, so this uses {r['asOf']}.")
+        if data.is_stale_fx(r["currency"]):
+            warnings.append(f"{r['ticker']}'s exchange rate is old: Yahoo isn't responding, so this uses the last known rate.")
     for t in unpriced:
         warnings.append(f"Realised figures leave out {t}, because there's no exchange rate for it right now.")
     for t, c in realised.items():

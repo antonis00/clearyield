@@ -190,7 +190,10 @@ def stock(ticker: str, period: str = "1y"):
     stats = ind.stats(c, settings.get("risk_free_rate", 0.04))
     last_year = ind.window(full, 252)
     stats.update({"price": price, "change": price - prev if prev else None, "changePct": price / prev - 1 if prev else None,
-                  "high52": float(last_year["High"].max()), "low52": float(last_year["Low"].min()),
+                  # Yahoo's published range, because the history here is adjusted for dividends
+                  "high52": inf.get("fiftyTwoWeekHigh") or float(last_year["High"].max()),
+                  "low52": inf.get("fiftyTwoWeekLow") or float(last_year["Low"].min()),
+                  "asOf": c.index[-1].strftime("%Y-%m-%d"), "stale": data.is_stale(t),
                   "rsi": float(ind.rsi(c).iloc[-1]), "avgVolume": float(full["Volume"].iloc[-60:].mean())})
     try:
         bench = data.history(settings.get("benchmark", "SPY"), "5y")["Close"]
@@ -461,5 +464,5 @@ def backup_restore(body: dict = Body(...)):
 
 @app.post("/api/cache/clear")
 def cache_clear():
-    db.cache_clear()
+    db.cache_expire()
     return ok({"ok": True})

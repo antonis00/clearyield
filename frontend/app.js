@@ -208,13 +208,14 @@ function renderHeader(s) {
     + (s.events.earnings ? `<span class="pill warn">Earnings ${esc(when(s.events.earnings, s.events.earningsDays))}</span>` : "")
     + (s.events.exDividend ? `<span class="pill warn">Ex-dividend ${esc(when(s.events.exDividend, s.events.exDividendDays))}</span>` : "");
   $("#rPrice").textContent = money(st.price, i.currency);
+  $("#rFresh").innerHTML = st.stale ? `<span class="pill warn">Old data from ${esc(st.asOf)}: Yahoo isn't responding</span>` : `<span class="muted sm">Prices to ${esc(st.asOf)}</span>`;
   $("#rChange").innerHTML = `<span class="${cls(st.change)}">${st.change > 0 ? "+" : ""}${num(st.change)} (${pct(st.changePct, 2)})</span> <span class="muted sm">1D</span>`;
   const sc = s.scores.composite;
   $("#rScore").textContent = num(sc, 0);
   $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, #243042 0)`;
   $("#rScore").style.boxShadow = `inset 0 0 0 7px ${C("--panel")}`;
   const w = state.meta.settings.weights;
-  const basis = i.assetClass !== "Stocks" ? "trend & risk only"
+  const basis = i.assetClass === "Other" ? "market indicator" : i.assetClass !== "Stocks" ? "trend & risk only"
     : Object.values(w).every((v) => Math.abs(v - 0.2) < 0.005) ? "balanced"
     : Object.entries(w).map(([k, v]) => `${k[0].toUpperCase()} ${Math.round(v * 100)}`).join(" · ");
   $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})</div>`;
@@ -637,7 +638,7 @@ $("#btnSaveSettings").onclick = async () => {
   state.meta.settings = await api("/api/settings", { method: "POST", body });
   renderModeBadge(); loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
 };
-$("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Cache cleared — next loads fetch fresh data"); };
+$("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Everything will refresh on its next use"); };
 
 $("#btnRestore").onclick = () => $("#restoreFile").click();
 $("#restoreFile").onchange = async (e) => {

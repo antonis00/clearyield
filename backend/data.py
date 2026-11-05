@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import db
 from . import indicators as ind
-from .universe import currency_guess, name_of, region_of
+from .universe import MACRO, currency_guess, name_of, region_of
 
 log = logging.getLogger("stockpilot.data")
 
@@ -22,6 +22,18 @@ PERIOD_DAYS = {"1mo": 21, "3mo": 63, "6mo": 126, "ytd": None, "1y": 252, "2y": 5
 
 class DataError(Exception):
     pass
+
+
+# What's currently being served from old data because Yahoo failed
+_stale, _stale_fx = set(), set()
+
+
+def is_stale(ticker):
+    return ticker in _stale
+
+
+def is_stale_fx(currency):
+    return MINOR_UNITS.get(currency, (currency,))[0] in _stale_fx
 
 
 def _yf():
@@ -57,13 +69,16 @@ def history(ticker, period="5y"):
         try:
             df = _demo_history(ticker) if DEMO else _fetch_history(ticker, fetch_period)
             db.cache_set(key, _df_to(df))
+            _stale.discard(ticker)
         except DataError:
             stale = db.cache_get_stale(key)
             if stale is None:
                 raise
             df = _df_from(stale)
+            _stale.add(ticker)
     else:
         df = _df_from(cached)
+        _stale.discard(ticker)
     return slice_period(df, period)
 
 
@@ -237,6 +252,12 @@ def financials(ticker):
         except Exception as e:
             log.warning("financials failed for %s: %s", ticker, e)
             return db.cache_get_stale(key) or []
+        if not out:  # funds have none, but Yahoo also answers a rate limit this way: keep what's known, and retry within the hour
+            old = db.cache_get_stale(key)
+            if old:
+                return old
+            db.cache_set(key, out, ts=time.time() - TTL["fin"] + 3600)
+            return out
     db.cache_set(key, out)
     return out
 
@@ -317,11 +338,13 @@ def fx_rate(currency, base="USD"):
             log.warning("FX %s->%s unavailable from Yahoo", currency, base)
             stale = db.cache_get_stale(key)
             if stale is not None:
+                _stale_fx.add(currency)
                 return stale / divisor
             if currency in USD_PEGGED and base in USD_PEGGED:
                 return DEMO_FX[currency] / DEMO_FX[base] / divisor
             raise DataError(f"No exchange rate available for {currency} to {base}.")
     db.cache_set(key, rate)
+    _stale_fx.discard(currency)
     return rate / divisor
 
 
@@ -408,7 +431,7 @@ def _demo_info(ticker):
     rng = np.random.default_rng(_seed(ticker) + 1)
     h = _demo_history(ticker)
     price = float(h["Close"].iloc[-1])
-    qt = "CRYPTOCURRENCY" if ticker.endswith("-USD") else ("ETF" if ticker in _etfs() else "EQUITY")
+    qt = "CRYPTOCURRENCY" if ticker.endswith("-USD") else "ETF" if ticker in _etfs() else "INDEX" if ticker in MACRO else "EQUITY"
     d = {k: None for k in INFO_KEYS}
     d.update({"longName": name_of(ticker), "quoteType": qt, "currency": currency_guess(ticker),
               "fiftyTwoWeekHigh": float(h["High"].iloc[-252:].max()), "fiftyTwoWeekLow": float(h["Low"].iloc[-252:].min()),

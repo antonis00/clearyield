@@ -770,19 +770,19 @@ def test_backtest_fills_at_the_next_open():
     #   120 up -> hold, and that day ends at 90
     #    90 down -> sell at the next open, 88
     #   100 up -> buy at the next open, 102, and that day ends at 110
-    r = backtest.run(df, "momentum", {"lookback": 1}, 0)
+    r = backtest.run(df, "momentum", {"lookback": 1}, 0, 0.0)
     expected = (120 / 112) * (90 / 120) * (88 / 90) * (110 / 102) - 1
     assert abs(r["strategy"]["totalReturn"] - expected) < 1e-9, (r["strategy"]["totalReturn"], expected)
     assert r["strategy"]["trades"] == 3
 
     # Costs still come off each trade
-    costed = backtest.run(df, "momentum", {"lookback": 1}, 100)
+    costed = backtest.run(df, "momentum", {"lookback": 1}, 100, 0.0)
     assert costed["strategy"]["totalReturn"] < r["strategy"]["totalReturn"]
 
     # No look-ahead: changing a later price can't change anything before it
     moved = df.copy()
     moved.loc[moved.index[-1], "Close"] = 500.0
-    later = backtest.run(moved, "momentum", {"lookback": 1}, 0)
+    later = backtest.run(moved, "momentum", {"lookback": 1}, 0, 0.0)
     assert later["equity"][:-1] == r["equity"][:-1]
 
 
@@ -1405,6 +1405,176 @@ def test_realised_figures_say_when_they_are_not_complete():
     assert any("EURO" in w and "realised" in w.lower() and "exchange rate" in w for w in p["warnings"]), p["warnings"]
 
 
+def test_old_data_is_flagged():
+    import pandas as pd
+
+    from fastapi.testclient import TestClient
+
+    from backend import data, db, insights, portfolio
+    from backend.main import app
+    _reset()
+    db.cache_clear()
+    idx = pd.bdate_range(end="2026-06-01", periods=300)
+    old = pd.DataFrame({c: [100.0] * 300 for c in ("Open", "High", "Low", "Close", "Volume")}, index=idx)
+    db.cache_set("hist:OLD:5y", data._df_to(old))
+    db.x("UPDATE cache SET ts = 0 WHERE key = 'hist:OLD:5y'")
+
+    class Down:
+        def history(self, **kw):
+            raise RuntimeError("rate limited")
+        info = {"quoteType": "EQUITY", "currency": "USD", "longName": "Old"}
+        income_stmt = cashflow = None
+        news = []
+
+    class YF:
+        Ticker = staticmethod(lambda t: Down())
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    try:
+        assert len(data.history("OLD", "5y")) == 300 and data.is_stale("OLD")
+        with TestClient(app) as c:
+            s = c.get("/api/stock/OLD").json()["stats"]
+        assert s["stale"] is True and s["asOf"] == "2026-06-01"
+        db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('OLD', 1, 100)")
+        p = portfolio.summary(db.get_settings())
+        assert any("OLD" in w and "old" in w.lower() for w in p["warnings"]), p["warnings"]
+        assert p["positions"][0]["stale"] is True
+        # An alert can't fire on a price that may no longer be true
+        db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES ('OLD', 'price_above', 1, 1)")
+        assert insights.check_alerts(db.get_settings()) == []
+        # An old FX rate is flagged too
+        db.cache_set("fx:EURUSD", 1.1)
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'fx:EURUSD'")
+        assert data.fx_rate("EUR", "USD") == 1.1 and data.is_stale_fx("EUR")
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        data._stale.clear()
+        data._stale_fx.clear()
+        db.cache_clear()
+    # Fresh data clears the flag
+    data._stale.add("AAPL")
+    data.history("AAPL", "1y")
+    assert not data.is_stale("AAPL")
+
+
+def test_moves_name_the_day_they_happened():
+    import datetime as dt
+
+    from backend import db, insights
+    _reset()
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('PAST', 1, 100), ('NOW', 1, 100)")
+    today = dt.date.today().isoformat()
+    past = _steps([0.0] * 300 + [0.05], end="2026-06-01")
+    now = _steps([0.0] * 300 + [0.05], end=today)
+    with _FakeMarket({"PAST": past, "NOW": now}):
+        texts = [i["text"] for i in insights.digest(db.get_settings())["items"]]
+        db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES ('PAST', 'day_move', 1, 1)")
+        fired = insights.check_alerts(db.get_settings())
+    assert any(t.startswith("NOW (holding) moved +5.0% today") for t in texts), texts
+    assert any(t.startswith("PAST (holding) moved +5.0% on 2026-06-01") for t in texts), texts
+    assert "on 2026-06-01" in fired[0]["message"]
+
+
+def test_empty_statements_are_retried_soon():
+    import time
+
+    from backend import data, db
+
+    class Listing:
+        income_stmt = cashflow = None
+
+    class YF:
+        Ticker = staticmethod(lambda t: Listing())
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    db.cache_clear()
+    try:
+        assert data.financials("X") == []
+        ts = db.q("SELECT ts FROM cache WHERE key = 'fin:X'")[0]["ts"]
+        age_left = data.TTL["fin"] - (time.time() - ts)
+        assert 3000 < age_left <= 3600, age_left  # kept for an hour, not a day
+        # Good figures from before aren't replaced by an empty reply
+        db.cache_set("fin:Y", [{"year": "2025", "revenue": 1.0}])
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'fin:Y'")
+        assert data.financials("Y") == [{"year": "2025", "revenue": 1.0}]
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        db.cache_clear()
+
+
+def test_clearing_the_cache_keeps_the_fallback():
+    from fastapi.testclient import TestClient
+
+    from backend import db
+    from backend.main import app
+    db.cache_clear()
+    db.cache_set("hist:KEEP:5y", {"x": 1})
+    with TestClient(app) as c:
+        assert c.post("/api/cache/clear").status_code == 200
+    assert db.cache_get("hist:KEEP:5y", 10 ** 6) is None, "next load fetches fresh data"
+    assert db.cache_get_stale("hist:KEEP:5y") == {"x": 1}, "and old data is there if Yahoo fails"
+    db.cache_clear()
+
+
+def test_rsi_waits_for_enough_data():
+    import pandas as pd
+
+    from backend import indicators as ind
+    s = pd.Series([100.0, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 87, 88], index=pd.bdate_range("2024-01-01", periods=17))
+    r = ind.rsi(s)
+    assert r.iloc[:14].isna().all() and r.iloc[14:].notna().all()
+    assert r.iloc[14] == 0.0  # 14 straight falls
+
+
+def test_market_indicators_are_not_scored_like_investments():
+    from backend import scoring
+    close = _steps([0.001] * 300)
+    vix = scoring.evaluate({"assetClass": "Other"}, close)
+    assert vix["composite"] is None and vix["stance"] == "Not scored" and vix["factors"]["momentum"] is not None
+    assert scoring.evaluate({"assetClass": "ETFs"}, close)["composite"] is not None
+
+
+def test_published_52_week_range_is_used():
+    from fastapi.testclient import TestClient
+
+    from backend import data
+    from backend.main import app
+    real = data.info
+    data.info = lambda t: {**real(t), "fiftyTwoWeekHigh": 123.0, "fiftyTwoWeekLow": 45.0}
+    try:
+        with TestClient(app) as c:
+            s = c.get("/api/stock/AAPL").json()["stats"]
+    finally:
+        data.info = real
+    assert s["high52"] == 123.0 and s["low52"] == 45.0
+    with TestClient(app) as c:
+        calc = c.get("/api/stock/AAPL").json()["stats"]
+    assert calc["high52"] >= calc["low52"] > 0
+
+
+def test_idle_cash_earns_the_risk_free_rate_in_backtests():
+    import pandas as pd
+
+    from backend import backtest
+    # Falling every day, so momentum stays in cash throughout: 4% a year on 79 days
+    idx = pd.bdate_range("2024-01-01", periods=80)
+    df = pd.DataFrame({"Close": [100 * 0.999 ** i for i in range(80)]}, index=idx)
+    r = backtest.run(df, "momentum", {"lookback": 1}, 0, 0.04)
+    assert r["strategy"]["trades"] == 0
+    assert abs(r["strategy"]["totalReturn"] - ((1 + 0.04 / 252) ** 79 - 1)) < 1e-9
+    assert r["strategy"]["sharpe"] is not None and any("risk-free" in c for c in r["caveats"])
+    # DCA: money waiting to be invested earns it too
+    flat = pd.DataFrame({"Close": [100.0] * 80}, index=idx)
+    no_interest = backtest.run(flat, "dca", {}, 0, 0.0)["strategy"]["totalReturn"]
+    with_interest = backtest.run(flat, "dca", {}, 0, 0.04)["strategy"]["totalReturn"]
+    assert abs(no_interest) < 1e-9 and with_interest > 0
+    # Buy & hold pays its one trade
+    held = backtest.run(flat, "buy_hold", {}, 10, 0.0)
+    assert abs(held["benchmark"]["totalReturn"] + 0.001) < 1e-9 and abs(held["strategy"]["totalReturn"] + 0.001) < 1e-9
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data
@@ -1415,6 +1585,10 @@ def test_minor_unit_currencies():
     assert currency_guess("NBK.KW") == "KWF"
     nbk = data._normalize_info("NBK.KW", {"currency": "KWF", "financialCurrency": "KWD", "quoteType": "EQUITY"})
     assert nbk["statementFx"] == 1.0
+
+
+def start_close(df, start):
+    return df["Close"][df.index >= start].iloc[0]
 
 
 def test_backtest_uses_history_before_the_window():
@@ -1429,8 +1603,9 @@ def test_backtest_uses_history_before_the_window():
     # A steady uptrend is above its 200-day average from the first day of the window
     assert r["strategy"]["exposure"] == 1.0
     assert r["dates"][0] == start.strftime("%Y-%m-%d") and len(r["dates"]) == 252
-    # Fully invested from day one: the buy & hold return, less one 10 bps entry cost
-    assert abs((1 + r["strategy"]["totalReturn"]) / (1 + r["benchmark"]["totalReturn"]) - 0.999) < 1e-9
+    # Fully invested from day one, with the same 10 bps entry cost as buy & hold, so they match
+    assert abs(r["strategy"]["totalReturn"] - r["benchmark"]["totalReturn"]) < 1e-9
+    assert abs((1 + r["benchmark"]["totalReturn"]) / (df["Close"].iloc[-1] / start_close(df, start)) - 0.999) < 1e-9
     # Nothing changes position inside the window except that first entry
     assert r["strategy"]["trades"] == 1
     # Signals only use past prices: the same test without the earlier data has to sit in cash for 200 bars

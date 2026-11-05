@@ -30,6 +30,12 @@ def upcoming(inf, today=None):
     return out
 
 
+def on_which_day(close):
+    """How to describe a move in the last bar: markets are often closed today, and Gulf ones on different days."""
+    day = close.index[-1].date()
+    return "today" if day == dt.date.today() else f"on {day.isoformat()}"
+
+
 def _quick_row(t, settings):
     try:
         full, inf, sc = evaluate_ticker(t, settings)
@@ -45,6 +51,7 @@ def _quick_row(t, settings):
         "marketCap": inf.get("marketCap"), "vol": ind.volatility(c), "rsi": float(ind.rsi(c).iloc[-1]),
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
         "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only", "events": upcoming(inf),
+        "moveDay": on_which_day(c), "stale": data.is_stale(t),
     }
 
 
@@ -189,6 +196,8 @@ def check_alerts(settings):
             h = data.history(a["ticker"], "1y")
         except data.DataError:
             continue
+        if data.is_stale(a["ticker"]):  # don't fire on a price that may no longer be true
+            continue
         c = h["Close"]
         price, v, k = float(c.iloc[-1]), a["value"], a["kind"]
         msg = None
@@ -199,7 +208,7 @@ def check_alerts(settings):
         elif k == "day_move":
             d = ind.ret_over(c, 1) or 0
             if abs(d) * 100 >= v:
-                msg = f"{a['ticker']} moved {d:+.1%} today"
+                msg = f"{a['ticker']} moved {d:+.1%} {on_which_day(c)}"
         elif k in ("rsi_above", "rsi_below"):
             r = float(ind.rsi(c).iloc[-1])
             if (k == "rsi_above" and r >= v) or (k == "rsi_below" and r <= v):
@@ -288,7 +297,7 @@ def digest(settings):
             continue
         tag = "holding" if t in held else "watchlist"
         if r["day"] is not None and abs(r["day"]) >= 0.03:
-            items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "text": f"{t} ({tag}) moved {r['day']:+.1%} today."})
+            items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "text": f"{t} ({tag}) moved {r['day']:+.1%} {r['moveDay']}."})
         if r["rsi"] >= 70:
             items.append({"tone": -1, "ticker": t, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
         elif r["rsi"] <= 30:
