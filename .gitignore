@@ -1,0 +1,10 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local settings and secrets
+.env
+
+# Local database: market data cache plus personal holdings and journal
+data/

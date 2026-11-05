@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StockPilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
+<!-- Chart libraries are bundled locally so the app works without a CDN -->
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+<script src="/static/vendor/chart.umd.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><span class="logo">◆</span> StockPilot</div>
+  <nav id="nav">
+    <a data-view="dashboard" class="active">Dashboard</a>
+    <a data-view="research">Research</a>
+    <a data-view="compare">Compare</a>
+    <a data-view="screener">Screener</a>
+    <a data-view="portfolio">Portfolio</a>
+    <a data-view="backtest">Backtest</a>
+    <a data-view="journal">Journal &amp; Alerts</a>
+    <a data-view="settings">Settings</a>
+  </nav>
+  <div class="side-foot" id="modeBadge"></div>
+</aside>
+
+<main>
+  <header class="top">
+    <div class="searchbox">
+      <input id="globalSearch" placeholder="Search ticker or company — AAPL, QNB, SAP.DE, BTC-USD…" autocomplete="off">
+      <div id="searchResults" class="dropdown hidden"></div>
+    </div>
+    <div class="disclaimer">Decision support only — not financial advice.</div>
+  </header>
+
+  <!-- DASHBOARD -->
+  <section id="view-dashboard" class="view">
+    <div id="macroStrip" class="macro"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-h"><h3>Portfolio snapshot</h3><a class="link" data-goto="portfolio">Open →</a></div>
+        <div id="dashPortfolio" class="kpis"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Today's digest</h3><button class="btn ghost sm" id="refreshDigest">Refresh</button></div>
+        <ul id="digestList" class="digest"></ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Watchlist</h3><span class="muted sm">Click a row to research</span></div>
+      <div id="watchTable" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- RESEARCH -->
+  <section id="view-research" class="view hidden">
+    <div id="researchEmpty" class="empty">Search for a ticker above to start researching.</div>
+    <div id="researchBody" class="hidden">
+      <div class="stock-head">
+        <div>
+          <div class="sym" id="rSym"></div>
+          <div class="nm" id="rName"></div>
+          <div class="tags" id="rTags"></div>
+        </div>
+        <div class="px">
+          <div class="price" id="rPrice"></div>
+          <div id="rChange"></div>
+        </div>
+        <div class="stance-box">
+          <div class="score-ring" id="rScore"></div>
+          <div id="rStance" class="stance"></div>
+        </div>
+        <div class="actions">
+          <button class="btn" id="btnWatch">+ Watchlist</button>
+          <button class="btn ghost" id="btnHold">+ Holding</button>
+          <button class="btn ghost" id="btnAlert">+ Alert</button>
+          <button class="btn ghost" id="btnJournal">+ Journal</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h">
+          <div class="seg" id="periodSeg">
+            <button data-p="1mo">1M</button><button data-p="3mo">3M</button><button data-p="6mo">6M</button>
+            <button data-p="ytd">YTD</button><button data-p="1y" class="on">1Y</button><button data-p="2y">2Y</button><button data-p="5y">5Y</button>
+          </div>
+          <div class="toggles">
+            <label><input type="checkbox" id="tSma" checked> SMA 50/200</label>
+            <label><input type="checkbox" id="tBb"> Bollinger</label>
+            <label><input type="checkbox" id="tVol" checked> Volume</label>
+          </div>
+        </div>
+        <div id="priceChart" class="chart-main"></div>
+        <div class="sublabel">RSI (14)</div>
+        <div id="rsiChart" class="chart-sub"></div>
+        <div class="sublabel">MACD (12, 26, 9)</div>
+        <div id="macdChart" class="chart-sub"></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="card-h"><h3>Factor scores</h3><span class="muted sm" id="rCoverage"></span></div>
+          <div class="factor-layout">
+            <div class="radar-wrap"><canvas id="radar"></canvas></div>
+            <div id="factorList"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Signals</h3></div>
+          <ul id="signalList" class="signals"></ul>
+          <div class="card-h" style="margin-top:14px"><h3>Research brief</h3><button class="btn sm" id="btnBrief">Generate</button></div>
+          <div id="briefOut" class="brief muted">Combines scores, price action, fundamentals and headlines into a bull/bear summary.</div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card"><div class="card-h"><h3>Key statistics</h3></div><div id="statGrid" class="statgrid"></div></div>
+        <div class="card">
+          <div class="card-h"><h3>Fundamentals trend</h3></div>
+          <canvas id="finChart" height="220"></canvas>
+          <div id="finEmpty" class="muted sm hidden">No annual statements for this asset.</div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="card-h"><h3>DCF valuation</h3><span class="muted sm">Free-cash-flow model</span></div>
+          <div class="form-row">
+            <label>Growth %<input type="number" id="dGrowth" step="0.5"></label>
+            <label>Years<input type="number" id="dYears" value="5" min="3" max="15"></label>
+            <label>Discount %<input type="number" id="dDisc" value="9" step="0.5"></label>
+            <label>Terminal %<input type="number" id="dTerm" value="2.5" step="0.25"></label>
+            <button class="btn sm" id="btnDcf">Recalculate</button>
+          </div>
+          <div id="dcfOut"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>News</h3><span class="muted sm">Headline sentiment is keyword-based</span></div>
+          <ul id="newsList" class="news"></ul>
+        </div>
+      </div>
+      <div class="card"><div class="card-h"><h3>About</h3></div><p id="rAbout" class="about"></p></div>
+    </div>
+  </section>
+
+  <!-- COMPARE -->
+  <section id="view-compare" class="view hidden">
+    <div class="card">
+      <div class="form-row">
+        <label class="grow">Tickers (comma-separated, up to 8)<input id="cmpTickers" value="SPY,QQQ,QNBK.QA,SAP.DE,BTC-USD"></label>
+        <label>Period<select id="cmpPeriod"><option>3mo</option><option>6mo</option><option selected>1y</option><option>2y</option><option>5y</option></select></label>
+        <button class="btn" id="btnCompare">Compare</button>
+      </div>
+    </div>
+    <div class="card"><div class="card-h"><h3>Growth of 100</h3></div><canvas id="cmpChart" height="110"></canvas></div>
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Metrics</h3></div><div id="cmpTable" class="tablewrap"></div></div>
+      <div class="card"><div class="card-h"><h3>Correlation of daily returns</h3></div><div id="cmpCorr" class="tablewrap"></div></div>
+    </div>
+  </section>
+
+  <!-- SCREENER -->
+  <section id="view-screener" class="view hidden">
+    <div class="card">
+      <div class="form-row">
+        <label class="grow">Ask in plain language<input id="scrQuery" placeholder="e.g. cheap profitable dividend stocks in the Gulf with low debt"></label>
+        <button class="btn" id="btnScrQuery">Screen</button>
+      </div>
+      <div class="markets" id="scrMarkets"></div>
+      <div class="form-row">
+        <label>Max P/E<input type="number" id="fPe"></label>
+        <label>Min div. yield %<input type="number" id="fDiv" step="0.5"></label>
+        <label>Min rev. growth %<input type="number" id="fGrowth"></label>
+        <label>Max debt/equity<input type="number" id="fDe" step="0.1"></label>
+        <label>Min ROE %<input type="number" id="fRoe"></label>
+        <label>Min score<input type="number" id="fScore"></label>
+        <label>Max volatility %<input type="number" id="fVol"></label>
+        <label>Sort by<select id="fSort"><option value="composite">Composite</option><option value="value">Value</option><option value="quality">Quality</option><option value="growth">Growth</option><option value="momentum">Momentum</option><option value="risk">Low risk</option><option value="divYield">Dividend yield</option></select></label>
+        <button class="btn ghost" id="btnScr">Apply filters</button>
+      </div>
+      <div class="muted sm" id="scrInfo">First scan downloads data for every ticker (≈1 min); later scans use the cache.</div>
+    </div>
+    <div class="card"><div id="scrTable" class="tablewrap"></div></div>
+  </section>
+
+  <!-- PORTFOLIO -->
+  <section id="view-portfolio" class="view hidden">
+    <div id="pfKpis" class="kpis big"></div>
+    <div class="card">
+      <div class="card-h"><h3>Add a holding</h3><span class="muted sm">Cost per share in the asset's trading currency</span></div>
+      <div class="form-row">
+        <label>Ticker<input id="hTicker" placeholder="AAPL"></label>
+        <label>Shares<input type="number" id="hShares" step="any"></label>
+        <label>Cost / share<input type="number" id="hCost" step="any"></label>
+        <label>Date<input type="date" id="hDate"></label>
+        <label class="grow">Note<input id="hNote"></label>
+        <button class="btn" id="btnAddHolding">Add</button>
+      </div>
+    </div>
+    <div class="card"><div class="card-h"><h3>Positions</h3></div><div id="pfTable" class="tablewrap"></div></div>
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Performance vs benchmark (1Y)</h3></div><canvas id="pfPerf" height="200"></canvas><div class="muted sm" id="pfNote"></div></div>
+      <div class="card"><div class="card-h"><h3>Risk</h3></div><div id="pfRisk" class="statgrid"></div><ul id="pfWarn" class="signals"></ul></div>
+    </div>
+    <div class="grid4">
+      <div class="card"><h4>Asset class</h4><canvas id="aAsset"></canvas></div>
+      <div class="card"><h4>Region</h4><canvas id="aRegion"></canvas></div>
+      <div class="card"><h4>Sector</h4><canvas id="aSector"></canvas></div>
+      <div class="card"><h4>Currency</h4><canvas id="aCur"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>
+      <div id="pfRebal" class="tablewrap"></div>
+    </div>
+  </section>
+
+  <!-- BACKTEST -->
+  <section id="view-backtest" class="view hidden">
+    <div class="card">
+      <div class="form-row">
+        <label>Ticker<input id="bTicker" value="SPY"></label>
+        <label>Strategy<select id="bStrat"></select></label>
+        <span id="bParams" class="form-row inline"></span>
+        <label>Period<select id="bPeriod"><option>1y</option><option>2y</option><option selected>5y</option><option value="max">Max</option></select></label>
+        <label>Cost (bps)<input type="number" id="bCost" value="10"></label>
+        <button class="btn" id="btnBt">Run backtest</button>
+      </div>
+    </div>
+    <div class="card"><div class="card-h"><h3>Equity curve (10,000 start)</h3></div><canvas id="btChart" height="110"></canvas></div>
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Results</h3></div><div id="btTable" class="tablewrap"></div></div>
+      <div class="card"><div class="card-h"><h3>Read before trusting this</h3></div><ul id="btCaveats" class="signals"></ul></div>
+    </div>
+  </section>
+
+  <!-- JOURNAL & ALERTS -->
+  <section id="view-journal" class="view hidden">
+    <div class="grid2">
+      <div class="card">
+        <div class="card-h"><h3>New journal entry</h3><span class="muted sm">Write down the "why" before you act</span></div>
+        <div class="form-row">
+          <label>Ticker<input id="jTicker"></label>
+          <label>Action<select id="jAction"><option>buy</option><option>sell</option><option>add</option><option>trim</option><option>watch</option></select></label>
+          <label>Price<input type="number" id="jPrice" step="any"></label>
+        </div>
+        <label class="block">Thesis<textarea id="jThesis" rows="3" placeholder="Why now? What do you expect to happen?"></textarea></label>
+        <label class="block">What would prove me wrong<textarea id="jInval" rows="2"></textarea></label>
+        <div class="form-row">
+          <label>Stop price<input type="number" id="jStop" step="any"></label>
+          <label>Target price<input type="number" id="jTarget" step="any"></label>
+          <label>Review on<input type="date" id="jReview"></label>
+          <button class="btn" id="btnJournalAdd">Save entry</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>New alert</h3><button class="btn ghost sm" id="btnCheckAlerts">Check now</button></div>
+        <div class="form-row">
+          <label>Ticker<input id="aTicker"></label>
+          <label>Condition<select id="aKind"></select></label>
+          <label>Value<input type="number" id="aValue" step="any"></label>
+          <button class="btn" id="btnAlertAdd">Add alert</button>
+        </div>
+        <p class="muted sm">Alerts are checked automatically while the app is running (every 15 min by default) and appear in the dashboard digest.</p>
+        <div id="alertTable" class="tablewrap"></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-h"><h3>Journal</h3></div><div id="journalList"></div></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="view-settings" class="view hidden">
+    <div class="grid2">
+      <div class="card">
+        <div class="card-h"><h3>Factor weights</h3><span class="muted sm">Balanced = 20% each</span></div>
+        <div id="weightSliders"></div>
+        <button class="btn ghost sm" id="btnBalanced">Reset to balanced</button>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>General</h3></div>
+        <div class="form-row">
+          <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
+          <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
+          <label>Benchmark<input id="sBench"></label>
+        </div>
+        <h4>Target allocation (%)</h4>
+        <div class="form-row" id="targetInputs"></div>
+        <div class="form-row"><button class="btn" id="btnSaveSettings">Save settings</button><button class="btn ghost" id="btnClearCache">Clear data cache</button></div>
+        <div id="settingsMsg" class="muted sm"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden"><div class="modal-card" id="modalCard"></div></div>
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+"""SQLite storage: cache, watchlist, holdings, journal, alerts, settings."""
+import json
+import os
+import sqlite3
+import threading
+import time
+from pathlib import Path
+
+DB_PATH = Path(os.getenv("STOCKPILOT_DB", Path(__file__).resolve().parent.parent / "data" / "stockpilot.db"))
+_lock = threading.Lock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS watchlist (ticker TEXT PRIMARY KEY, tags TEXT DEFAULT '', note TEXT DEFAULT '', added REAL);
+CREATE TABLE IF NOT EXISTS holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, shares REAL NOT NULL,
+    cost REAL NOT NULL, bought TEXT DEFAULT '', note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ticker TEXT, action TEXT, price REAL,
+    thesis TEXT DEFAULT '', invalidation TEXT DEFAULT '', stop_price REAL, target_price REAL,
+    review_date TEXT DEFAULT '', outcome TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, kind TEXT, value REAL,
+    active INTEGER DEFAULT 1, created REAL, triggered REAL, message TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+"""
+
+DEFAULT_SETTINGS = {
+    "base_currency": "USD",
+    "risk_free_rate": 0.04,
+    "weights": {"value": 0.2, "quality": 0.2, "growth": 0.2, "momentum": 0.2, "risk": 0.2},
+    "targets": {"Stocks": 65, "ETFs": 30, "Crypto": 5},
+    "benchmark": "SPY",
+}
+
+
+def _connect():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def init():
+    with _lock:
+        c = _connect()
+        try:
+            c.executescript(SCHEMA)
+            c.commit()
+        finally:
+            c.close()
+
+
+def q(sql, params=()):
+    with _lock:
+        c = _connect()
+        try:
+            return [dict(r) for r in c.execute(sql, params).fetchall()]
+        finally:
+            c.close()
+
+
+def x(sql, params=()):
+    with _lock:
+        c = _connect()
+        try:
+            cur = c.execute(sql, params)
+            c.commit()
+            return cur.lastrowid
+        finally:
+            c.close()
+
+
+# ---- cache ----
+def cache_get(key, ttl):
+    rows = q("SELECT value, ts FROM cache WHERE key=?", (key,))
+    if rows and time.time() - rows[0]["ts"] < ttl:
+        return json.loads(rows[0]["value"])
+    return None
+
+
+def cache_get_stale(key):
+    rows = q("SELECT value FROM cache WHERE key=?", (key,))
+    return json.loads(rows[0]["value"]) if rows else None
+
+
+def cache_set(key, value):
+    x("INSERT OR REPLACE INTO cache (key, value, ts) VALUES (?,?,?)", (key, json.dumps(value), time.time()))
+
+
+def cache_clear():
+    x("DELETE FROM cache")
+
+
+# ---- settings ----
+def get_settings():
+    out = json.loads(json.dumps(DEFAULT_SETTINGS))
+    for r in q("SELECT key, value FROM settings"):
+        out[r["key"]] = json.loads(r["value"])
+    return out
+
+
+def set_settings(values: dict):
+    for k, v in values.items():
+        if k in DEFAULT_SETTINGS:
+            x("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (k, json.dumps(v)))
+    return get_settings()

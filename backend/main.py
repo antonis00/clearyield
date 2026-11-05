@@ -1,0 +1,338 @@
+"""StockPilot API + static frontend.  Run:  uvicorn backend.main:app --reload"""
+import asyncio
+import logging
+import math
+import os
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_env():
+    env = ROOT / ".env"
+    if env.exists():
+        for line in env.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_env()
+
+import numpy as np  # noqa: E402
+from fastapi import Body, FastAPI, HTTPException  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+from . import ai, backtest, data, db, insights, portfolio, scoring  # noqa: E402
+from . import indicators as ind  # noqa: E402
+from .universe import MACRO, UNIVERSE, name_of, search as uni_search  # noqa: E402
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("stockpilot")
+ALERT_INTERVAL = int(os.getenv("ALERT_CHECK_MINUTES", "15")) * 60
+
+
+def clean(o):
+    """Make data JSON-safe (NaN/inf -> null, numpy -> python)."""
+    if isinstance(o, dict):
+        return {str(k): clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [clean(v) for v in o]
+    if isinstance(o, (np.floating, float)):
+        f = float(o)
+        return None if math.isnan(f) or math.isinf(f) else f
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.bool_):
+        return bool(o)
+    return o
+
+
+def ok(payload):
+    return JSONResponse(clean(payload))
+
+
+async def _alert_loop():
+    while True:
+        await asyncio.sleep(ALERT_INTERVAL)
+        try:
+            fired = await asyncio.to_thread(insights.check_alerts, db.get_settings())
+            for a in fired:
+                log.info("ALERT: %s", a["message"])
+        except Exception as e:
+            log.warning("alert check failed: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    db.init()
+    task = asyncio.create_task(_alert_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="StockPilot", lifespan=lifespan)
+FRONT = ROOT / "frontend"
+app.mount("/static", StaticFiles(directory=FRONT), name="static")
+
+
+@app.get("/")
+def index():
+    return FileResponse(FRONT / "index.html")
+
+
+def T(t):
+    return t.strip().upper()
+
+
+def _hist_or_404(t, period="5y"):
+    try:
+        return data.history(t, period)
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
+
+
+# ---------------------------------------------------------------- meta / search / macro
+@app.get("/api/meta")
+def meta():
+    return ok({"demo": data.DEMO, "ai": ai.available(), "aiModel": ai.MODEL if ai.available() else None,
+               "settings": db.get_settings(), "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
+               "strategies": backtest.STRATEGIES})
+
+
+@app.get("/api/search")
+def search(q: str = ""):
+    hits = uni_search(q)
+    raw = T(q)
+    if raw and not any(h["ticker"] == raw for h in hits) and " " not in raw:
+        hits.append({"ticker": raw, "name": "Look up this symbol on Yahoo Finance", "market": "Any"})
+    return ok(hits)
+
+
+@app.get("/api/macro")
+def macro():
+    out = []
+    for t, label in MACRO.items():
+        try:
+            c = data.history(t, "1y")["Close"]
+            out.append({"ticker": t, "name": label, "price": float(c.iloc[-1]), "day": ind.ret_over(c, 1),
+                        "ret1m": ind.ret_over(c, 21), "spark": [float(v) for v in c.iloc[-60:]]})
+        except Exception:
+            continue
+    return ok(out)
+
+
+# ---------------------------------------------------------------- stock research
+@app.get("/api/stock/{ticker}")
+def stock(ticker: str, period: str = "1y"):
+    t = T(ticker)
+    settings = db.get_settings()
+    full = _hist_or_404(t, "5y")
+    inf = data.info(t)
+    sc = scoring.evaluate(inf, full["Close"], settings.get("weights"))
+    ib = ind.bundle(full)
+    view = data.slice_period(full, period)
+    ib = ib.loc[view.index]
+    c = full["Close"]
+    price, prev = float(c.iloc[-1]), float(c.iloc[-2]) if len(c) > 1 else float(c.iloc[-1])
+    candles = {"time": [d.strftime("%Y-%m-%d") for d in view.index], "open": view["Open"].tolist(), "high": view["High"].tolist(),
+               "low": view["Low"].tolist(), "close": view["Close"].tolist(), "volume": view["Volume"].tolist(),
+               **{k: ib[k].tolist() for k in ib.columns}}
+    stats = ind.stats(c, settings.get("risk_free_rate", 0.04))
+    stats.update({"price": price, "change": price - prev, "changePct": price / prev - 1 if prev else None,
+                  "high52": float(full["High"].iloc[-252:].max()), "low52": float(full["Low"].iloc[-252:].min()),
+                  "rsi": float(ind.rsi(c).iloc[-1]), "avgVolume": float(full["Volume"].iloc[-60:].mean())})
+    try:
+        bench = data.history(settings.get("benchmark", "SPY"), "5y")["Close"]
+        stats["betaCalc"] = ind.beta(c.iloc[-504:], bench)
+    except data.DataError:
+        pass
+    watched = bool(db.q("SELECT 1 FROM watchlist WHERE ticker=?", (t,)))
+    return ok({"ticker": t, "info": inf, "stats": stats, "scores": sc, "candles": candles,
+               "financials": data.financials(t), "watched": watched})
+
+
+@app.get("/api/stock/{ticker}/news")
+def stock_news(ticker: str):
+    return ok(data.news(T(ticker)))
+
+
+@app.get("/api/stock/{ticker}/brief")
+def stock_brief(ticker: str):
+    t = T(ticker)
+    settings = db.get_settings()
+    full = _hist_or_404(t)
+    inf = data.info(t)
+    ctx = {"ticker": t, "info": inf, "scores": scoring.evaluate(inf, full["Close"], settings.get("weights")),
+           "stats": ind.stats(full["Close"]), "news": data.news(t), "financials": data.financials(t)}
+    return ok(ai.brief(ctx))
+
+
+@app.get("/api/dcf/{ticker}")
+def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: float = 0.09, terminal: float = 0.025):
+    t = T(ticker)
+    full = _hist_or_404(t, "1y")
+    res = insights.dcf(data.info(t), growth, years, discount, terminal)
+    if "fairValue" in res:
+        price = float(full["Close"].iloc[-1])
+        res["price"] = price
+        res["marginOfSafety"] = res["fairValue"] / price - 1
+    return ok(res)
+
+
+@app.get("/api/compare")
+def compare(tickers: str, period: str = "1y"):
+    ts = [T(x) for x in tickers.split(",") if x.strip()][:8]
+    return ok(insights.compare(ts, period, db.get_settings().get("risk_free_rate", 0.04)))
+
+
+# ---------------------------------------------------------------- screener
+@app.post("/api/screener")
+def screener(body: dict = Body(...)):
+    settings = db.get_settings()
+    if body.get("query"):
+        parsed = ai.parse_query(body["query"])
+        body = {**body, "filters": {**(body.get("filters") or {}), **parsed}}
+    return ok(insights.screen(body, settings))
+
+
+# ---------------------------------------------------------------- watchlist
+@app.get("/api/watchlist")
+def watchlist():
+    items = db.q("SELECT * FROM watchlist ORDER BY added")
+    rows = {r["ticker"]: r for r in insights.rows_for([i["ticker"] for i in items], db.get_settings())}
+    return ok([{**i, **rows.get(i["ticker"], {})} for i in items])
+
+
+@app.post("/api/watchlist")
+def watch_add(body: dict = Body(...)):
+    t = T(body["ticker"])
+    _hist_or_404(t, "1y")
+    db.x("INSERT OR REPLACE INTO watchlist (ticker, tags, note, added) VALUES (?,?,?,?)",
+         (t, body.get("tags", ""), body.get("note", ""), time.time()))
+    return ok({"ok": True})
+
+
+@app.delete("/api/watchlist/{ticker}")
+def watch_del(ticker: str):
+    db.x("DELETE FROM watchlist WHERE ticker=?", (T(ticker),))
+    return ok({"ok": True})
+
+
+# ---------------------------------------------------------------- portfolio
+@app.get("/api/portfolio")
+def get_portfolio():
+    return ok(portfolio.summary(db.get_settings()))
+
+
+@app.post("/api/holdings")
+def add_holding(body: dict = Body(...)):
+    t = T(body["ticker"])
+    _hist_or_404(t, "1y")
+    shares, cost = float(body["shares"]), float(body["cost"])
+    if shares <= 0 or cost < 0:
+        raise HTTPException(400, "Shares must be positive and cost non-negative.")
+    hid = db.x("INSERT INTO holdings (ticker, shares, cost, bought, note) VALUES (?,?,?,?,?)",
+               (t, shares, cost, body.get("bought", ""), body.get("note", "")))
+    return ok({"id": hid})
+
+
+@app.delete("/api/holdings/{hid}")
+def del_holding(hid: int):
+    db.x("DELETE FROM holdings WHERE id=?", (hid,))
+    return ok({"ok": True})
+
+
+# ---------------------------------------------------------------- backtest
+@app.post("/api/backtest")
+def run_backtest(body: dict = Body(...)):
+    t = T(body["ticker"])
+    df = _hist_or_404(t, body.get("period", "5y"))
+    try:
+        res = backtest.run(df, body.get("strategy", "sma_cross"), body.get("params") or {}, float(body.get("cost_bps", 10)),
+                           db.get_settings().get("risk_free_rate", 0.04))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return ok({"ticker": t, **res})
+
+
+# ---------------------------------------------------------------- journal
+@app.get("/api/journal")
+def journal():
+    return ok(db.q("SELECT * FROM journal ORDER BY ts DESC"))
+
+
+@app.post("/api/journal")
+def journal_add(body: dict = Body(...)):
+    def num(k):
+        v = body.get(k)
+        return float(v) if v not in (None, "") else None
+    jid = db.x("INSERT INTO journal (ts, ticker, action, price, thesis, invalidation, stop_price, target_price, review_date) "
+               "VALUES (?,?,?,?,?,?,?,?,?)",
+               (time.time(), T(body["ticker"]), body.get("action", "buy"), num("price"), body.get("thesis", ""),
+                body.get("invalidation", ""), num("stop_price"), num("target_price"), body.get("review_date", "")))
+    return ok({"id": jid})
+
+
+@app.patch("/api/journal/{jid}")
+def journal_update(jid: int, body: dict = Body(...)):
+    db.x("UPDATE journal SET outcome=? WHERE id=?", (body.get("outcome", ""), jid))
+    return ok({"ok": True})
+
+
+@app.delete("/api/journal/{jid}")
+def journal_del(jid: int):
+    db.x("DELETE FROM journal WHERE id=?", (jid,))
+    return ok({"ok": True})
+
+
+# ---------------------------------------------------------------- alerts / digest
+@app.get("/api/alerts")
+def alerts():
+    return ok(db.q("SELECT * FROM alerts ORDER BY active DESC, created DESC"))
+
+
+@app.post("/api/alerts")
+def alert_add(body: dict = Body(...)):
+    if body.get("kind") not in insights.ALERT_KINDS:
+        raise HTTPException(400, "Unknown alert kind")
+    aid = db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES (?,?,?,?)",
+               (T(body["ticker"]), body["kind"], float(body["value"]), time.time()))
+    return ok({"id": aid})
+
+
+@app.delete("/api/alerts/{aid}")
+def alert_del(aid: int):
+    db.x("DELETE FROM alerts WHERE id=?", (aid,))
+    return ok({"ok": True})
+
+
+@app.post("/api/alerts/check")
+def alert_check():
+    return ok(insights.check_alerts(db.get_settings()))
+
+
+@app.get("/api/digest")
+def digest():
+    return ok(insights.digest(db.get_settings()))
+
+
+# ---------------------------------------------------------------- settings
+@app.get("/api/settings")
+def settings_get():
+    return ok(db.get_settings())
+
+
+@app.post("/api/settings")
+def settings_set(body: dict = Body(...)):
+    return ok(db.set_settings(body))
+
+
+@app.post("/api/cache/clear")
+def cache_clear():
+    db.cache_clear()
+    return ok({"ok": True})

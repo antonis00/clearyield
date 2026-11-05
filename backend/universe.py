@@ -1,0 +1,106 @@
+"""Default ticker universe (Yahoo Finance symbols) used by the screener and search.
+
+Edit freely - any Yahoo Finance symbol works in Research even if it is not listed here.
+"""
+
+UNIVERSE = {
+    "US": {
+        "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "GOOGL": "Alphabet", "AMZN": "Amazon",
+        "META": "Meta Platforms", "AVGO": "Broadcom", "TSLA": "Tesla", "BRK-B": "Berkshire Hathaway",
+        "JPM": "JPMorgan Chase", "V": "Visa", "MA": "Mastercard", "UNH": "UnitedHealth", "LLY": "Eli Lilly",
+        "JNJ": "Johnson & Johnson", "PG": "Procter & Gamble", "KO": "Coca-Cola", "PEP": "PepsiCo",
+        "XOM": "Exxon Mobil", "CVX": "Chevron", "HD": "Home Depot", "COST": "Costco", "WMT": "Walmart",
+        "ABBV": "AbbVie", "MRK": "Merck", "ADBE": "Adobe", "CRM": "Salesforce", "AMD": "AMD",
+        "ORCL": "Oracle", "NFLX": "Netflix", "INTC": "Intel", "CSCO": "Cisco", "QCOM": "Qualcomm",
+        "TXN": "Texas Instruments", "MCD": "McDonald's", "NKE": "Nike", "DIS": "Disney", "CAT": "Caterpillar",
+        "GS": "Goldman Sachs", "PFE": "Pfizer",
+    },
+    "Europe": {
+        "ASML.AS": "ASML", "SAP.DE": "SAP", "MC.PA": "LVMH", "NESN.SW": "Nestle", "NOVO-B.CO": "Novo Nordisk",
+        "ROG.SW": "Roche", "SIE.DE": "Siemens", "AZN.L": "AstraZeneca", "SHEL.L": "Shell", "OR.PA": "L'Oreal",
+        "TTE.PA": "TotalEnergies", "ULVR.L": "Unilever", "ALV.DE": "Allianz", "SAN.MC": "Banco Santander",
+        "AIR.PA": "Airbus", "HSBA.L": "HSBC", "BMW.DE": "BMW", "ENEL.MI": "Enel", "RMS.PA": "Hermes",
+        "IBE.MC": "Iberdrola",
+    },
+    "Gulf": {
+        "QNBK.QA": "QNB", "IQCD.QA": "Industries Qatar", "QIBK.QA": "Qatar Islamic Bank",
+        "ORDS.QA": "Ooredoo", "MARK.QA": "Masraf Al Rayan", "QGTS.QA": "Nakilat",
+        "2222.SR": "Saudi Aramco", "1120.SR": "Al Rajhi Bank", "2010.SR": "SABIC", "7010.SR": "STC",
+        "1180.SR": "Saudi National Bank", "EMAAR.AE": "Emaar Properties", "DIB.AE": "Dubai Islamic Bank",
+        "FAB.AE": "First Abu Dhabi Bank", "ADNOCDIST.AE": "ADNOC Distribution",
+    },
+    "ETFs": {
+        "SPY": "S&P 500 ETF", "QQQ": "Nasdaq-100 ETF", "VTI": "Total US Market ETF", "VXUS": "Intl ex-US ETF",
+        "VWO": "Emerging Markets ETF", "SCHD": "US Dividend ETF", "VYM": "High Dividend Yield ETF",
+        "GLD": "Gold ETF", "TLT": "20+Y Treasury ETF", "BND": "Total Bond ETF", "VNQ": "US REIT ETF",
+        "IWM": "Russell 2000 ETF", "EFA": "Developed ex-US ETF", "XLK": "Tech Sector ETF",
+        "XLE": "Energy Sector ETF", "XLV": "Health Care Sector ETF",
+    },
+    "Crypto": {
+        "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana", "BNB-USD": "BNB",
+        "XRP-USD": "XRP", "ADA-USD": "Cardano",
+    },
+}
+
+MACRO = {
+    "^GSPC": "S&P 500", "^IXIC": "Nasdaq", "^STOXX50E": "Euro Stoxx 50", "^TASI.SR": "Tadawul (TASI)",
+    "^VIX": "VIX", "^TNX": "US 10Y yield", "GC=F": "Gold", "CL=F": "WTI Oil", "BTC-USD": "Bitcoin",
+    "EURUSD=X": "EUR/USD", "DX-Y.NYB": "US Dollar Index",
+}
+
+REGION_BY_SUFFIX = {
+    ".QA": "Gulf", ".SR": "Gulf", ".AE": "Gulf", ".AD": "Gulf", ".KW": "Gulf", ".BH": "Gulf",
+    ".L": "Europe", ".PA": "Europe", ".DE": "Europe", ".AS": "Europe", ".SW": "Europe", ".CO": "Europe",
+    ".MC": "Europe", ".MI": "Europe", ".BR": "Europe", ".ST": "Europe", ".OL": "Europe", ".HE": "Europe",
+    ".AT": "Europe", ".LS": "Europe", ".VI": "Europe", ".IR": "Europe",
+}
+
+CURRENCY_BY_SUFFIX = {
+    ".QA": "QAR", ".SR": "SAR", ".AE": "AED", ".AD": "AED", ".KW": "KWD", ".BH": "BHD", ".L": "GBp",
+    ".PA": "EUR", ".DE": "EUR", ".AS": "EUR", ".MC": "EUR", ".MI": "EUR", ".BR": "EUR", ".HE": "EUR",
+    ".AT": "EUR", ".LS": "EUR", ".VI": "EUR", ".IR": "EUR", ".SW": "CHF", ".CO": "DKK", ".ST": "SEK",
+    ".OL": "NOK",
+}
+
+
+def name_of(ticker):
+    for group in UNIVERSE.values():
+        if ticker in group:
+            return group[ticker]
+    return MACRO.get(ticker, ticker)
+
+
+def region_of(ticker, quote_type=None):
+    if ticker.endswith("-USD") or quote_type == "CRYPTOCURRENCY":
+        return "Crypto"
+    for suf, reg in REGION_BY_SUFFIX.items():
+        if ticker.endswith(suf):
+            return reg
+    return "US"
+
+
+def currency_guess(ticker):
+    for suf, cur in CURRENCY_BY_SUFFIX.items():
+        if ticker.endswith(suf):
+            return cur
+    return "USD"
+
+
+def tickers_for(markets):
+    out = []
+    for m in markets or UNIVERSE.keys():
+        out.extend(UNIVERSE.get(m, {}).keys())
+    return list(dict.fromkeys(out))
+
+
+def search(text, limit=12):
+    text = (text or "").strip().lower()
+    if not text:
+        return []
+    hits = []
+    for market, group in UNIVERSE.items():
+        for t, n in group.items():
+            if text in t.lower() or text in n.lower():
+                hits.append({"ticker": t, "name": n, "market": market})
+    hits.sort(key=lambda h: (not h["ticker"].lower().startswith(text), len(h["ticker"])))
+    return hits[:limit]
