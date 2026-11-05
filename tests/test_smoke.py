@@ -444,6 +444,45 @@ def test_stance_bands():
     assert all(stance(k) == v for k, v in cases.items()) and stance(None) == "Insufficient data"
 
 
+def test_backup_restores_everything_or_nothing():
+    from fastapi.testclient import TestClient
+
+    from backend import db
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        c.post("/api/watchlist", json={"ticker": "AAPL", "note": "صبر é"})
+        c.post("/api/holdings", json={"ticker": "SPY", "shares": 5, "cost": 400, "bought": "2025-01-02", "note": "core"})
+        c.post("/api/journal", json={"ticker": "AAPL", "action": "buy", "price": 150, "thesis": "services growth"})
+        c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 500})
+        c.post("/api/settings", json={"base_currency": "EUR"})
+
+        r = c.get("/api/backup")
+        assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+        backup = r.json()
+        assert backup["version"] == 1 and backup["holdings"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
+        assert "cache" not in backup  # market data can always be downloaded again
+
+        before = {t: db.q(f"SELECT * FROM {t}") for t in ("watchlist", "holdings", "journal", "alerts", "settings")}
+        _reset()
+        assert not db.q("SELECT * FROM holdings")
+        assert c.post("/api/backup/restore", json=backup).status_code == 200
+        after = {t: db.q(f"SELECT * FROM {t}") for t in before}
+        assert after == before, "a restore must bring back identical rows"
+
+        # Bad files change nothing, even when the problem is in the last table
+        bad_row = {**backup, "alerts": [{"nonsense": 1}], "settings": {"base_currency": "USD"}}
+        for bad in ({"hello": 1}, {**backup, "version": 99}, {**backup, "journal": "oops"}, bad_row):
+            assert c.post("/api/backup/restore", json=bad).status_code == 400, bad
+            assert {t: db.q(f"SELECT * FROM {t}") for t in before} == before
+
+        # Unknown columns and settings can't reach the database
+        extra = {**backup, "holdings": [{"ticker": "X", "shares": 1, "cost": 1, "dropped": "; DROP TABLE holdings"}], "settings": {"hack": 1}}
+        assert c.post("/api/backup/restore", json=extra).status_code == 200
+        assert [h["ticker"] for h in db.q("SELECT * FROM holdings")] == ["X"]
+        assert db.q("SELECT * FROM settings WHERE key = 'hack'") == []
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

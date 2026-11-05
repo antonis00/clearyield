@@ -293,6 +293,9 @@
         <div class="form-row" id="targetInputs"></div>
         <div class="form-row"><button class="btn" id="btnSaveSettings">Save settings</button><button class="btn ghost" id="btnClearCache">Clear data cache</button></div>
         <div id="settingsMsg" class="muted sm"></div>
+        <h4>Backup</h4>
+        <p class="muted sm">Your holdings, journal, alerts, watchlist and settings exist only in this app's database file. Download a copy now and then. Restoring replaces everything currently in the app.</p>
+        <div class="form-row"><a class="btn ghost" id="btnBackup" href="/api/backup" download>Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
       </div>
     </div>
   </section>

@@ -92,6 +92,54 @@ def cache_clear():
     x("DELETE FROM cache")
 
 
+# ---- backup ----
+USER_TABLES = ("watchlist", "holdings", "journal", "alerts")
+BACKUP_VERSION = 1
+
+
+def export_user_data():
+    """Everything the user entered. The market data cache is left out because it can be downloaded again."""
+    out = {"version": BACKUP_VERSION, "exported": time.time(), **{t: q(f"SELECT * FROM {t}") for t in USER_TABLES}}
+    out["settings"] = {r["key"]: json.loads(r["value"]) for r in q("SELECT key, value FROM settings")}
+    return out
+
+
+def restore_user_data(backup):
+    """Replace all user data in one transaction, so a bad file changes nothing. Raises ValueError if it can't be used."""
+    if not isinstance(backup, dict) or backup.get("version") != BACKUP_VERSION:
+        raise ValueError("This isn't a StockPilot backup, or it's from a different version.")
+    for t in USER_TABLES:
+        if not isinstance(backup.get(t), list) or not all(isinstance(r, dict) for r in backup[t]):
+            raise ValueError(f"The backup's {t} section isn't usable.")
+    if not isinstance(backup.get("settings"), dict):
+        raise ValueError("The backup's settings section isn't usable.")
+    with _lock:
+        c = _connect()
+        try:
+            for t in USER_TABLES:
+                known = [r["name"] for r in c.execute(f"PRAGMA table_info({t})")]
+                c.execute(f"DELETE FROM {t}")
+                for row in backup[t]:
+                    cols = [k for k in row if k in known]  # only real columns, so a file can't inject SQL
+                    if not cols:
+                        raise ValueError(f"A row in the backup's {t} section has no usable fields.")
+                    marks = ",".join("?" * len(cols))
+                    c.execute(f"INSERT INTO {t} ({','.join(cols)}) VALUES ({marks})", [row[k] for k in cols])
+            c.execute("DELETE FROM settings")
+            for k, v in backup["settings"].items():
+                if k in DEFAULT_SETTINGS:
+                    c.execute("INSERT INTO settings (key, value) VALUES (?,?)", (k, json.dumps(v)))
+            c.commit()
+        except sqlite3.Error as e:
+            c.rollback()
+            raise ValueError(f"The backup couldn't be restored: {e}")
+        except ValueError:
+            c.rollback()
+            raise
+        finally:
+            c.close()
+
+
 # ---- settings ----
 def get_settings():
     out = json.loads(json.dumps(DEFAULT_SETTINGS))

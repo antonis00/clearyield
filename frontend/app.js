@@ -504,6 +504,18 @@ $("#btnSaveSettings").onclick = async () => {
 };
 $("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Cache cleared — next loads fetch fresh data"); };
 
+$("#btnRestore").onclick = () => $("#restoreFile").click();
+$("#restoreFile").onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  let backup;
+  try { backup = JSON.parse(await file.text()); } catch { return toast("That file isn't a StockPilot backup."); }
+  const n = (k) => (Array.isArray(backup[k]) ? backup[k].length : 0);
+  if (!confirm(`Replace everything in the app with this backup? It has ${n("holdings")} lots, ${n("journal")} journal entries, ${n("alerts")} alerts and ${n("watchlist")} watchlist items.`)) return;
+  try { await api("/api/backup/restore", { method: "POST", body: backup }); toast("Backup restored"); setTimeout(() => location.reload(), 600); }
+  catch (err) { toast(err.message); }
+};
+
 /* ---------------------------------------------------------------- boot */
 (async function boot() {
   state.meta = await api("/api/meta");

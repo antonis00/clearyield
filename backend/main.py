@@ -350,6 +350,22 @@ def settings_set(body: dict = Body(...)):
     return ok(db.set_settings(body))
 
 
+# ---------------------------------------------------------------- backup
+@app.get("/api/backup")
+def backup():
+    name = f"stockpilot-backup-{dt.date.today().isoformat()}.json"
+    return JSONResponse(db.export_user_data(), headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/backup/restore")
+def backup_restore(body: dict = Body(...)):
+    try:
+        db.restore_user_data(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return ok({"ok": True})
+
+
 @app.post("/api/cache/clear")
 def cache_clear():
     db.cache_clear()
