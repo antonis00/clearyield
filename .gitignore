@@ -8,3 +8,7 @@ __pycache__/
 
 # Local database: market data cache plus personal holdings and journal
 data/
+
+# Browser checks
+node_modules/
+tests/browser/out/

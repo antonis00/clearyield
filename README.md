@@ -68,6 +68,7 @@ Edit `backend/universe.py` to change the screener universe.
 - Portfolio performance applies *current* holdings and *today's* FX rates to the past year, so it approximates rather than records your actual history.
 - Yahoo data is for personal use. Check the terms before sharing or redistributing data from the app.
 - Run the offline test suite with: `python tests/test_smoke.py`
+- Run every check with: `python tests/run_all.py`. It adds a browser walk through every screen in demo mode and with live data, plus a comparison with raw Yahoo figures. It needs Chrome, internet and Node, once you've run `npm install` in `tests/browser`. It uses temporary databases, so your data isn't touched.
 
 ## Project layout
 
@@ -75,5 +76,5 @@ Edit `backend/universe.py` to change the screener universe.
 backend/   main.py (API) · data.py (Yahoo + cache + FX + demo) · scoring.py · indicators.py
            portfolio.py · backtest.py · insights.py (screener, compare, DCF, alerts, digest) · ai.py · db.py · universe.py
 frontend/  index.html · app.js · styles.css · vendor/ (charting libraries, bundled for offline use)
-tests/     test_smoke.py
+tests/     test_smoke.py · check_live.py · run_all.py · browser/ (walk through every screen in Chrome)
 ```

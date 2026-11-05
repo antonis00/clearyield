@@ -1,0 +1,8 @@
+{
+  "name": "stockpilot-browser-checks",
+  "private": true,
+  "description": "Browser checks for StockPilot. They use your installed Chrome.",
+  "dependencies": {
+    "playwright-core": "1.48.2"
+  }
+}
