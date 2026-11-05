@@ -274,6 +274,8 @@ def fx_rate(currency, base="USD"):
     currency, divisor = MINOR_UNITS.get(currency, (currency, 1.0))
     if currency == base:
         return 1.0 / divisor
+    if "USD" not in (currency, base):  # Yahoo's USD pairs are the reliable ones: its KWD/EUR is about 1% off
+        return fx_rate(currency, "USD") / fx_rate(base, "USD") / divisor
     key = f"fx:{currency}{base}"
     cached = db.cache_get(key, TTL["fx"])
     if cached is not None:
@@ -310,6 +312,9 @@ def fx_on(currency, base, date):
         return 1.0 / divisor
     if DEMO or fx_is_fixed(currency, base):  # a peg needs no history, and Yahoo's can be off by several percent
         return fx_rate(currency, base)
+    if "USD" not in (major, base):  # as in fx_rate: its QAR/EUR history is about 4% off
+        legs = fx_on(major, "USD", date), fx_on(base, "USD", date)
+        return legs[0] / legs[1] / divisor if None not in legs else None
     for sym, invert in ((f"{major}{base}=X", False), (f"{base}{major}=X", True)):
         try:
             closes = history(sym, "max")["Close"]

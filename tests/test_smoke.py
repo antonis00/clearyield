@@ -671,6 +671,43 @@ def test_pretrade_route():
         assert len(c.get("/api/portfolio").json()["positions"]) == 1
 
 
+def test_cross_rates_go_through_the_dollar():
+    """Yahoo's USD pairs are the reliable ones: its QAR/EUR history is 3.7% off and KWD/EUR 1.1% off."""
+    import pandas as pd
+
+    from backend import data, db
+
+    def history_of(rates):
+        return pd.Series(rates, index=pd.to_datetime(["2024-06-03", "2026-06-01"]))
+
+    real_demo = data.DEMO
+    data.DEMO = False
+    db.cache_clear()
+    try:
+        db.cache_set("fx:QARUSD", 0.2747)
+        db.cache_set("fx:EURUSD", 1.12)
+        db.cache_set("fx:KWDUSD", 3.25)
+        # Today: both legs through USD, even with a wrong direct rate sitting in the cache
+        db.cache_set("fx:KWDEUR", 2.86)
+        assert abs(data.fx_rate("KWD", "EUR") - 3.25 / 1.12) < 1e-9
+        assert abs(data.fx_rate("KWF", "EUR") - 3.25 / 1.12 / 1000) < 1e-12
+        assert abs(data.fx_rate("QAR", "EUR") - 0.2747 / 1.12) < 1e-9
+        assert abs(data.fx_rate("EUR", "QAR") - 1.12 / 0.2747) < 1e-9
+
+        # A past date: the peg, over the euro on that date. The direct QAR/EUR history here is wrong on purpose
+        eur = history_of([1.0855, 1.12])
+        gbp = history_of([1.27, 1.34])
+        wrong = history_of([0.2625, 0.2453])
+        with _FakeMarket({"EURUSD=X": eur, "GBPUSD=X": gbp, "QAREUR=X": wrong}):
+            assert abs(data.fx_on("QAR", "EUR", "2024-06-03") - 0.2747 / 1.0855) < 1e-9
+            assert abs(data.fx_on("GBp", "EUR", "2024-06-03") - 1.27 / 1.0855 / 100) < 1e-9
+            assert abs(data.fx_on("EUR", "USD", "2024-06-03") - 1.0855) < 1e-9
+            assert data.fx_on("HKD", "EUR", "2024-06-03") is None  # one leg missing means no rate
+    finally:
+        data.DEMO = real_demo
+        db.cache_clear()
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data
