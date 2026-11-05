@@ -95,7 +95,7 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 
 /* keep Score and Stance on screen: real names and sectors are long */
 #scrTable th, #scrTable td { padding-left: 6px; padding-right: 6px; }
-#scrTable td .sub { max-width: 110px; }
+#scrTable td .sub { max-width: 106px; }
 #scrTable .clip { display: block; max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
 
 .alertbar { border: 1px solid var(--down); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
@@ -129,6 +129,7 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 .factor .fh span:last-child { font-family: var(--mono); }
 .factor .parts { display: none; margin: 6px 0 0 6px; font-size: 12px; }
 .factor.open .parts { display: block; }
+.factor .parts small { display: block; font-size: 10px; opacity: .75; }
 .factor .parts div { display: grid; grid-template-columns: 1fr 80px 70px; gap: 8px; padding: 2px 0; color: var(--muted); }
 .factor .parts div span:nth-child(n+2) { text-align: right; font-family: var(--mono); color: var(--text); }
 .signals, .digest, .news { list-style: none; padding: 0; margin: 0; }

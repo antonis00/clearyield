@@ -39,7 +39,7 @@ Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn o
 
 ## How the scores work
 
-Each asset gets five factor scores from 0 to 100. Every metric maps linearly between a "bad" and a "good" threshold, and the factor score is the average of its available metrics.
+Each asset gets five factor scores from 0 to 100. Every metric maps linearly between a "bad" and a "good" threshold, and the factor score is the average of its available metrics. Research lists every metric with the values that score 0 and 100, including those with no usable data.
 
 - **Value:** P/E, forward P/E, P/B, EV/EBITDA, FCF yield
 - **Quality:** ROE, operating and net margin, debt/equity, current ratio

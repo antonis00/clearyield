@@ -185,7 +185,11 @@ function renderHeader(s) {
   $("#rScore").textContent = num(sc, 0);
   $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, #243042 0)`;
   $("#rScore").style.boxShadow = `inset 0 0 0 7px ${C("--panel")}`;
-  $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (balanced)</div>`;
+  const w = state.meta.settings.weights;
+  const basis = i.assetClass !== "Stocks" ? "trend & risk only"
+    : Object.values(w).every((v) => Math.abs(v - 0.2) < 0.005) ? "balanced"
+    : Object.entries(w).map(([k, v]) => `${k[0].toUpperCase()} ${Math.round(v * 100)}`).join(" · ");
+  $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})</div>`;
   $("#btnWatch").textContent = s.watched ? "✓ Watching" : "+ Watchlist";
 }
 function lwChart(el, height) {
@@ -233,6 +237,10 @@ function renderPrice(s) {
 $$("#periodSeg button").forEach((b) => b.onclick = () => { $$("#periodSeg button").forEach((x) => x.classList.toggle("on", x === b)); state.period = b.dataset.p; openStock(state.ticker); });
 ["#tSma", "#tBb", "#tVol"].forEach((id) => $(id).onchange = () => state.stock && renderPrice(state.stock));
 
+function fmtBound(v, fmt) {
+  if (fmt === "pct") return `${+(v * 100).toFixed(1)}%`;
+  return fmt === "x" ? `${v}x` : `${v}`;
+}
 function fmtPart(p) {
   if (p.fmt === "loss") return "loss";
   if (p.fmt === "pct") return pct(p.value, 1, false);
@@ -241,14 +249,14 @@ function fmtPart(p) {
 }
 function renderFactors(s) {
   const f = s.scores.factors, names = ["value", "quality", "growth", "momentum", "risk"];
-  $("#rCoverage").textContent = `Data coverage ${Math.round(s.scores.coverage * 100)}%`;
+  $("#rCoverage").textContent = `Data coverage ${Math.round(s.scores.coverage * 100)}% (${s.scores.metricsScored} of ${s.scores.metricsTotal} metrics)`;
   mkChart("radar", {
     type: "radar",
-    data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n] ?? 0), backgroundColor: "#f2b84b33", borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
+    data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: "#f2b84b33", borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: "#243042" }, angleLines: { color: "#243042" }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
   $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "n/a"}</span></div>${bar(f[n])}
-    <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}</span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}">${num(p.score, 0)}</span></div>`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
+    <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}">${isNum(p.score) ? num(p.score, 0) : "n/a"}</span></div>`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
   $$(".factor .fh").forEach((h) => h.onclick = () => h.parentElement.classList.toggle("open"));
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
 }

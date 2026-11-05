@@ -252,7 +252,7 @@ def test_fx_failure_never_guesses_a_rate():
         assert hk["statementFx"] is None
         import pandas as pd
         close = pd.Series(1.0, index=pd.bdate_range("2024-01-01", periods=300))
-        assert not [p for p in scoring.factor_breakdown(hk, close)["value"] if p["label"] == "FCF yield"]
+        assert [p for p in scoring.factor_breakdown(hk, close)["value"] if p["label"] == "FCF yield"][0]["score"] is None
         assert "error" in insights.dcf(hk)
         # A position in that currency is reported as a problem, not valued at 1:1
         db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('0700.HK', 100, 300)")
@@ -394,6 +394,54 @@ def test_screener_ranks_each_asset_class_separately():
         mixed = c.post("/api/screener", json={"markets": ["US", "ETFs"], "filters": {"sort": "divYield"}}).json()["rows"]
         yields = [r["divYield"] or 0 for r in mixed]
         assert yields == sorted(yields, reverse=True)
+
+
+def test_every_score_shows_its_thresholds():
+    """Hand-calculated: every metric is listed with the values that score 0 and 100, even when it is missing."""
+    import pandas as pd
+
+    from backend import scoring
+    assert scoring.lin(25, 40, 10) == 50.0 and scoring.lin(5, 40, 10) == 100.0 and scoring.lin(50, 40, 10) == 0.0
+    assert scoring.lin(0.15, 0, 0.30) == 50.0 and scoring.lin(None, 0, 1) is None
+
+    close = pd.Series([100.0 * 1.0005 ** i for i in range(400)], index=pd.bdate_range("2024-01-01", periods=400))
+    info = {"assetClass": "Stocks", "trailingPE": 25.0, "forwardPE": -5.0, "priceToBook": -3.0, "returnOnEquity": 0.15, "profitMargins": 0.05}
+    bd = scoring.factor_breakdown(info, close)
+    assert sum(len(v) for v in bd.values()) == 19
+    by_label = {p["label"]: p for parts in bd.values() for p in parts}
+    pe = by_label["P/E (trailing)"]
+    assert (pe["value"], pe["score"], pe["bad"], pe["good"]) == (25.0, 50.0, 40, 10)
+    # A negative multiple means nothing: it is listed, with the figure, but isn't scored
+    assert by_label["Forward P/E"]["score"] is None and by_label["Forward P/E"]["value"] == -5.0
+    assert by_label["Price / Book"]["score"] is None
+    # Missing data is listed too
+    assert by_label["Debt / Equity"]["score"] is None and by_label["Debt / Equity"]["value"] is None
+    assert by_label["Return on equity"]["score"] == 50.0
+
+    # A loss scores 0 on trailing P/E rather than being skipped
+    loss = scoring.factor_breakdown({"assetClass": "Stocks", "profitMargins": -0.1}, close)["value"][0]
+    assert loss["fmt"] == "loss" and loss["score"] == 0.0
+
+    # Coverage counts real metrics: 19 for stocks, 5 for everything else
+    ev = scoring.evaluate(info, close)
+    assert ev["metricsTotal"] == 19 and ev["metricsScored"] == sum(p["score"] is not None for p in by_label.values())
+    assert ev["coverage"] == round(ev["metricsScored"] / 19, 2)
+    etf = scoring.evaluate({"assetClass": "ETFs"}, close)
+    assert etf["metricsTotal"] == 5 and etf["metricsScored"] == 5 and etf["coverage"] == 1.0
+    assert etf["factors"]["value"] is None
+
+    # The composite is the weighted average of the factors that have data
+    f = etf["factors"]
+    assert abs(etf["composite"] - (f["momentum"] + f["risk"]) / 2) < 0.06  # factors are already rounded to 0.1
+    tilted = scoring.evaluate({"assetClass": "ETFs"}, close, {"value": 0, "quality": 0, "growth": 0, "momentum": 0.75, "risk": 0.25})
+    assert abs(tilted["composite"] - (f["momentum"] * 0.75 + f["risk"] * 0.25)) < 0.06
+    assert abs(tilted["composite"] - etf["composite"]) > 1  # the weights really do move it
+
+
+def test_stance_bands():
+    from backend.scoring import stance
+    cases = {70: "Strong", 69.9: "Favorable", 58: "Favorable", 57.9: "Neutral", 45: "Neutral", 44.9: "Caution", 35: "Caution", 34.9: "Weak"}
+    assert all(stance(k) == v for k, v in cases.items()) and stance(None) == "Insufficient data"
 
 
 def test_minor_unit_currencies():

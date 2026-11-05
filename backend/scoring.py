@@ -16,13 +16,14 @@ def lin(x, bad, good):
     return round(max(0.0, min(1.0, t)) * 100, 1)
 
 
-def _part(parts, label, value, score, fmt="num"):
-    if score is not None:
-        parts.append({"label": label, "value": value, "score": score, "fmt": fmt})
+def _part(parts, label, value, bad, good, fmt="num", usable=True):
+    """List a metric with the values that score 0 and 100. Missing or meaningless figures are listed but not scored."""
+    score = lin(value, bad, good) if usable else None
+    parts.append({"label": label, "value": value, "score": score, "fmt": fmt, "bad": bad, "good": good})
 
 
 def _avg(parts):
-    vals = [p["score"] for p in parts]
+    vals = [p["score"] for p in parts if p["score"] is not None]
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
@@ -34,52 +35,44 @@ def factor_breakdown(info, close):
     # --- value
     if is_equity:
         pe = g("trailingPE")
-        if pe is not None and pe > 0:
-            _part(f["value"], "P/E (trailing)", pe, lin(pe, 40, 10))
-        elif (g("profitMargins") or 0) < 0:
-            _part(f["value"], "P/E (trailing)", None, 0.0, "loss")
-        _part(f["value"], "Forward P/E", g("forwardPE"), lin(g("forwardPE"), 35, 10) if (g("forwardPE") or 0) > 0 else None)
-        _part(f["value"], "Price / Book", g("priceToBook"), lin(g("priceToBook"), 8, 1) if (g("priceToBook") or 0) > 0 else None)
-        _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), lin(g("enterpriseToEbitda"), 25, 6) if (g("enterpriseToEbitda") or 0) > 0 else None)
+        if (pe is None or pe <= 0) and (g("profitMargins") or 0) < 0:
+            f["value"].append({"label": "P/E (trailing)", "value": None, "score": 0.0, "fmt": "loss", "bad": 40, "good": 10})
+        else:
+            _part(f["value"], "P/E (trailing)", pe, 40, 10, usable=(pe or 0) > 0)
+        _part(f["value"], "Forward P/E", g("forwardPE"), 35, 10, usable=(g("forwardPE") or 0) > 0)
+        _part(f["value"], "Price / Book", g("priceToBook"), 8, 1, usable=(g("priceToBook") or 0) > 0)
+        _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), 25, 6, usable=(g("enterpriseToEbitda") or 0) > 0)
         fcf, mc, fx = g("freeCashflow"), g("marketCap"), g("statementFx", 1.0)
-        if fcf is not None and mc and fx:
-            fy = fcf * fx / mc  # FCF is in the statement currency, market cap is not
-            _part(f["value"], "FCF yield", fy, lin(fy, 0, 0.08), "pct")
+        # FCF is in the statement currency, market cap is not
+        _part(f["value"], "FCF yield", fcf * fx / mc if fcf is not None and mc and fx else None, 0, 0.08, "pct")
         # --- quality
-        _part(f["quality"], "Return on equity", g("returnOnEquity"), lin(g("returnOnEquity"), 0, 0.30), "pct")
-        _part(f["quality"], "Operating margin", g("operatingMargins"), lin(g("operatingMargins"), 0, 0.30), "pct")
-        _part(f["quality"], "Net margin", g("profitMargins"), lin(g("profitMargins"), 0, 0.25), "pct")
-        _part(f["quality"], "Debt / Equity", g("debtToEquity"), lin(g("debtToEquity"), 2.0, 0.2), "x")
-        _part(f["quality"], "Current ratio", g("currentRatio"), lin(g("currentRatio"), 0.8, 2.0), "x")
+        _part(f["quality"], "Return on equity", g("returnOnEquity"), 0, 0.30, "pct")
+        _part(f["quality"], "Operating margin", g("operatingMargins"), 0, 0.30, "pct")
+        _part(f["quality"], "Net margin", g("profitMargins"), 0, 0.25, "pct")
+        _part(f["quality"], "Debt / Equity", g("debtToEquity"), 2.0, 0.2, "x")
+        _part(f["quality"], "Current ratio", g("currentRatio"), 0.8, 2.0, "x")
         # --- growth
-        _part(f["growth"], "Revenue growth (YoY)", g("revenueGrowth"), lin(g("revenueGrowth"), -0.05, 0.25), "pct")
-        _part(f["growth"], "Earnings growth (YoY)", g("earningsGrowth"), lin(g("earningsGrowth"), -0.10, 0.30), "pct")
+        _part(f["growth"], "Revenue growth (YoY)", g("revenueGrowth"), -0.05, 0.25, "pct")
+        _part(f["growth"], "Earnings growth (YoY)", g("earningsGrowth"), -0.10, 0.30, "pct")
         fe, te = g("forwardEps"), g("trailingEps")
-        if fe is not None and te and te > 0:
-            eg = fe / te - 1
-            _part(f["growth"], "Forward EPS vs trailing", eg, lin(eg, -0.05, 0.25), "pct")
+        _part(f["growth"], "Forward EPS vs trailing", fe / te - 1 if fe is not None and te and te > 0 else None, -0.05, 0.25, "pct")
 
     # --- momentum (all assets)
     r12 = ind.ret_over(close, 252)
     r1 = ind.ret_over(close, 21)
-    if r12 is not None and r1 is not None:
-        r12_1 = (1 + r12) / (1 + r1) - 1
-        _part(f["momentum"], "12-1 month return", r12_1, lin(r12_1, -0.20, 0.40), "pct")
+    _part(f["momentum"], "12-1 month return", (1 + r12) / (1 + r1) - 1 if r12 is not None and r1 is not None else None, -0.20, 0.40, "pct")
     sma200 = ind.sma(close, 200)
-    if len(close) >= 200 and sma200.iloc[-1] == sma200.iloc[-1]:
-        gap = float(close.iloc[-1] / sma200.iloc[-1] - 1)
-        _part(f["momentum"], "Price vs 200-day avg", gap, lin(gap, -0.15, 0.15), "pct")
-    r3 = ind.ret_over(close, 63)
-    _part(f["momentum"], "3-month return", r3, lin(r3, -0.15, 0.20), "pct")
+    has_sma = len(close) >= 200 and sma200.iloc[-1] == sma200.iloc[-1]
+    _part(f["momentum"], "Price vs 200-day avg", float(close.iloc[-1] / sma200.iloc[-1] - 1) if has_sma else None, -0.15, 0.15, "pct")
+    _part(f["momentum"], "3-month return", ind.ret_over(close, 63), -0.15, 0.20, "pct")
 
     # --- risk (higher score = calmer)
     vol = ind.volatility(close)
     crypto = info.get("assetClass") == "Crypto"
-    _part(f["risk"], "Volatility (1y, ann.)", vol, lin(vol, 0.9 if crypto else 0.6, 0.35 if crypto else 0.15), "pct")
-    dd = ind.max_drawdown(ind.window(close, 252))
-    _part(f["risk"], "Max drawdown (1y)", dd, lin(dd, -0.6 if crypto else -0.5, -0.15 if crypto else -0.08), "pct")
-    if is_equity and g("beta") is not None:
-        _part(f["risk"], "Beta", g("beta"), lin(g("beta"), 2.0, 0.6), "x")
+    _part(f["risk"], "Volatility (1y, ann.)", vol, 0.9 if crypto else 0.6, 0.35 if crypto else 0.15, "pct")
+    _part(f["risk"], "Max drawdown (1y)", ind.max_drawdown(ind.window(close, 252)), -0.6 if crypto else -0.5, -0.15 if crypto else -0.08, "pct")
+    if is_equity:
+        _part(f["risk"], "Beta", g("beta"), 2.0, 0.6, "x")
     return f
 
 
@@ -104,11 +97,11 @@ def evaluate(info, close, weights=None):
     used = {k: weights.get(k, 0) for k, s in scores.items() if s is not None and weights.get(k, 0) > 0}
     total_w = sum(used.values())
     composite = round(sum(scores[k] * w for k, w in used.items()) / total_w, 1) if total_w else None
-    n_parts = sum(len(v) for v in bd.values())
-    expected = 17 if info.get("assetClass") == "Stocks" else 5
+    parts = [p for v in bd.values() for p in v]
+    scored = sum(p["score"] is not None for p in parts)
     return {
         "composite": composite, "stance": stance(composite), "factors": scores, "breakdown": bd,
-        "coverage": round(min(1.0, n_parts / expected), 2), "signals": signals(info, close),
+        "coverage": round(scored / len(parts), 2), "metricsScored": scored, "metricsTotal": len(parts), "signals": signals(info, close),
     }
 
 
