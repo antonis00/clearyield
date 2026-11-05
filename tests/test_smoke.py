@@ -333,6 +333,28 @@ def test_holding_date_is_validated():
         assert c.post("/api/holdings", json={"ticker": "AAPL", "shares": 1, "cost": 1, "bought": "2025-01-02"}).status_code == 200
 
 
+def test_failed_position_marks_the_portfolio_incomplete():
+    """Advice based on totals that leave out a holding is wrong, so it must be withheld and the gap stated."""
+    from backend import db, portfolio
+    _reset()
+    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('AAA', 30, 100), ('SPY', 1, 100)")
+    up = _steps([0.0] * 300)
+    etf = {"SPY": {"assetClass": "ETFs", "sector": "ETFs"}}
+
+    with _FakeMarket({"AAA": up, "SPY": up}, etf):
+        full = portfolio.summary(db.get_settings())
+    assert full["incomplete"] is False and full["missing"] == [] and full["rebalance"]
+    assert any(w.startswith("AAA is") for w in full["warnings"])  # a real concentration warning
+
+    with _FakeMarket({"AAA": None, "SPY": up}, etf):
+        part = portfolio.summary(db.get_settings())
+    assert part["incomplete"] is True and part["missing"] == ["AAA"]
+    assert part["rebalance"] == []
+    # SPY would read as 100% of the portfolio, so weight-based warnings are withheld too
+    assert not any("%" in w for w in part["warnings"])
+    assert any("AAA" in e for e in part["errors"])
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

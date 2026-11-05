@@ -41,6 +41,7 @@ const badge = (st) => `<span class="badge b-${(st || "Insufficient").split(" ")[
 const scoreColor = (s) => (!isNum(s) ? C("--muted") : s >= 70 ? C("--up") : s >= 58 ? C("--accent2") : s >= 45 ? C("--neutral") : s >= 35 ? C("--accent") : C("--down"));
 const bar = (s) => `<div class="bar"><i style="width:${isNum(s) ? s : 0}%;background:${scoreColor(s)}"></i></div>`;
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), ms); }
+const missingNote = (p) => `<b>Incomplete:</b> no current data for ${esc(p.missing.join(", "))}, so these totals leave ${p.missing.length > 1 ? "them" : "it"} out and weights and rebalancing are withheld. Check the symbol, or try again later.`;
 const loading = (el, msg = "Loading…") => { el.innerHTML = `<div class="muted"><span class="spinner"></span>${msg}</div>`; };
 function mkChart(id, cfg) { state.charts[id]?.destroy(); const ctx = document.getElementById(id); state.charts[id] = new Chart(ctx, cfg); return state.charts[id]; }
 
@@ -116,6 +117,8 @@ async function loadDashboard() {
   }).catch((e) => strip.innerHTML = `<div class="muted">${esc(e.message)}</div>`);
 
   api("/api/portfolio").then((p) => {
+    $("#dashIncomplete").classList.toggle("hidden", !p.incomplete);
+    if (p.incomplete) $("#dashIncomplete").innerHTML = missingNote(p);
     $("#dashPortfolio").innerHTML = p.positions.length ? [
       ["Value", money(p.total, p.base, 0), ""], ["Today", money(p.dayPnl, p.base, 0), cls(p.dayPnl)],
       ["Total P&L", money(p.pnl, p.base, 0), `${cls(p.pnl)}`, pct(p.pnlPct)], ["Est. income / yr", money(p.annualIncome, p.base, 0), ""],
@@ -372,6 +375,8 @@ async function loadPortfolio() {
   let p;
   try { p = await api("/api/portfolio"); } catch (e) { t.innerHTML = esc(e.message); return; }
   const b = p.base;
+  $("#pfIncomplete").classList.toggle("hidden", !p.incomplete);
+  if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
   $("#pfKpis").innerHTML = [
     ["Total value", money(p.total, b, 0)], ["Invested", money(p.cost, b, 0)], ["Unrealised P&L", `<span class="${cls(p.pnl)}">${money(p.pnl, b, 0)}</span>`, pct(p.pnlPct)],
     ["Today", `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`], ["Est. dividend income / yr", money(p.annualIncome, b, 0)], ["Positions", p.positions.length],
@@ -408,7 +413,7 @@ async function loadPortfolio() {
     { k: "assetClass", label: "Asset class" }, { k: "target", label: "Target", num: 1, fmt: (v) => pct(v, 1, false) }, { k: "actual", label: "Actual", num: 1, fmt: (v) => pct(v, 1, false) },
     { k: "drift", label: "Drift", num: 1, fmt: (v) => cpct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
     { k: "trade", label: `Amount (${b})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
-  ], p.rebalance, { empty: "Add holdings to see rebalancing suggestions." });
+  ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
 }
 $("#btnAddHolding").onclick = async () => {
   try {

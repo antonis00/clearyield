@@ -40,7 +40,7 @@ def summary(settings):
     base = settings.get("base_currency", "USD")
     rf = settings.get("risk_free_rate", 0.04)
     bench_t = settings.get("benchmark", "SPY")
-    rows, series, errors = [], {}, []
+    rows, series, errors, missing = [], {}, [], []
     for t, p in positions().items():
         if p["shares"] <= 0:
             continue
@@ -51,6 +51,7 @@ def summary(settings):
             fx = data.fx_rate(cur, base)
         except data.DataError as e:
             errors.append(f"{t}: {e}")
+            missing.append(t)
             continue
         close = h["Close"]
         price, prev = float(close.iloc[-1]), float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
@@ -107,21 +108,23 @@ def summary(settings):
     for r in rows:
         if r["fxApprox"]:
             warnings.append(f"{r['ticker']} has a lot with no purchase date or no exchange rate for that date. Its cost uses today's rate, so its P&L leaves out currency moves on that lot.")
+    # Weights are meaningless while a holding is missing from the total, so nothing is advised on them
+    incomplete = bool(missing)
     for r in rows:
-        if r["weight"] > 0.20:
+        if r["weight"] > 0.20 and not incomplete:
             warnings.append(f"{r['ticker']} is {r['weight']:.0%} of the portfolio - single-position concentration above 20%.")
     for k, label in (("sector", "sector"), ("region", "region"), ("currency", "currency")):
         for name, v in allocation[k].items():
-            if total and v / total > (0.40 if k == "sector" else 0.80) and len(rows) > 2:
+            if total and v / total > (0.40 if k == "sector" else 0.80) and len(rows) > 2 and not incomplete:
                 warnings.append(f"{v / total:.0%} of value is in one {label} ({name}).")
-    if 0 < len(rows) < 5:
+    if 0 < len(rows) < 5 and not incomplete:
         warnings.append(f"Only {len(rows)} positions - diversification is limited.")
     if risk.get("maxDrawdown") is not None and risk["maxDrawdown"] < -0.25:
         warnings.append(f"Portfolio fell {abs(risk['maxDrawdown']):.0%} from peak in the past year (current holdings).")
 
     targets = settings.get("targets", {})
     rebalance = []
-    if total and targets:
+    if total and targets and not incomplete:
         tsum = sum(targets.values()) or 1
         classes = set(targets) | set(allocation["assetClass"])
         for c in sorted(classes):
@@ -137,5 +140,6 @@ def summary(settings):
         "pnl": total - total_cost, "pnlPct": (total / total_cost - 1) if total_cost else None,
         "dayPnl": sum(r["dayPnl"] for r in rows), "allocation": allocation, "performance": perf, "risk": risk,
         "warnings": warnings, "rebalance": rebalance, "annualIncome": income, "errors": errors,
+        "incomplete": incomplete, "missing": missing,
         "note": "The performance chart uses current holdings over the past year and today's FX rates (approximation). Cost and P&L use the FX rate on each lot's purchase date.",
     }
