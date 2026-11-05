@@ -301,7 +301,7 @@ def fx_on(currency, base, date):
     major, divisor = MINOR_UNITS.get(currency, (currency, 1.0))
     if major == base:
         return 1.0 / divisor
-    if DEMO:
+    if DEMO or fx_is_fixed(currency, base):  # a peg needs no history, and Yahoo's can be off by several percent
         return fx_rate(currency, base)
     for sym, invert in ((f"{major}{base}=X", False), (f"{base}{major}=X", True)):
         try:

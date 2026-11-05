@@ -297,7 +297,7 @@ def test_cost_uses_the_exchange_rate_on_the_purchase_date():
 
 
 def test_fx_on_reads_the_history():
-    from backend import data
+    from backend import data, db
     import pandas as pd
     eur = pd.Series([1.00, 1.05, 1.08], index=pd.to_datetime(["2025-01-02", "2025-01-03", "2026-01-05"]))
     usd_inverse = pd.Series([3.64, 3.64], index=pd.to_datetime(["2025-01-02", "2026-01-05"]))
@@ -312,6 +312,11 @@ def test_fx_on_reads_the_history():
             assert abs(data.fx_on("XYZ", "USD", "2025-01-02") - 1 / 3.64) < 1e-9  # only the inverse pair exists
             assert data.fx_on("GBp", "GBP", "2025-01-02") == 0.01  # no pair needed
             assert data.fx_on("HKD", "USD", "2025-01-02") is None  # no data
+            # Yahoo's history for pegged pairs can be off: QAR/USD on 2025-01-02 reads 0.2856, the peg is 0.2747
+            with_glitch = pd.Series([0.2856], index=pd.to_datetime(["2025-01-02"]))
+            db.cache_set("fx:QARUSD", 0.2747)
+            with _FakeMarket({"QARUSD=X": with_glitch}):
+                assert data.fx_on("QAR", "USD", "2025-01-02") == 0.2747
     finally:
         data.DEMO = real_demo
 
