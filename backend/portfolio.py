@@ -18,6 +18,16 @@ def positions():
     return agg
 
 
+def _value_index(series):
+    """Daily index of the portfolio, starting at 1. Each day uses only positions priced on both that day and
+    the one before, so a position with a short history joins when it starts rather than cutting the rest."""
+    values = pd.concat(series, axis=1).sort_index().ffill()
+    previous = values.shift(1)
+    live = previous.notna() & values.notna()
+    returns = (values.where(live).sum(axis=1) / previous.where(live).sum(axis=1) - 1).fillna(0)
+    return (1 + returns).cumprod()
+
+
 def summary(settings):
     base = settings.get("base_currency", "USD")
     rf = settings.get("risk_free_rate", 0.04)
@@ -63,7 +73,7 @@ def summary(settings):
 
     perf, risk = None, {}
     if series:
-        pv = pd.concat(series.values(), axis=1).sort_index().ffill().dropna().sum(axis=1)
+        pv = _value_index(series)
         try:
             bench = data.history(bench_t, "1y")["Close"].reindex(pv.index).ffill()
         except data.DataError:
@@ -79,6 +89,11 @@ def summary(settings):
                      "maxDrawdown": ind.max_drawdown(pv), "sharpe": ind.sharpe(pv, rf), "sortino": ind.sortino(pv, rf)})
 
     warnings = []
+    if series:
+        earliest = min(s.index[0] for s in series.values())
+        for t, s in series.items():
+            if (s.index[0] - earliest).days > 30:
+                warnings.append(f"{t} only has price history since {s.index[0]:%Y-%m-%d}, so it counts in the risk figures from then on.")
     for r in rows:
         if r["weight"] > 0.20:
             warnings.append(f"{r['ticker']} is {r['weight']:.0%} of the portfolio - single-position concentration above 20%.")

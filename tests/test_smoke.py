@@ -151,6 +151,64 @@ def _reset():
         db.x(f"DELETE FROM {table}")
 
 
+class _FakeMarket:
+    """Replace Yahoo with fixed closes. `prices`: ticker -> Series, or None to make that ticker fail."""
+
+    def __init__(self, prices, infos=None):
+        self.prices, self.infos = prices, infos or {}
+
+    def __enter__(self):
+        from backend import data
+        self.real = data.history, data.info
+
+        def history(t, period="5y"):
+            s = self.prices.get(t)
+            if s is None:
+                raise data.DataError(f"No price data for {t}")
+            return data.slice_period(s.to_frame("Close").assign(High=s, Low=s, Open=s, Volume=1.0), period)
+
+        def info(t):
+            return {"name": t, "currency": "USD", "assetClass": "Stocks", "region": "US", "sector": "Tech", **self.infos.get(t, {})}
+        data.history, data.info = history, info
+
+    def __exit__(self, *exc):
+        from backend import data
+        data.history, data.info = self.real
+
+
+def _steps(returns, end="2026-06-01"):
+    """A price series starting at 100 with the given daily returns, ending on `end`."""
+    import pandas as pd
+    px = [100.0]
+    for r in returns:
+        px.append(px[-1] * (1 + r))
+    return pd.Series(px, index=pd.bdate_range(end=end, periods=len(px)))
+
+
+def test_new_position_keeps_the_portfolio_history():
+    """A position bought into recently must not cut the stats of everything else down to its history."""
+    from backend import db, portfolio
+    _reset()
+    old = _steps([0.002, -0.001] * 130)
+    new = _steps([0.01, -0.01] * 10)
+    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('OLD', 100, 100)")
+    with _FakeMarket({"OLD": old, "SPY": old}):
+        alone = portfolio.summary(db.get_settings())
+    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('NEW', 0.001, 100)")  # about 0.001% of the value
+    with _FakeMarket({"OLD": old, "NEW": new, "SPY": old}):
+        both = portfolio.summary(db.get_settings())
+    assert len(both["performance"]["dates"]) == len(alone["performance"]["dates"]) == 261
+    assert abs(both["risk"]["return1y"] - alone["risk"]["return1y"]) < 0.001
+    assert both["risk"]["volatility"] is not None and both["risk"]["sharpe"] is not None
+    assert any("NEW" in w and "history since" in w for w in both["warnings"])
+    assert not any("history since" in w for w in alone["warnings"])
+    # Joining the portfolio must not itself look like a gain: a new position adds value, not return
+    db.x("UPDATE holdings SET shares = 100 WHERE ticker = 'NEW'")
+    with _FakeMarket({"OLD": old, "NEW": new, "SPY": old}):
+        half = portfolio.summary(db.get_settings())
+    assert abs(half["risk"]["return1y"]) < 0.5
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data
