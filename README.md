@@ -1,25 +1,35 @@
 # StockPilot
 
-A personal, self-hosted investing dashboard: live prices, charts, transparent factor scores, a screener, portfolio analytics, backtesting, a decision journal and alerts, covering US, European and Gulf stocks, ETFs and crypto.
+A personal investing dashboard that runs on your own computer: live prices, charts, explainable scores, a screener, a transaction ledger with real performance, backtesting, a decision journal and alerts. It covers US, European and Gulf stocks, ETFs and crypto, using Yahoo Finance data.
 
-> **Decision support, not financial advice.** Scores and signals summarise data; they do not predict prices. Use them to structure your own thinking.
+> **Decision support, not financial advice.** Scores and signals summarise data; they do not predict prices. StockPilot never places trades. Use it to structure your own thinking.
+
+- **Every score explains itself.** Each one traces back to named metrics, with the values that score 0 and 100 shown on the page.
+- **Your data stays with you.** It runs on your machine in a single SQLite file, with no account and no login, and only answers on localhost.
+- **It judges your decisions.** Journal a decision, and the scorecard later shows how it did against the benchmark.
+- **Nothing to build.** It's a FastAPI backend and a plain JavaScript page, with the chart libraries included.
 
 ## Quick start
 
 Requires Python 3.10+.
 
 ```bash
-./run.sh            # macOS / Linux  -> http://localhost:8001
+git clone https://github.com/antonis00/stockpilot.git
+cd stockpilot
+./run.sh            # macOS / Linux
 run.bat             # Windows
-./run.sh --demo     # synthetic offline data, to try the UI without internet
 ```
+
+Then open http://localhost:8001. The first run installs the dependencies.
+
+To try it with made-up data and no internet, use `./run.sh --demo` or `run.bat --demo`.
 
 Or manually:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn backend.main:app --reload --port 8001
+uvicorn backend.main:app --port 8001
 ```
 
 Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn on AI-written research briefs and smarter plain-language screening. Without a key, the app uses a rule-based brief and a keyword parser.
@@ -31,11 +41,11 @@ Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn o
 | **Dashboard** | Macro strip (S&P 500, Nasdaq, Euro Stoxx, Tadawul, VIX, 10Y yield, gold, oil, BTC, EUR/USD, DXY), portfolio snapshot, daily digest, watchlist with scores |
 | **Research** | Candlestick chart with SMA 50/200, Bollinger bands, volume, RSI and MACD; factor radar with drill-down to every metric; plain-language signals; key stats; 4-year fundamentals; DCF calculator with the growth today's price assumes and a sensitivity grid; next earnings and ex-dividend dates; news with headline sentiment; AI or rule-based bull/bear brief; pre-trade check showing how a purchase would change your weights, warnings and beta, how it moves with your holdings, and a position size from your stop and risk |
 | **Compare** | Growth-of-100 chart, metrics table and return-correlation matrix for up to 8 assets |
-| **Screener** | ~100-ticker universe across 5 markets; numeric filters or a plain-language query ("cheap profitable dividend stocks in the Gulf") |
+| **Screener** | 95-ticker universe across 5 markets; numeric filters or a plain-language query ("cheap profitable dividend stocks in the Gulf") |
 | **Portfolio** | Ledger of buys, sales and dividends, matched first in, first out. Multi-currency holdings converted to your base currency, unrealised and realised P&L at the FX rate on each date, annual return (XIRR), your actual performance vs benchmark over the past year, volatility/Sharpe/Sortino/beta/drawdown, allocation by asset class/region/sector/currency, concentration warnings, rebalancing vs target allocation, estimated dividend income |
-| **Backtest** | Buy & hold, MA crossover, RSI mean reversion, absolute momentum and monthly DCA, with next-bar execution and trading costs |
+| **Backtest** | Buy & hold, MA crossover, RSI mean reversion, absolute momentum and monthly DCA, with trades filled at the next day's open and trading costs |
 | **Journal & Alerts** | Record thesis, invalidation condition, stop/target and review date for every decision, with a scorecard of how your buy and add decisions did against the benchmark, overall and by the stance when recorded; alerts on price, daily move, RSI or score, shown in the tab title and as optional browser notifications while the page is open. Both feed the digest |
-| **Settings** | Factor weights (balanced by default), base currency, risk-free rate, benchmark, target allocation |
+| **Settings** | Factor weights (balanced by default), base currency, risk-free rate, benchmark, target allocation, backup and restore |
 
 ## How the scores work
 
@@ -67,14 +77,25 @@ Edit `backend/universe.py` to change the screener universe.
 - Data comes from Yahoo Finance via `yfinance`. It is free, unofficial and occasionally delayed or incomplete, especially for Gulf fundamentals. Responses are cached in `data/stockpilot.db`. Use **Settings → Clear data cache** to force fresh data.
 - The performance chart follows your actual transactions and each day's FX rate over the past year. Risk figures instead apply today's holdings to the past year, because they describe what you own now.
 - Yahoo data is for personal use. Check the terms before sharing or redistributing data from the app.
-- Run the offline test suite with: `python tests/test_smoke.py`
-- Run every check with: `python tests/run_all.py`. It adds a browser walk through every screen in demo mode and with live data, plus a comparison with raw Yahoo figures. It needs Chrome, internet and Node, once you've run `npm install` in `tests/browser`. It uses temporary databases, so your data isn't touched.
+- Sales are matched to your oldest shares first. Check whether that matches the rule that applies to you before using the figures for tax.
+- Dividends are recorded by hand, and fees are included in the price you enter.
+- Your holdings and journal exist only in `data/stockpilot.db`, which git ignores. Use **Settings → Download backup** to keep a copy.
+
+## Tests
+
+```bash
+python tests/test_smoke.py     # offline, on made-up data
+python tests/run_all.py        # everything
+```
+
+`run_all.py` adds a browser walk through every screen, in demo mode and with live data, and a comparison with figures recomputed from raw Yahoo data. It needs Chrome, internet and Node, after running `npm install` in `tests/browser` once. It uses temporary databases, so your data isn't touched.
 
 ## Project layout
 
 ```
 backend/   main.py (API) · data.py (Yahoo + cache + FX + demo) · scoring.py · indicators.py
-           portfolio.py · backtest.py · insights.py (screener, compare, DCF, alerts, digest) · ai.py · db.py · universe.py
+           portfolio.py · ledger.py (transactions) · backtest.py · insights.py (screener, compare, DCF, alerts, digest, scorecard)
+           ai.py · db.py · universe.py
 frontend/  index.html · app.js · styles.css · vendor/ (charting libraries, bundled for offline use)
 tests/     test_smoke.py · check_live.py · run_all.py · browser/ (walk through every screen in Chrome)
 ```
