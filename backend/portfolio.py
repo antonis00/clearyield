@@ -28,6 +28,14 @@ def _value_index(series):
     return (1 + returns).cumprod()
 
 
+def _lot_fx(lot, currency, base, today_fx):
+    """(rate, exact) for a lot's cost: the rate on its purchase date, or today's when that can't be known."""
+    rate = data.fx_on(currency, base, lot["bought"]) if lot["bought"] else None
+    if rate is not None:
+        return rate, True
+    return today_fx, data.fx_is_fixed(currency, base)
+
+
 def summary(settings):
     base = settings.get("base_currency", "USD")
     rf = settings.get("risk_free_rate", 0.04)
@@ -47,7 +55,8 @@ def summary(settings):
         close = h["Close"]
         price, prev = float(close.iloc[-1]), float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
         value = p["shares"] * price * fx
-        cost = p["costTotal"] * fx
+        lot_fx = [_lot_fx(lot, cur, base, fx) for lot in p["lots"]]
+        cost = sum(lot["shares"] * lot["cost"] * rate for lot, (rate, _) in zip(p["lots"], lot_fx))
         rows.append({
             "ticker": t, "name": inf.get("name"), "shares": p["shares"], "avgCost": p["costTotal"] / p["shares"],
             "price": price, "currency": cur, "fx": fx, "value": value, "cost": cost, "pnl": value - cost,
@@ -55,6 +64,7 @@ def summary(settings):
             "dayPct": price / prev - 1 if prev else None, "sector": inf.get("sector") or inf.get("assetClass"),
             "region": inf.get("region"), "assetClass": inf.get("assetClass"),
             "dividendYield": inf.get("dividendYield") or 0, "lots": p["lots"],
+            "fxApprox": not all(exact for _, exact in lot_fx),
         })
         series[t] = close * p["shares"] * fx
 
@@ -95,6 +105,9 @@ def summary(settings):
             if (s.index[0] - earliest).days > 30:
                 warnings.append(f"{t} only has price history since {s.index[0]:%Y-%m-%d}, so it counts in the risk figures from then on.")
     for r in rows:
+        if r["fxApprox"]:
+            warnings.append(f"{r['ticker']} has a lot with no purchase date or no exchange rate for that date. Its cost uses today's rate, so its P&L leaves out currency moves on that lot.")
+    for r in rows:
         if r["weight"] > 0.20:
             warnings.append(f"{r['ticker']} is {r['weight']:.0%} of the portfolio - single-position concentration above 20%.")
     for k, label in (("sector", "sector"), ("region", "region"), ("currency", "currency")):
@@ -124,5 +137,5 @@ def summary(settings):
         "pnl": total - total_cost, "pnlPct": (total / total_cost - 1) if total_cost else None,
         "dayPnl": sum(r["dayPnl"] for r in rows), "allocation": allocation, "performance": perf, "risk": risk,
         "warnings": warnings, "rebalance": rebalance, "annualIncome": income, "errors": errors,
-        "note": "Performance uses current holdings over the past year and today's FX rates (approximation).",
+        "note": "The performance chart uses current holdings over the past year and today's FX rates (approximation). Cost and P&L use the FX rate on each lot's purchase date.",
     }

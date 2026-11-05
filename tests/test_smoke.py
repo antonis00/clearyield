@@ -263,6 +263,71 @@ def test_fx_failure_never_guesses_a_rate():
         data._yf, data.DEMO = real_yf, real_demo
 
 
+def test_cost_uses_the_exchange_rate_on_the_purchase_date():
+    """10 shares of a EUR stock at 100, bought at EUR/USD 1.00, now 1.08, price flat: cost 1,000 and P&L +80."""
+    from backend import data, db, portfolio
+    _reset()
+    flat = _steps([0.0] * 300)
+    real = data.fx_on
+    data.fx_on = lambda currency, base, date: 1.00 if currency == "EUR" else real(currency, base, date)
+    try:
+        db.x("INSERT INTO holdings (ticker, shares, cost, bought) VALUES ('SAP.DE', 10, 100, '2025-01-02')")
+        with _FakeMarket({"SAP.DE": flat}, {"SAP.DE": {"currency": "EUR"}}):
+            p = portfolio.summary(db.get_settings())
+        pos = p["positions"][0]
+        assert abs(pos["value"] - 1080) < 1e-6 and abs(pos["cost"] - 1000) < 1e-6 and abs(pos["pnl"] - 80) < 1e-6
+        assert pos["fxApprox"] is False and not any("exchange rate" in w for w in p["warnings"])
+
+        # Two lots: one dated at 1.00, one with no date, which can only use today's 1.08 and says so
+        db.x("INSERT INTO holdings (ticker, shares, cost, bought) VALUES ('SAP.DE', 10, 100, '')")
+        with _FakeMarket({"SAP.DE": flat}, {"SAP.DE": {"currency": "EUR"}}):
+            p = portfolio.summary(db.get_settings())
+        pos = p["positions"][0]
+        assert abs(pos["cost"] - 2080) < 1e-6 and pos["fxApprox"] is True
+        assert any("SAP.DE" in w and "exchange rate" in w for w in p["warnings"])
+    finally:
+        data.fx_on = real
+
+    # Same currency as the base: an undated lot is exact, so no warning
+    _reset()
+    db.x("INSERT INTO holdings (ticker, shares, cost, bought) VALUES ('AAPL', 10, 100, '')")
+    with _FakeMarket({"AAPL": flat}):
+        p = portfolio.summary(db.get_settings())
+    assert p["positions"][0]["fxApprox"] is False and abs(p["positions"][0]["cost"] - 1000) < 1e-6
+
+
+def test_fx_on_reads_the_history():
+    from backend import data
+    import pandas as pd
+    eur = pd.Series([1.00, 1.05, 1.08], index=pd.to_datetime(["2025-01-02", "2025-01-03", "2026-01-05"]))
+    usd_inverse = pd.Series([3.64, 3.64], index=pd.to_datetime(["2025-01-02", "2026-01-05"]))
+    real_demo = data.DEMO
+    data.DEMO = False
+    try:
+        with _FakeMarket({"EURUSD=X": eur, "GBPUSD=X": eur, "USDXYZ=X": usd_inverse}):
+            assert data.fx_on("EUR", "USD", "2025-01-02") == 1.00
+            assert data.fx_on("EUR", "USD", "2025-06-01") == 1.05  # the last rate at or before that date
+            assert data.fx_on("EUR", "USD", "2020-01-01") is None  # before the history starts
+            assert abs(data.fx_on("GBp", "USD", "2025-01-03") - 0.0105) < 1e-9  # pence
+            assert abs(data.fx_on("XYZ", "USD", "2025-01-02") - 1 / 3.64) < 1e-9  # only the inverse pair exists
+            assert data.fx_on("GBp", "GBP", "2025-01-02") == 0.01  # no pair needed
+            assert data.fx_on("HKD", "USD", "2025-01-02") is None  # no data
+    finally:
+        data.DEMO = real_demo
+
+
+def test_holding_date_is_validated():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        bad = c.post("/api/holdings", json={"ticker": "AAPL", "shares": 1, "cost": 1, "bought": "soon"})
+        assert bad.status_code == 400 and "date" in bad.json()["detail"]
+        assert c.post("/api/holdings", json={"ticker": "AAPL", "shares": 1, "cost": 1, "bought": ""}).status_code == 200
+        assert c.post("/api/holdings", json={"ticker": "AAPL", "shares": 1, "cost": 1, "bought": "2025-01-02"}).status_code == 200
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

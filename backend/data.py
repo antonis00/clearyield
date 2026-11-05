@@ -296,6 +296,31 @@ def fx_rate(currency, base="USD"):
     return rate / divisor
 
 
+def fx_on(currency, base, date):
+    """Units of `base` per 1 unit of `currency` on a past date, or None if Yahoo has no rate that old."""
+    major, divisor = MINOR_UNITS.get(currency, (currency, 1.0))
+    if major == base:
+        return 1.0 / divisor
+    if DEMO:
+        return fx_rate(currency, base)
+    for sym, invert in ((f"{major}{base}=X", False), (f"{base}{major}=X", True)):
+        try:
+            closes = history(sym, "max")["Close"]
+        except DataError:
+            continue
+        closes = closes[closes.index <= pd.Timestamp(date)]
+        if not closes.empty:
+            v = float(closes.iloc[-1])
+            return (1 / v if invert else v) / divisor
+    return None
+
+
+def fx_is_fixed(currency, base):
+    """True when the rate between two currencies doesn't move, so the purchase date doesn't matter."""
+    major = MINOR_UNITS.get(currency, (currency,))[0]
+    return major == base or (major in USD_PEGGED and base in USD_PEGGED)
+
+
 # USD value of one unit. These are approximate: demo mode uses them all, live mode only the pegged ones.
 USD_PEGGED = {"USD", "QAR", "SAR", "AED", "BHD"}
 DEMO_FX = {"USD": 1.0, "EUR": 1.08, "GBP": 1.27, "CHF": 1.13, "DKK": 0.145, "SEK": 0.095, "NOK": 0.093,

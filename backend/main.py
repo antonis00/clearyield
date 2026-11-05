@@ -1,5 +1,6 @@
 """StockPilot API + static frontend.  Run:  uvicorn backend.main:app --reload --port 8001"""
 import asyncio
+import datetime as dt
 import logging
 import math
 import os
@@ -247,6 +248,11 @@ def add_holding(body: dict = Body(...)):
     shares, cost = float(body["shares"]), float(body["cost"])
     if shares <= 0 or cost < 0:
         raise HTTPException(400, "Shares must be positive and cost non-negative.")
+    if body.get("bought"):
+        try:
+            dt.date.fromisoformat(body["bought"])
+        except ValueError:
+            raise HTTPException(400, "Purchase date must look like 2025-01-31.")
     hid = db.x("INSERT INTO holdings (ticker, shares, cost, bought, note) VALUES (?,?,?,?,?)",
                (t, shares, cost, body.get("bought", ""), body.get("note", "")))
     return ok({"id": hid})
