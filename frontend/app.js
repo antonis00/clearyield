@@ -1,7 +1,7 @@
 /* StockPilot frontend — vanilla JS, Lightweight Charts (price) + Chart.js (everything else). */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const state = { meta: null, ticker: null, period: "1y", stock: null, lw: [], charts: {}, lastScreen: null };
+const state = { stockRequest: 0, meta: null, ticker: null, period: "1y", stock: null, lw: [], charts: {}, lastScreen: null };
 
 const CSS = getComputedStyle(document.documentElement);
 const C = (n) => CSS.getPropertyValue(n).trim();
@@ -162,8 +162,10 @@ async function openStock(t, period) {
   $("#researchEmpty").classList.add("hidden");
   const body = $("#researchBody");
   body.classList.remove("hidden"); body.style.opacity = 0.5;
+  const request = ++state.stockRequest; // a slower reply for an earlier stock must not overwrite this one
   try {
     const s = await api(`/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}`);
+    if (request !== state.stockRequest) return;
     state.stock = s; body.style.opacity = 1;
     renderHeader(s); renderPrice(s); renderFactors(s); renderStats(s); renderFin(s);
     $("#briefOut").innerHTML = "Combines scores, price action, fundamentals and headlines into a bull/bear summary.";
@@ -176,6 +178,7 @@ async function openStock(t, period) {
     const g = s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
     runDcf(); loadNews();
   } catch (e) {
+    if (request !== state.stockRequest) return;
     body.style.opacity = 1; body.classList.add("hidden"); $("#researchEmpty").classList.remove("hidden");
     $("#researchEmpty").textContent = e.message;
   }
@@ -293,9 +296,11 @@ function renderFin(s) {
   });
 }
 async function runDcf() {
+  const ticker = state.ticker;
   const out = $("#dcfOut"); const q = new URLSearchParams({ growth: $("#dGrowth").value / 100, years: $("#dYears").value, discount: $("#dDisc").value / 100, terminal: $("#dTerm").value / 100 });
   try {
-    const d = await api(`/api/dcf/${encodeURIComponent(state.ticker)}?${q}`);
+    const d = await api(`/api/dcf/${encodeURIComponent(ticker)}?${q}`);
+    if (ticker !== state.ticker) return;
     if (d.error) { out.innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
     const cur = state.stock.info.currency;
     out.innerHTML = `<div class="dcf-big"><div>${money(d.fairValue, cur)}<small>Fair value / share</small></div><div>${money(d.price, cur)}<small>Price</small></div><div class="${cls(d.marginOfSafety)}">${pct(d.marginOfSafety)}<small>Upside to fair value</small></div></div>
@@ -304,13 +309,16 @@ async function runDcf() {
 }
 $("#btnDcf").onclick = runDcf;
 async function loadNews() {
+  const ticker = state.ticker;
   const ul = $("#newsList"); loading(ul);
-  const n = await api(`/api/stock/${encodeURIComponent(state.ticker)}/news`).catch(() => []);
+  const n = await api(`/api/stock/${encodeURIComponent(ticker)}/news`).catch(() => []);
+  if (ticker !== state.ticker) return;
   ul.innerHTML = n.length ? n.map((x) => `<li><span class="${x.sentiment > 0 ? "up" : x.sentiment < 0 ? "down" : "muted"}">${x.sentiment > 0 ? "▲" : x.sentiment < 0 ? "▼" : "•"}</span> ${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<div class="meta">${esc(x.publisher || "")} · ${x.time ? new Date(x.time).toLocaleString() : ""}</div></li>`).join("") : "<li class='muted'>No recent headlines.</li>";
 }
 $("#btnBrief").onclick = async () => {
+  const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(state.ticker)}/brief`); out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
 $("#btnWatch").onclick = async () => {
