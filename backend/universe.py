@@ -51,14 +51,19 @@ REGION_BY_SUFFIX = {
     ".QA": "Gulf", ".SR": "Gulf", ".AE": "Gulf", ".AD": "Gulf", ".KW": "Gulf", ".BH": "Gulf",
     ".L": "Europe", ".PA": "Europe", ".DE": "Europe", ".AS": "Europe", ".SW": "Europe", ".CO": "Europe",
     ".MC": "Europe", ".MI": "Europe", ".BR": "Europe", ".ST": "Europe", ".OL": "Europe", ".HE": "Europe",
-    ".AT": "Europe", ".LS": "Europe", ".VI": "Europe", ".IR": "Europe",
+    ".AT": "Europe", ".LS": "Europe", ".VI": "Europe", ".IR": "Europe", ".F": "Europe", ".SG": "Europe", ".WA": "Europe",
+    ".T": "Asia", ".HK": "Asia", ".AX": "Asia", ".NS": "Asia", ".BO": "Asia", ".SS": "Asia", ".SZ": "Asia", ".KS": "Asia",
+    ".KQ": "Asia", ".TW": "Asia", ".SI": "Asia", ".NZ": "Asia", ".TO": "Americas", ".V": "Americas", ".SA": "Americas", ".MX": "Americas",
+    ".NYB": "US",
 }
 
 CURRENCY_BY_SUFFIX = {
     ".QA": "QAR", ".SR": "SAR", ".AE": "AED", ".AD": "AED", ".KW": "KWF", ".BH": "BHD", ".L": "GBp",
     ".PA": "EUR", ".DE": "EUR", ".AS": "EUR", ".MC": "EUR", ".MI": "EUR", ".BR": "EUR", ".HE": "EUR",
     ".AT": "EUR", ".LS": "EUR", ".VI": "EUR", ".IR": "EUR", ".SW": "CHF", ".CO": "DKK", ".ST": "SEK",
-    ".OL": "NOK",
+    ".OL": "NOK", ".F": "EUR", ".SG": "EUR", ".WA": "PLN", ".T": "JPY", ".HK": "HKD", ".AX": "AUD", ".NS": "INR", ".BO": "INR", ".SS": "CNY",
+    ".SZ": "CNY", ".KS": "KRW", ".KQ": "KRW", ".TW": "TWD", ".SI": "SGD", ".NZ": "NZD", ".TO": "CAD", ".V": "CAD", ".SA": "BRL", ".MX": "MXN",
+    ".NYB": "USD",
 }
 
 
@@ -75,14 +80,14 @@ def region_of(ticker, quote_type=None):
     for suf, reg in REGION_BY_SUFFIX.items():
         if ticker.endswith(suf):
             return reg
-    return "US"
+    return "Other" if "." in ticker else "US"
 
 
 def currency_guess(ticker):
     for suf, cur in CURRENCY_BY_SUFFIX.items():
         if ticker.endswith(suf):
             return cur
-    return "USD"
+    return None if "." in ticker else "USD"  # an exchange we don't know is not safe to assume is in dollars
 
 
 def tickers_for(markets):

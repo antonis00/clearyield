@@ -118,6 +118,8 @@ def summary(settings, extra=None):
             warnings.append(f"{r['ticker']} is {r['weight']:.0%} of the portfolio - single-position concentration above 20%.")
     for k, label in (("sector", "sector"), ("region", "region"), ("currency", "currency")):
         for name, v in allocation[k].items():
+            if k == "sector" and name == "ETFs":  # a label for funds, not one sector: six broad funds aren't concentrated
+                continue
             if total and v / total > (0.40 if k == "sector" else 0.80) and len(rows) > 2 and not incomplete:
                 warnings.append(f"{v / total:.0%} of value is in one {label} ({name}).")
     if 0 < len(rows) < 5 and not incomplete:

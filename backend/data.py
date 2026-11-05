@@ -290,7 +290,7 @@ def headline_sentiment(text):
 def fx_rate(currency, base="USD"):
     """Units of `base` per 1 unit of `currency`. Handles pence quotes (GBp, ZAc, ILA)."""
     if not currency:
-        return 1.0
+        raise DataError("The currency of this asset isn't known.")
     currency, divisor = MINOR_UNITS.get(currency, (currency, 1.0))
     if currency == base:
         return 1.0 / divisor

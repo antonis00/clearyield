@@ -116,11 +116,12 @@ def sharpe(close, rf=0.04):
 
 def sortino(close, rf=0.04):
     r = close.pct_change().dropna()
-    down = r[r < 0]
-    if len(r) < 20 or len(down) < 5 or down.std() == 0:
+    if len(r) < 20 or (r < 0).sum() < 5:
         return None
     n = bars_per_year(close)
-    return float((r.mean() - rf / n) / down.std() * math.sqrt(n))
+    excess = r - rf / n
+    downside = math.sqrt((excess.clip(upper=0) ** 2).mean())  # over all days, not just how far the losing days vary
+    return float(excess.mean() / downside * math.sqrt(n)) if downside else None
 
 
 def beta(close, bench_close):
@@ -152,7 +153,7 @@ def stats(close, rf=0.04):
     return {
         "ret1w": ret_over(close, 5), "ret1m": ret_over(close, 21), "ret3m": ret_over(close, 63),
         "ret6m": ret_over(close, 126), "ret1y": ret_over(close, 252), "ytd": ytd_return(close),
-        "ret5yCagr": cagr(window(close, 1260)) if len(close) > 500 else None,
+        "ret5yCagr": cagr(window(close, 1260)) if (close.index[-1] - close.index[0]).days >= 4.5 * 365.25 else None,
         "vol1y": volatility(close), "maxDD1y": max_drawdown(one_y), "maxDD5y": max_drawdown(window(close, 1260)),
         "sharpe1y": sharpe(one_y, rf), "sortino1y": sortino(one_y, rf),
     }
