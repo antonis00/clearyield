@@ -42,9 +42,11 @@ def _metrics(eq, rf, trades=None):
             "sharpe": ind.sharpe(eq, rf), "maxDrawdown": ind.max_drawdown(eq), "trades": trades}
 
 
-def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=10000):
+def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=10000, start=None):
+    """Backtest from `start` (default: the first bar). Earlier bars of `df` only warm up the indicators."""
     params = params or {}
-    close = df["Close"].dropna()
+    full = df["Close"].dropna()
+    close = full if start is None else full[full.index >= start]
     if len(close) < 60:
         raise ValueError("Not enough history for a backtest (need 60+ trading days).")
     rets = close.pct_change().fillna(0)
@@ -64,12 +66,13 @@ def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=100
         eq = pd.Series(vals, index=close.index)
         trades = len(months)
     else:
-        pos = _positions(close, strategy, params).shift(1).fillna(0)  # act on the next bar
+        pos = _positions(full, strategy, params).shift(1).fillna(0).reindex(close.index)  # act on the next bar
         turnover = pos.diff().abs().fillna(pos.iloc[0])
         strat_rets = pos * rets - turnover * cost_bps / 1e4
         eq = capital * (1 + strat_rets).cumprod()
         trades = int((turnover > 0).sum())
         exposure = float(pos.mean())
+    eq.iloc[0] = capital  # returns are measured from the starting capital, so a day-one entry cost still counts
 
     out = {
         "dates": [d.strftime("%Y-%m-%d") for d in close.index], "equity": [float(v) for v in eq],

@@ -163,6 +163,27 @@ def test_minor_unit_currencies():
     assert nbk["statementFx"] == 1.0
 
 
+def test_backtest_uses_history_before_the_window():
+    """A 1y test must be judged on the 1y window with indicators already warmed up on earlier data."""
+    import pandas as pd
+
+    from backend import backtest
+    idx = pd.bdate_range("2021-01-01", periods=800)
+    df = pd.DataFrame({"Close": [100 * 1.001 ** i for i in range(800)]}, index=idx)
+    start = idx[-252]
+    r = backtest.run(df, "sma_cross", {}, 10, 0.04, start=start)
+    # A steady uptrend is above its 200-day average from the first day of the window
+    assert r["strategy"]["exposure"] == 1.0
+    assert r["dates"][0] == start.strftime("%Y-%m-%d") and len(r["dates"]) == 252
+    # Fully invested from day one: the buy & hold return, less one 10 bps entry cost
+    assert abs((1 + r["strategy"]["totalReturn"]) / (1 + r["benchmark"]["totalReturn"]) - 0.999) < 1e-9
+    # Nothing changes position inside the window except that first entry
+    assert r["strategy"]["trades"] == 1
+    # Signals only use past prices: the same test without the earlier data has to sit in cash for 200 bars
+    cold = backtest.run(df.loc[start:], "sma_cross", {}, 10, 0.04)
+    assert cold["strategy"]["exposure"] < 0.25
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
