@@ -143,7 +143,28 @@ def test_real_yahoo_shapes():
         data._yf, data.DEMO = real_yf, real_demo
 
 
+def _reset():
+    """Clear the user tables so a test starts from an empty app."""
+    from backend import db
+    db.init()
+    for table in ("holdings", "watchlist", "journal", "alerts", "settings"):
+        db.x(f"DELETE FROM {table}")
+
+
+def test_minor_unit_currencies():
+    """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
+    from backend import data
+    from backend.universe import currency_guess
+    kwd = data.DEMO_FX["KWD"]
+    assert abs(data.fx_rate("KWF", "USD") - kwd / 1000) < 1e-9
+    assert abs(data.fx_rate("GBp", "USD") - data.DEMO_FX["GBP"] / 100) < 1e-9
+    assert currency_guess("NBK.KW") == "KWF"
+    nbk = data._normalize_info("NBK.KW", {"currency": "KWF", "financialCurrency": "KWD", "quoteType": "EQUITY"})
+    assert nbk["statementFx"] == 1.0
+
+
 if __name__ == "__main__":
-    test_all()
-    test_real_yahoo_shapes()
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
     print("OK - all endpoints passed")

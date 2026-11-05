@@ -105,7 +105,7 @@ INFO_KEYS = [
 ]
 
 # Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
-MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.0), "ILA": ("ILS", 100.0)}
+MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.0), "ILA": ("ILS", 100.0), "KWF": ("KWD", 1000.0)}
 
 
 def info(ticker):

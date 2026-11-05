@@ -55,7 +55,7 @@ REGION_BY_SUFFIX = {
 }
 
 CURRENCY_BY_SUFFIX = {
-    ".QA": "QAR", ".SR": "SAR", ".AE": "AED", ".AD": "AED", ".KW": "KWD", ".BH": "BHD", ".L": "GBp",
+    ".QA": "QAR", ".SR": "SAR", ".AE": "AED", ".AD": "AED", ".KW": "KWF", ".BH": "BHD", ".L": "GBp",
     ".PA": "EUR", ".DE": "EUR", ".AS": "EUR", ".MC": "EUR", ".MI": "EUR", ".BR": "EUR", ".HE": "EUR",
     ".AT": "EUR", ".LS": "EUR", ".VI": "EUR", ".IR": "EUR", ".SW": "CHF", ".CO": "DKK", ".ST": "SEK",
     ".OL": "NOK",
