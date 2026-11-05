@@ -458,7 +458,7 @@ async function loadPortfolio() {
 $("#btnAddHolding").onclick = async () => {
   try {
     await api("/api/holdings", { method: "POST", body: { ticker: $("#hTicker").value, shares: $("#hShares").value, cost: $("#hCost").value, bought: $("#hDate").value, note: $("#hNote").value } });
-    ["#hTicker", "#hShares", "#hCost", "#hNote"].forEach((id) => $(id).value = ""); toast("Holding added"); loadPortfolio();
+    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); toast("Holding added"); loadPortfolio();
   } catch (e) { toast(e.message); }
 };
 

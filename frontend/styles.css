@@ -100,6 +100,7 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 
 .alertbar { border: 1px solid var(--down); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
 
+#alertTable td { white-space: normal; } /* long trigger messages were pushing the Delete button out of view */
 #ptOut .statgrid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 
 /* stance badges / scores */
