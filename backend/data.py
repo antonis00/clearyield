@@ -101,7 +101,7 @@ INFO_KEYS = [
     "dividendYield", "payoutRatio", "beta", "sharesOutstanding", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
     "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "website", "financialCurrency",
-    "impliedSharesOutstanding",
+    "impliedSharesOutstanding", "ebitda",
 ]
 
 # Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
@@ -109,7 +109,7 @@ MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.
 
 
 def info(ticker):
-    key = f"info:v2:{ticker}"  # v2: adds statementFx and corrects dividendYield
+    key = f"info:v3:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -149,16 +149,23 @@ def _normalize_info(ticker, d):
     d["currency"] = d.get("currency") or currency_guess(ticker)
     d["financialCurrency"] = d.get("financialCurrency") or MINOR_UNITS.get(d["currency"], (d["currency"],))[0]
     d["statementFx"] = statement_fx(d)
-    # Yahoo divides an EV in the quote currency by EBITDA in the statement currency. Its P/E and
-    # forward EPS are already converted, so they stay as they are.
-    if d.get("enterpriseToEbitda") is not None:
-        d["enterpriseToEbitda"] = d["enterpriseToEbitda"] / d["statementFx"] if d["statementFx"] else None
+    if d["statementFx"] != 1.0:
+        d["enterpriseToEbitda"] = _ev_to_ebitda(d)
     qt = d.get("quoteType") or ("CRYPTOCURRENCY" if ticker.endswith("-USD") else "EQUITY")
     d["quoteType"] = qt
     d["assetClass"] = asset_class(qt)
     d["region"] = region_of(ticker, qt)
     d["ticker"] = ticker
     return d
+
+
+def _ev_to_ebitda(d):
+    """EV/EBITDA with everything in the quote currency. Yahoo's own figure mixes currencies when the listing and
+    the statements differ, so it can't be used then. Its P/E and forward EPS are already converted."""
+    fx, mc, debt, cash, ebitda = d["statementFx"], d.get("marketCap"), d.get("totalDebt"), d.get("totalCash"), d.get("ebitda")
+    if not fx or not mc or debt is None or cash is None or not ebitda or ebitda <= 0:
+        return None
+    return (mc + (debt - cash) * fx) / (ebitda * fx)
 
 
 def statement_fx(d):

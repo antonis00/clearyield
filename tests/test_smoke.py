@@ -103,11 +103,11 @@ def test_real_yahoo_shapes():
     assert abs(data._normalize_info("MU", {"dividendYield": 0.08})["dividendYield"] - 0.0008) < 1e-12
 
     # London stock reporting in USD: price in pence, market cap in GBP, statements in USD
-    azn = data._normalize_info("AZN.L", {"currency": "GBp", "financialCurrency": "USD", "enterpriseToEbitda": 10.0,
-                                         "trailingPE": 20.0, "quoteType": "EQUITY", "marketCap": 1e9, "freeCashflow": 1e8})
+    azn = data._normalize_info("AZN.L", {"currency": "GBp", "financialCurrency": "USD", "trailingPE": 20.0,
+                                         "quoteType": "EQUITY", "marketCap": 1e9, "freeCashflow": 1e8})
     usd_gbp = data.DEMO_FX["USD"] / data.DEMO_FX["GBP"]
     assert abs(azn["statementFx"] - usd_gbp) < 1e-3
-    assert abs(azn["enterpriseToEbitda"] - 10 / usd_gbp) < 1e-2 and azn["trailingPE"] == 20.0
+    assert azn["trailingPE"] == 20.0
     fy = [p for p in scoring.factor_breakdown(azn, daily)["value"] if p["label"] == "FCF yield"][0]["value"]
     assert abs(fy - 0.1 * usd_gbp) < 1e-3
     # 1e9 of FCF, no growth, 10% discount, over 1e9 shares is 10 per share before conversion
@@ -134,9 +134,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v2:EMPTY.X") is None
-        db.cache_set("info:v2:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v2:OLD.X'")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v3:EMPTY.X") is None
+        db.cache_set("info:v3:OLD.X", {"trailingPE": 12.0})
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v3:OLD.X'")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -353,6 +353,26 @@ def test_failed_position_marks_the_portfolio_incomplete():
     # SPY would read as 100% of the portfolio, so weight-based warnings are withheld too
     assert not any("%" in w for w in part["warnings"])
     assert any("AAA" in e for e in part["errors"])
+
+
+def test_ev_ebitda_is_calculated_in_one_currency():
+    """Yahoo mixes currencies when the listing and the statements differ, in either direction."""
+    from backend import data
+    base = {"quoteType": "EQUITY", "marketCap": 1000.0, "totalDebt": 300.0, "totalCash": 100.0, "ebitda": 400.0, "enterpriseToEbitda": 3.0}
+    # Quote and statements match: Yahoo's own figure is right
+    same = data._normalize_info("X", {**base, "currency": "USD", "financialCurrency": "USD"})
+    assert same["enterpriseToEbitda"] == 3.0
+    # London listing reporting in USD, 1 USD = 1/1.27 GBP: (1000 + 200/1.27) / (400/1.27)
+    uk = data._normalize_info("X.L", {**base, "currency": "GBp", "financialCurrency": "USD"})
+    assert abs(uk["enterpriseToEbitda"] - (1000 + 200 / 1.27) / (400 / 1.27)) < 1e-2
+    # A cheaper statement currency, like an ADR: statements in units worth 0.145 of the USD quote
+    adr = data._normalize_info("X", {**base, "currency": "USD", "financialCurrency": "DKK", "marketCap": 1000.0,
+                                     "totalDebt": 3000.0, "totalCash": 1000.0, "ebitda": 4000.0})
+    assert abs(adr["enterpriseToEbitda"] - (1000 + 2000 * 0.145) / (4000 * 0.145)) < 1e-6
+    # Anything missing or negative leaves it blank rather than falling back to the mixed figure
+    for gap in ({"ebitda": None}, {"ebitda": -5.0}, {"totalDebt": None}, {"marketCap": None}):
+        blank = data._normalize_info("X", {**base, "currency": "USD", "financialCurrency": "DKK", **gap})
+        assert blank["enterpriseToEbitda"] is None, gap
 
 
 def test_minor_unit_currencies():
