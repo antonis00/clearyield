@@ -168,6 +168,10 @@ async function openStock(t, period) {
     $("#briefOut").innerHTML = "Combines scores, price action, fundamentals and headlines into a bull/bear summary.";
     $("#briefOut").classList.add("muted");
     $("#rAbout").textContent = s.info.longBusinessSummary || "No description available.";
+    $("#ptOut").innerHTML = ""; ["#ptAmount", "#ptStop", "#ptRisk"].forEach((id) => $(id).value = "");
+    $("#ptEntry").value = s.stats.price.toFixed(2);
+    $("#ptAmountLabel").textContent = `Amount (${state.meta.settings.base_currency})`;
+    $("#ptRiskLabel").textContent = `Most I'd lose (${state.meta.settings.base_currency})`;
     const g = s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
     runDcf(); loadNews();
   } catch (e) {
@@ -325,6 +329,31 @@ $("#btnAlert").onclick = () => modal(`<h3>Alert on ${esc(state.ticker)}</h3><for
   <div class="form-row"><button class="btn">Create</button><button type="button" class="btn ghost" data-close>Cancel</button></div></form>`,
   async (f) => { await api("/api/alerts", { method: "POST", body: { ticker: state.ticker, kind: f.get("kind"), value: f.get("value") } }); toast("Alert created"); });
 $("#btnJournal").onclick = () => { show("journal"); $("#jTicker").value = state.ticker; $("#jPrice").value = state.stock.stats.price.toFixed(2); $("#jThesis").focus(); };
+
+$("#btnPretrade").onclick = async () => {
+  const b = $("#btnPretrade"), out = $("#ptOut"); b.disabled = true; loading(out, "Checking against your portfolio…");
+  try {
+    const r = await api("/api/pretrade", { method: "POST", body: { ticker: state.ticker, amount: $("#ptAmount").value, entry: $("#ptEntry").value, stop: $("#ptStop").value, risk: $("#ptRisk").value } });
+    const change = (k) => (r.before ? `${pct(r.before[k], 1, false)} → <b>${pct(r.after[k], 1, false)}</b>` : "withheld");
+    const rows = [
+      ["Position", `${num(r.shares, r.shares < 1 ? 4 : 2)} shares at ${money(r.price, r.currency)}`], ["Value", money(r.value, r.base, 0)],
+      ...(isNum(r.maxLoss) ? [["Loss at the stop", money(r.maxLoss, r.base, 0)]] : []),
+      ...(isNum(r.sizedShares) ? [["Size from your risk", `${num(r.sizedShares, r.sizedShares < 1 ? 4 : 2)} shares`]] : []),
+      ["Weight of this asset", change("position")], [`Sector: ${esc(r.sector || "Unknown")}`, change("sector")],
+      [`Region: ${esc(r.region || "Unknown")}`, change("region")], [`Currency: ${esc(r.currency)}`, change("currencyWeight")],
+      ["Portfolio beta", r.before ? `${num(r.before.beta)} → <b>${num(r.after.beta)}</b>` : "withheld"],
+    ];
+    out.innerHTML = `${r.incomplete ? `<div class="alertbar"><b>Incomplete:</b> no current data for ${esc(r.missing.join(", "))}, so weights and beta are withheld.</div>` : ""}
+      <div class="statgrid">${rows.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("")}</div>
+      ${r.newWarnings.length ? `<h4>New warnings from this purchase</h4><ul class="signals">${r.newWarnings.map((w) => `<li class="t-1">${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${r.correlations.length ? `<h4>Moves with your holdings (weekly returns)</h4><div class="statgrid">${r.correlations.map((c) => `<div><span>${esc(c.ticker)}</span><span>${num(c.correlation, 2)}</span></div>`).join("")}</div>` : ""}
+      <div class="form-row"><button class="btn ghost sm" id="btnPtJournal">Record in journal</button></div>`;
+    $("#btnPtJournal").onclick = () => {
+      const stop = $("#ptStop").value, entry = $("#ptEntry").value;
+      show("journal"); $("#jTicker").value = state.ticker; $("#jPrice").value = entry; $("#jStop").value = stop; $("#jThesis").focus();
+    };
+  } catch (e) { out.innerHTML = `<div class="muted">${esc(e.message)}</div>`; } finally { b.disabled = false; }
+};
 
 /* ---------------------------------------------------------------- compare */
 $("#btnCompare").onclick = async () => {

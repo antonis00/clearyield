@@ -136,6 +136,17 @@ def beta(close, bench_close):
     return float(a.iloc[:, 0].cov(a.iloc[:, 1]) / a.iloc[:, 1].var())
 
 
+def correlation(a, b):
+    """Correlation of weekly returns on shared dates, for the same reason beta uses them."""
+    px = pd.concat([a, b], axis=1, join="inner").dropna()
+    if px.empty:
+        return None
+    r = px.resample("W-FRI").last().dropna().pct_change().dropna()
+    if len(r) < 8 or r.iloc[:, 0].std() == 0 or r.iloc[:, 1].std() == 0:
+        return None
+    return float(r.iloc[:, 0].corr(r.iloc[:, 1]))
+
+
 def stats(close, rf=0.04):
     one_y = window(close, 252)
     return {

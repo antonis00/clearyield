@@ -579,6 +579,98 @@ def test_scorecard_is_hand_calculated():
     assert fresh["entries"][0]["counted"] is False and fresh["summary"]["counted"] == 0 and fresh["summary"]["hitRate"] is None
 
 
+def test_pretrade_check_is_hand_calculated_and_changes_nothing():
+    import pandas as pd
+
+    from backend import db, portfolio
+    _reset()
+    idx = pd.bdate_range(end="2026-06-01", periods=300)
+    wave = pd.Series([100 + 5 * ((i % 40) - 20) / 20 for i in range(300)], index=idx)
+    other = pd.Series([100 - 5 * ((i % 40) - 20) / 20 for i in range(300)], index=idx)
+    flat = wave * 0 + 90
+    new = wave * 0.5  # same moves as AAA, last close (100 + 5 * ((299 % 40) - 20) / 20) / 2
+    price = float(new.iloc[-1])
+    prices = {"AAA": wave, "BBB": other, "NEW": new, "SPY": wave, "EUROCO": flat}
+    infos = {"AAA": {"sector": "Tech"}, "BBB": {"sector": "Energy"}, "NEW": {"sector": "Tech", "region": "Europe"},
+             "EUROCO": {"currency": "EUR", "sector": "Banks"}}
+    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('AAA', 90, 100), ('BBB', 10, 100)")
+    settings = db.get_settings()
+    lots_before = db.q("SELECT * FROM holdings")
+
+    with _FakeMarket(prices, infos):
+        total = portfolio.summary(settings)["total"]
+        aaa_value = 90 * float(wave.iloc[-1])
+        r = portfolio.pretrade(settings, "NEW", amount=1000)
+        assert abs(r["shares"] - 1000 / price) < 1e-9 and abs(r["value"] - 1000) < 1e-6
+        assert abs(r["after"]["position"] - 1000 / (total + 1000)) < 1e-9 and r["before"]["position"] == 0
+        # Tech goes from AAA alone to AAA plus the new 1,000
+        assert abs(r["before"]["sector"] - aaa_value / total) < 1e-9
+        assert abs(r["after"]["sector"] - (aaa_value + 1000) / (total + 1000)) < 1e-9
+        assert abs(r["before"]["region"]) < 1e-9 and abs(r["after"]["region"] - 1000 / (total + 1000)) < 1e-9
+        # It moves exactly with AAA and against BBB
+        corr = {c["ticker"]: c["correlation"] for c in r["correlations"]}
+        assert corr["AAA"] > 0.99 and corr["BBB"] < -0.99
+        assert r["correlations"][0]["ticker"] == "AAA"
+        assert "beta" in r["before"] and "beta" in r["after"]
+        assert r["incomplete"] is False
+
+        # Position size from risk: lose 100 if 50 falls to 45 means 20 shares
+        sized = portfolio.pretrade(settings, "NEW", entry=50, stop=45, risk=100)
+        assert abs(sized["shares"] - 20) < 1e-9 and abs(sized["value"] - 1000) < 1e-6 and abs(sized["maxLoss"] - 100) < 1e-6
+        # An amount wins over risk sizing, and the loss at the stop is shown for that amount
+        both = portfolio.pretrade(settings, "NEW", amount=500, entry=50, stop=45, risk=100)
+        assert abs(both["shares"] - 10) < 1e-9 and abs(both["maxLoss"] - 50) < 1e-6
+        assert abs(both["sizedShares"] - 20) < 1e-9
+
+        # In another currency: 1,080 USD at EUR/USD 1.08 and 90 EUR a share is 1000 EUR, 11.11 shares
+        fx = portfolio.pretrade(settings, "EUROCO", amount=1080)
+        assert abs(fx["shares"] - 1000 / 90) < 1e-3 and fx["currency"] == "EUR"
+        # A 100 USD risk with a 10 EUR stop distance is 92.59 EUR of risk, 9.26 shares
+        fxr = portfolio.pretrade(settings, "EUROCO", entry=90, stop=80, risk=100)
+        assert abs(fxr["shares"] - (100 / 1.08) / 10) < 1e-3
+
+        # Adding to an existing holding counts as more of the same position
+        more = portfolio.pretrade(settings, "AAA", amount=1000)
+        assert abs(more["after"]["position"] - (aaa_value + 1000) / (total + 1000)) < 1e-9
+        assert more["before"]["position"] == more["before"]["sector"]
+        assert not [c for c in more["correlations"] if c["ticker"] == "AAA"]
+
+        # New warnings are the ones this trade would cause
+        big = portfolio.pretrade(settings, "NEW", amount=total)
+        assert any("NEW is" in w for w in big["newWarnings"])
+        # AAA was already over 20%. Its figure changes, but this trade didn't cause that warning
+        assert not any("AAA is" in w for w in big["newWarnings"])
+
+        for bad in ({}, {"amount": -5}, {"entry": 50, "stop": 55, "risk": 100}, {"entry": 50, "stop": 50, "risk": 100}, {"risk": 100}):
+            try:
+                portfolio.pretrade(settings, "NEW", **bad)
+                raise AssertionError(f"should be refused: {bad}")
+            except ValueError as e:
+                assert str(e)
+
+    # While a holding has no data the weights would be wrong, so they're withheld
+    with _FakeMarket({**prices, "BBB": None}, infos):
+        part = portfolio.pretrade(settings, "NEW", amount=1000)
+    assert part["incomplete"] is True and part["missing"] == ["BBB"] and part["after"] is None and part["before"] is None
+
+    # It's a what-if: nothing was saved
+    assert db.q("SELECT * FROM holdings") == lots_before
+
+
+def test_pretrade_route():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        c.post("/api/holdings", json={"ticker": "SPY", "shares": 5, "cost": 400})
+        ok = c.post("/api/pretrade", json={"ticker": "aapl", "amount": "1000", "stop": "", "entry": "", "risk": ""})
+        assert ok.status_code == 200 and ok.json()["ticker"] == "AAPL" and ok.json()["shares"] > 0
+        assert c.post("/api/pretrade", json={"ticker": "AAPL"}).status_code == 400
+        assert c.post("/api/pretrade", json={"ticker": "AAPL", "amount": "lots"}).status_code == 400
+        assert len(c.get("/api/portfolio").json()["positions"]) == 1
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

@@ -1,4 +1,6 @@
 """Portfolio valuation, allocation, risk, warnings and rebalancing."""
+import datetime as dt
+import re
 from collections import defaultdict
 
 import pandas as pd
@@ -7,8 +9,8 @@ from . import data, db
 from . import indicators as ind
 
 
-def positions():
-    lots = db.q("SELECT * FROM holdings ORDER BY ticker, id")
+def positions(extra=None):
+    lots = db.q("SELECT * FROM holdings ORDER BY ticker, id") + ([extra] if extra else [])
     agg = defaultdict(lambda: {"shares": 0.0, "costTotal": 0.0, "lots": []})
     for lot in lots:
         a = agg[lot["ticker"]]
@@ -36,12 +38,13 @@ def _lot_fx(lot, currency, base, today_fx):
     return today_fx, data.fx_is_fixed(currency, base)
 
 
-def summary(settings):
+def summary(settings, extra=None):
+    """`extra` is a hypothetical lot, included in the figures but never saved."""
     base = settings.get("base_currency", "USD")
     rf = settings.get("risk_free_rate", 0.04)
     bench_t = settings.get("benchmark", "SPY")
     rows, series, errors, missing = [], {}, [], []
-    for t, p in positions().items():
+    for t, p in positions(extra).items():
         if p["shares"] <= 0:
             continue
         try:
@@ -140,6 +143,65 @@ def summary(settings):
         "pnl": total - total_cost, "pnlPct": (total / total_cost - 1) if total_cost else None,
         "dayPnl": sum(r["dayPnl"] for r in rows), "allocation": allocation, "performance": perf, "risk": risk,
         "warnings": warnings, "rebalance": rebalance, "annualIncome": income, "errors": errors,
-        "incomplete": incomplete, "missing": missing,
+        "incomplete": incomplete, "missing": missing, "_series": series,
         "note": "The performance chart uses current holdings over the past year and today's FX rates (approximation). Cost and P&L use the FX rate on each lot's purchase date.",
+    }
+
+
+def _without_figures(warning):
+    """A warning's wording without its percentages, so the same warning at a new level still matches."""
+    return re.sub(r"\d+%", "", warning)
+
+
+def pretrade(settings, ticker, amount=None, entry=None, stop=None, risk=None):
+    """What buying `ticker` would do to the portfolio. A what-if only: nothing is saved."""
+    base = settings.get("base_currency", "USD")
+    inf = data.info(ticker)
+    close = data.history(ticker, "1y")["Close"]
+    fx = data.fx_rate(inf.get("currency"), base)
+    price = entry if entry else float(close.iloc[-1])
+    if price <= 0:
+        raise ValueError("Entry price must be above zero.")
+    if amount is not None and amount <= 0:
+        raise ValueError("Amount must be above zero.")
+    if stop is not None and stop >= price:
+        raise ValueError("The stop must be below the entry price.")
+
+    sized = None
+    if risk is not None:
+        if stop is None:
+            raise ValueError("To size from risk, enter a stop price too.")
+        if risk <= 0:
+            raise ValueError("The most you'd lose must be above zero.")
+        sized = risk / ((price - stop) * fx)
+    if amount is None and sized is None:
+        raise ValueError("Enter an amount, or a stop and the most you'd lose.")
+    shares = amount / (price * fx) if amount is not None else sized
+
+    today = dt.date.today().isoformat()
+    before = summary(settings)
+    after = summary(settings, {"ticker": ticker, "shares": shares, "cost": price, "bought": today})
+
+    def weights(s):
+        if s["incomplete"] or not s["total"]:
+            return {"position": 0.0, "sector": 0.0, "region": 0.0, "currencyWeight": 0.0, "beta": s["risk"].get("beta")}
+        share = lambda group, key: s["allocation"][group].get(key, 0.0) / s["total"]
+        return {"position": next((r["weight"] for r in s["positions"] if r["ticker"] == ticker), 0.0),
+                "sector": share("sector", inf.get("sector") or inf.get("assetClass")), "region": share("region", inf.get("region")),
+                "currencyWeight": share("currency", inf.get("currency")), "beta": s["risk"].get("beta")}
+
+    incomplete = before["incomplete"] or after["incomplete"]
+    correlations = []
+    for t, s in before["_series"].items():
+        c = ind.correlation(close, s) if t != ticker else None
+        if c is not None:
+            correlations.append({"ticker": t, "correlation": c})
+    correlations.sort(key=lambda c: -c["correlation"])
+    return {
+        "ticker": ticker, "base": base, "currency": inf.get("currency"), "price": price, "shares": shares,
+        "value": shares * price * fx, "maxLoss": shares * (price - stop) * fx if stop is not None else None,
+        "sizedShares": sized, "sector": inf.get("sector") or inf.get("assetClass"), "region": inf.get("region"),
+        "before": None if incomplete else weights(before), "after": None if incomplete else weights(after),
+        "newWarnings": [w for w in after["warnings"] if _without_figures(w) not in {_without_figures(b) for b in before["warnings"]}],
+        "correlations": correlations[:8], "incomplete": incomplete, "missing": sorted(set(before["missing"]) | set(after["missing"])),
     }

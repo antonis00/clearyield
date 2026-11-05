@@ -100,6 +100,8 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 
 .alertbar { border: 1px solid var(--down); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
 
+#ptOut .statgrid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
 /* stance badges / scores */
 .badge { display: inline-block; padding: 2px 9px; border-radius: 99px; font: 600 11px var(--mono); }
 .b-Strong { background: #3fb68b26; color: var(--up); } .b-Favorable { background: #4fb3bf26; color: var(--accent2); }

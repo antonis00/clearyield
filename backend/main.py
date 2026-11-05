@@ -239,7 +239,9 @@ def watch_del(ticker: str):
 # ---------------------------------------------------------------- portfolio
 @app.get("/api/portfolio")
 def get_portfolio():
-    return ok(portfolio.summary(db.get_settings()))
+    p = portfolio.summary(db.get_settings())
+    p.pop("_series")
+    return ok(p)
 
 
 @app.post("/api/holdings")
@@ -263,6 +265,23 @@ def add_holding(body: dict = Body(...)):
 def del_holding(hid: int):
     db.x("DELETE FROM holdings WHERE id=?", (hid,))
     return ok({"ok": True})
+
+
+@app.post("/api/pretrade")
+def pretrade(body: dict = Body(...)):
+    t = T(body["ticker"])
+    _hist_or_404(t, "1y")
+
+    def num(k):
+        v = body.get(k)
+        return float(v) if v not in (None, "") else None
+    try:
+        return ok(portfolio.pretrade(db.get_settings(), t, amount=num("amount"), entry=num("entry"), stop=num("stop"), risk=num("risk")))
+    except ValueError as e:
+        msg = str(e)
+        raise HTTPException(400, msg if not msg.startswith("could not convert") else "Amounts must be numbers.")
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
 
 
 # ---------------------------------------------------------------- backtest

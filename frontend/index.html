@@ -145,6 +145,18 @@
           <ul id="newsList" class="news"></ul>
         </div>
       </div>
+      <div class="card">
+        <div class="card-h"><h3>Pre-trade check</h3><span class="muted sm">A what-if on your portfolio. Nothing is saved or traded.</span></div>
+        <div class="form-row">
+          <label><span id="ptAmountLabel">Amount</span><input type="number" id="ptAmount" step="any" min="0"></label>
+          <label>Entry price<input type="number" id="ptEntry" step="any" min="0"></label>
+          <label>Stop price<input type="number" id="ptStop" step="any" min="0"></label>
+          <label><span id="ptRiskLabel">Most I'd lose</span><input type="number" id="ptRisk" step="any" min="0"></label>
+          <button class="btn" id="btnPretrade">Check</button>
+        </div>
+        <p class="muted sm">Enter an amount, or a stop and the most you'd accept losing to size the position from your risk.</p>
+        <div id="ptOut"></div>
+      </div>
       <div class="card"><div class="card-h"><h3>About</h3></div><p id="rAbout" class="about"></p></div>
     </div>
   </section>
