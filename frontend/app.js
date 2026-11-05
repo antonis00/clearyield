@@ -148,8 +148,9 @@ async function loadDigest() {
   const ul = $("#digestList"); loading(ul, "Scanning your holdings and watchlist…");
   try {
     const d = await api("/api/digest");
-    ul.innerHTML = d.items.length ? d.items.map((i) => `<li class="t${i.tone}" data-t="${esc(i.ticker || "")}">${esc(i.text)}</li>`).join("") : `<li>Quiet day — nothing notable on your names.</li>`;
+    ul.innerHTML = d.items.length ? d.items.map((i) => `<li class="t${i.tone}" data-t="${esc(i.ticker || "")}">${esc(i.text)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("") : `<li>Quiet day — nothing notable on your names.</li>`;
     $$("li[data-t]", ul).forEach((li) => li.dataset.t && (li.onclick = () => openStock(li.dataset.t)));
+    $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" }); b.closest("li").remove(); });
   } catch (e) { ul.innerHTML = `<li>${esc(e.message)}</li>`; }
 }
 $("#refreshDigest").onclick = loadDigest;

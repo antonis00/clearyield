@@ -360,6 +360,12 @@ def alert_del(aid: int):
     return ok({"ok": True})
 
 
+@app.post("/api/alerts/{aid}/dismiss")
+def alert_dismiss(aid: int):
+    db.x("UPDATE alerts SET dismissed = 1 WHERE id=?", (aid,))
+    return ok({"ok": True})
+
+
 @app.post("/api/alerts/check")
 def alert_check():
     return ok(insights.check_alerts(db.get_settings()))

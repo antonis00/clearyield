@@ -231,8 +231,12 @@ def digest(settings):
     watched = [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
     tickers = list(dict.fromkeys(held + watched))
     items = []
-    rows = {r["ticker"]: r for r in rows_for(tickers, settings) if "error" not in r}
+    open_entries = db.q("SELECT * FROM journal WHERE outcome='' OR outcome IS NULL")
+    journal_only = [j["ticker"] for j in open_entries if j["ticker"] not in tickers]
+    rows = {r["ticker"]: r for r in rows_for(list(dict.fromkeys(tickers + journal_only)), settings) if "error" not in r}
     for t, r in rows.items():
+        if t not in tickers:  # only here so its stop and target can be checked below
+            continue
         tag = "holding" if t in held else "watchlist"
         if r["day"] is not None and abs(r["day"]) >= 0.03:
             items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "text": f"{t} ({tag}) moved {r['day']:+.1%} today."})
@@ -243,7 +247,7 @@ def digest(settings):
         if r["stance"] in ("Weak",) and t in held:
             items.append({"tone": -1, "ticker": t, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
     today = dt.date.today().isoformat()
-    for j in db.q("SELECT * FROM journal WHERE outcome='' OR outcome IS NULL"):
+    for j in open_entries:
         r = rows.get(j["ticker"])
         if r:
             if j["stop_price"] and r["price"] <= j["stop_price"]:
@@ -252,8 +256,9 @@ def digest(settings):
                 items.append({"tone": 1, "ticker": j["ticker"], "text": f"{j['ticker']} reached your target ({j['target_price']}). Time to re-evaluate."})
         if j["review_date"] and j["review_date"] <= today:
             items.append({"tone": 0, "ticker": j["ticker"], "text": f"Journal review due for {j['ticker']} ({j['action']} on {dt.date.fromtimestamp(j['ts']).isoformat()})."})
-    for a in check_alerts(settings):
-        items.append({"tone": 0, "ticker": a["ticker"], "text": "Alert: " + a["message"]})
+    check_alerts(settings)
+    fired = db.q("SELECT * FROM alerts WHERE triggered IS NOT NULL AND dismissed = 0 ORDER BY triggered DESC")
+    items = [{"tone": 0, "ticker": a["ticker"], "text": "Alert: " + a["message"], "alertId": a["id"]} for a in fired] + items
     if not tickers:
         items.append({"tone": 0, "ticker": None, "text": "Add stocks to your watchlist or portfolio to get a personalised digest."})
     return {"items": items, "rows": list(rows.values())}

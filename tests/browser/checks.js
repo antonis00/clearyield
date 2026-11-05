@@ -86,6 +86,38 @@ const CHECKS = {
     expect("data untouched by broken file", (await post(page, "/api/backup", null, "GET")).body.holdings.length === 1);
   },
 
+  // A fired alert shows in the digest with a working Dismiss button
+  async alertdigest(page) {
+    await post(page, "/api/alerts", { ticker: "AAPL", kind: "price_above", value: 0.01 });
+    await post(page, "/api/alerts/check", {});
+    await page.evaluate(() => { location.hash = "#dashboard"; location.reload(); });
+    await page.waitForSelector("[data-dismiss]", { timeout: 60000 });
+    expect("fired alert is in the digest", /Alert: AAPL/.test(await page.textContent("#digestList")));
+    await page.click("[data-dismiss]"); await page.waitForTimeout(600);
+    expect("dismissing keeps you on the dashboard", (await page.evaluate(() => location.hash)) !== "#research/AAPL");
+    expect("dismiss removes it", !/Alert: AAPL/.test(await page.textContent("#digestList")));
+    await page.click("#refreshDigest"); await page.waitForTimeout(1500);
+    expect("still gone after a refresh", !/Alert: AAPL/.test(await page.textContent("#digestList")));
+  },
+
+  // A slow reply for the previous stock must not overwrite the current one
+  async race(page) {
+    await page.route("**/api/stock/AAPL?*", async (route) => { await new Promise((r) => setTimeout(r, 2500)); await route.continue(); });
+    await page.route("**/api/stock/AAPL/news", async (route) => { await new Promise((r) => setTimeout(r, 2500)); await route.fulfill({ json: [{ title: "OLD STOCK HEADLINE", sentiment: 0 }] }); });
+    await page.evaluate(() => { location.hash = "#research/AAPL"; }); await page.waitForTimeout(200);
+    await page.evaluate(() => { location.hash = "#research/NVDA"; });
+    await page.waitForTimeout(5000);
+    const r = await page.evaluate(() => ({ sym: document.querySelector("#rSym").textContent, state: state.ticker, stock: state.stock?.ticker, news: document.querySelector("#newsList").innerText }));
+    expect("header shows the stock you opened last", r.sym === "NVDA", r.sym);
+    expect("page data belongs to that stock", r.stock === "NVDA" && r.state === "NVDA", `${r.state}/${r.stock}`);
+    const live = await page.evaluate(async () => (await (await fetch("/api/stock/NVDA")).json()).stats.price.toFixed(4));
+    await page.click("#btnHold"); await page.waitForTimeout(250);
+    const cost = await page.inputValue("#modalCard input[name='cost']");
+    expect("+ Holding pre-fills that stock's price", cost === live, `${cost} vs ${live}`);
+    await page.evaluate(() => document.querySelector("#modal").classList.add("hidden"));
+    expect("old headlines don't overwrite the news", !/OLD STOCK/.test(r.news));
+  },
+
   // Text from Yahoo can't run as a script in the brief
   async xss(page) {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });

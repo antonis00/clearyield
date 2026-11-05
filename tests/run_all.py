@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BROWSER = ROOT / "tests" / "browser"
 OUT = BROWSER / "out"
-FOCUSED = ["incomplete", "sortbuttons", "backup", "xss"]
+FOCUSED = ["incomplete", "sortbuttons", "backup", "xss", "alertdigest", "race"]
 
 
 def free_port():

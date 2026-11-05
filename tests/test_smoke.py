@@ -708,6 +708,55 @@ def test_cross_rates_go_through_the_dollar():
         db.cache_clear()
 
 
+def test_fired_alerts_stay_in_the_digest_until_dismissed():
+    """Alerts usually fire in the background loop, so the digest has to show what fired earlier, not just now."""
+    from fastapi.testclient import TestClient
+
+    from backend import insights
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        aid = c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 0.01}).json()["id"]
+        c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 1e12})
+
+        def alert_items():
+            return [i for i in c.get("/api/digest").json()["items"] if i["text"].startswith("Alert:")]
+
+        # Fired by the background check, not by the digest
+        assert len(insights.check_alerts({})) == 1
+        items = alert_items()
+        assert len(items) == 1 and items[0]["alertId"] == aid
+        assert len(alert_items()) == 1, "still there after a refresh"
+        first = c.get("/api/digest").json()["items"][0]
+        assert first["text"].startswith("Alert:"), "alerts come first"
+
+        assert c.post(f"/api/alerts/{aid}/dismiss").status_code == 200
+        assert alert_items() == []
+        # Dismissing only clears it from the digest: the alert's record stays on the Alerts list
+        row = [a for a in c.get("/api/alerts").json() if a["id"] == aid][0]
+        assert row["active"] == 0 and row["message"]
+        assert c.post("/api/alerts/99999/dismiss").status_code == 200
+
+
+def test_journal_stops_work_for_any_ticker():
+    """A stop or target applies whether or not the ticker is held or watched, without adding it to the digest's moves."""
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    _reset()
+    with TestClient(app) as c:
+        c.post("/api/journal", json={"ticker": "MSFT", "action": "buy", "price": 100, "stop_price": 1e9})
+        c.post("/api/journal", json={"ticker": "NVDA", "action": "buy", "price": 100, "target_price": 0.01})
+        c.post("/api/journal", json={"ticker": "AMD", "action": "buy", "price": 100, "stop_price": 1e9})
+        jid = [j for j in c.get("/api/journal").json() if j["ticker"] == "AMD"][0]["id"]
+        c.patch(f"/api/journal/{jid}", json={"outcome": "sold"})
+        items = c.get("/api/digest").json()["items"]
+        texts = " | ".join(i["text"] for i in items)
+        assert "MSFT hit your thesis stop" in texts and "NVDA reached your target" in texts
+        assert "AMD" not in texts, "a closed decision has nothing to watch"
+        assert not any(i["ticker"] in ("MSFT", "NVDA") and ("moved" in i["text"] or "RSI" in i["text"]) for i in items)
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data
