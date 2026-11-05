@@ -4,6 +4,7 @@ import hashlib
 import logging
 import math
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -101,7 +102,7 @@ INFO_KEYS = [
     "dividendYield", "payoutRatio", "beta", "sharesOutstanding", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
     "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "website", "financialCurrency",
-    "impliedSharesOutstanding", "ebitda",
+    "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate",
 ]
 
 # Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
@@ -109,7 +110,7 @@ MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.
 
 
 def info(ticker):
-    key = f"info:v4:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v5:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -410,6 +411,7 @@ def _demo_info(ticker):
             "dividendYield": rng.choice([0, 0, rng.uniform(0.005, 0.06)]), "payoutRatio": rng.uniform(0.1, 0.9),
             "beta": rng.uniform(0.5, 1.8), "targetMeanPrice": price * rng.uniform(0.85, 1.35),
             "recommendationKey": rng.choice(["buy", "hold", "strong_buy", "underperform"]), "numberOfAnalystOpinions": int(rng.integers(3, 45)),
+            "earningsTimestampStart": time.time() + float(rng.integers(3, 80)) * 86400, "exDividendDate": time.time() + float(rng.integers(3, 80)) * 86400,
         })
     elif qt == "ETF":
         d.update({"dividendYield": rng.uniform(0.0, 0.04), "beta": rng.uniform(0.2, 1.2), "trailingPE": rng.uniform(12, 32)})

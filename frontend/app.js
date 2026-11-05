@@ -186,7 +186,10 @@ async function openStock(t, period) {
 function renderHeader(s) {
   const i = s.info, st = s.stats;
   $("#rSym").textContent = s.ticker; $("#rName").textContent = i.name || "";
-  $("#rTags").innerHTML = [i.assetClass, i.region, i.sector, i.currency].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
+  const when = (iso, days) => (iso ? `${iso} (${days === 0 ? "today" : `in ${days}d`})` : null);
+  $("#rTags").innerHTML = [i.assetClass, i.region, i.sector, i.currency].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("")
+    + (s.events.earnings ? `<span class="pill warn">Earnings ${esc(when(s.events.earnings, s.events.earningsDays))}</span>` : "")
+    + (s.events.exDividend ? `<span class="pill warn">Ex-dividend ${esc(when(s.events.exDividend, s.events.exDividendDays))}</span>` : "");
   $("#rPrice").textContent = money(st.price, i.currency);
   $("#rChange").innerHTML = `<span class="${cls(st.change)}">${st.change > 0 ? "+" : ""}${num(st.change)} (${pct(st.changePct, 2)})</span> <span class="muted sm">1D</span>`;
   const sc = s.scores.composite;
@@ -279,6 +282,7 @@ function renderStats(s) {
     ["Op. margin", pct(i.operatingMargins, 1, false)], ["Net margin", pct(i.profitMargins, 1, false)], ["Debt/Equity", isNum(i.debtToEquity) ? num(i.debtToEquity) + "x" : "—"],
     ["Rev. growth", cpct(i.revenueGrowth)], ["EPS growth", cpct(i.earningsGrowth)], ["Div. yield", pct(i.dividendYield, 2, false)],
     ["Payout ratio", pct(i.payoutRatio, 0, false)], ["Analyst target", money(i.targetMeanPrice, cur)], ["Consensus", esc((i.recommendationKey || "—").replace("_", " "))],
+    ...(i.assetClass === "Stocks" ? [["Next earnings", esc(s.events.earnings || "not announced")], ["Ex-dividend", esc(s.events.exDividend || "not announced")]] : []),
   ];
   $("#statGrid").innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
 }
@@ -304,7 +308,10 @@ async function runDcf() {
     if (d.error) { out.innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
     const cur = state.stock.info.currency;
     out.innerHTML = `<div class="dcf-big"><div>${money(d.fairValue, cur)}<small>Fair value / share</small></div><div>${money(d.price, cur)}<small>Price</small></div><div class="${cls(d.marginOfSafety)}">${pct(d.marginOfSafety)}<small>Upside to fair value</small></div></div>
-      <div class="muted sm">Starting FCF ${big(d.startFcf)} ${esc(d.statementCurrency || "")} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)} ${esc(d.statementCurrency || "")}.${d.statementCurrency && !cur.startsWith(d.statementCurrency.slice(0, 2)) ? ` Fair value is converted from ${esc(d.statementCurrency)} at today's rate.` : ""}</div>`;
+      <div class="muted sm">Starting FCF ${big(d.startFcf)} ${esc(d.statementCurrency || "")} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)} ${esc(d.statementCurrency || "")}.${d.statementCurrency && !cur.startsWith(d.statementCurrency.slice(0, 2)) ? ` Fair value is converted from ${esc(d.statementCurrency)} at today's rate.` : ""}</div>
+      <p class="sm"><b>What the price assumes:</b> ${isNum(d.impliedGrowth) ? `free cash flow growing ${pct(d.impliedGrowth, 1, false)} a year for ${d.years} years, at this discount and terminal rate.` : "no growth rate from -50% to +100% a year reaches today's price with these rates."}</p>
+      <div class="tablewrap"><table class="grid"><tr><th>Growth ↓ · Discount →</th>${d.grid.discount.map((x) => `<th class="num">${pct(x, 1, false)}</th>`).join("")}</tr>${d.grid.fairValue.map((row, r) => `<tr><th>${pct(d.grid.growth[r], 1, false)}</th>${row.map((v) => `<td class="num ${isNum(v) ? cls(v - d.price) : ""}">${money(v, cur, 0)}</td>`).join("")}</tr>`).join("")}</table></div>
+      <p class="muted sm">Fair value at each pair of rates. Green is above today's price, red below.</p>`;
   } catch (e) { out.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
 $("#btnDcf").onclick = runDcf;

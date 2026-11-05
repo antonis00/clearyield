@@ -134,9 +134,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v4:EMPTY.X") is None
-        db.cache_set("info:v4:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v4:OLD.X'")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v5:EMPTY.X") is None
+        db.cache_set("info:v5:OLD.X", {"trailingPE": 12.0})
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v5:OLD.X'")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -892,6 +892,74 @@ def test_price_to_book_for_a_different_statement_currency():
         assert data._normalize_info("X.L", {**base, "currency": "GBp", "financialCurrency": "USD"})["priceToBook"] is None
     finally:
         data._yf, data.DEMO, data.statement_fx = real_yf, real_demo, real_fx
+
+
+def test_upcoming_events_only_show_future_dates():
+    import datetime as dt
+
+    from backend import data, db, insights
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    today = dt.date(2026, 6, 1)
+    ts = lambda d: dt.datetime(d.year, d.month, d.day, 12).timestamp()
+    ev = insights.upcoming({"earningsTimestampStart": ts(today + dt.timedelta(days=10)), "exDividendDate": ts(today - dt.timedelta(days=3))}, today)
+    assert ev == {"earnings": "2026-06-11", "earningsDays": 10, "exDividend": None, "exDividendDays": None}
+    assert insights.upcoming({}, today) == {"earnings": None, "earningsDays": None, "exDividend": None, "exDividendDays": None}
+    assert insights.upcoming({"exDividendDate": ts(today)}, today)["exDividendDays"] == 0
+
+    # The digest mentions them for holdings when they're close, and only for holdings
+    _reset()
+    soon, far = ts(dt.date.today() + dt.timedelta(days=5)), ts(dt.date.today() + dt.timedelta(days=60))
+    flat = _steps([0.0] * 300)
+    db.x("INSERT INTO holdings (ticker, shares, cost) VALUES ('SOON', 1, 100), ('FAR', 1, 100)")
+    db.x("INSERT INTO watchlist (ticker) VALUES ('WATCHED')")
+    infos = {"SOON": {"earningsTimestampStart": soon, "exDividendDate": soon}, "FAR": {"earningsTimestampStart": far}, "WATCHED": {"earningsTimestampStart": soon}}
+    with _FakeMarket({"SOON": flat, "FAR": flat, "WATCHED": flat}, infos):
+        texts = [i["text"] for i in insights.digest(db.get_settings())["items"]]
+    assert any("SOON reports earnings in 5 days" in t for t in texts) and any("SOON goes ex-dividend in 5 days" in t for t in texts)
+    assert not any("FAR reports" in t or "WATCHED reports" in t for t in texts)
+
+    # Demo mode has them too
+    _reset()
+    with TestClient(app) as c:
+        j = c.get("/api/stock/AAPL").json()
+        assert j["events"]["earnings"] and j["events"]["earningsDays"] >= 0
+
+
+def test_reverse_dcf_and_sensitivity_grid():
+    from backend import insights
+    inf = {"freeCashflow": 1e9, "sharesOutstanding": 1e9, "currency": "USD", "financialCurrency": "USD"}
+    # At 0% growth, 10% discount and 0% terminal, one year is worth exactly 10 a share (see the DCF test)
+    assert abs(insights.implied_growth(inf, 10.0, 1, 0.10, 0.0)) < 1e-6
+    # A higher price needs more growth: at 1 year and no terminal growth, fair value is 10 x (1 + g)
+    assert abs(insights.implied_growth(inf, 12.0, 1, 0.10, 0.0) - 0.20) < 1e-6
+    assert abs(insights.implied_growth(inf, 8.0, 1, 0.10, 0.0) + 0.20) < 1e-6
+    # Prices no plausible growth rate can reach say so
+    assert insights.implied_growth(inf, 1e6, 1, 0.10, 0.0) is None
+    assert insights.implied_growth({**inf, "freeCashflow": -1e9}, 10.0, 1, 0.10, 0.0) is None
+
+    g = insights.sensitivity(inf, 0.10, 5, 0.10, 0.02)
+    assert g["growth"] == [0.05, 0.075, 0.10, 0.125, 0.15] and g["discount"] == [0.08, 0.09, 0.10, 0.11, 0.12]
+    centre = insights.dcf(inf, 0.10, 5, 0.10, 0.02)["fairValue"]
+    assert g["fairValue"][2][2] == centre
+    # More growth is worth more, and a higher discount rate is worth less
+    assert g["fairValue"][4][2] > centre > g["fairValue"][0][2] and g["fairValue"][2][0] > centre > g["fairValue"][2][4]
+    # A discount rate at or below terminal growth has no answer
+    low = insights.sensitivity(inf, 0.10, 5, 0.04, 0.02)
+    assert low["discount"][0] == 0.02 and low["fairValue"][2][0] is None
+
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    with TestClient(app) as c:
+        for t in ("AAPL", "MSFT", "NVDA", "JPM", "KO"):
+            d = c.get(f"/api/dcf/{t}").json()
+            if "fairValue" in d:
+                assert "impliedGrowth" in d and len(d["grid"]["fairValue"]) == 5
+                break
+        else:
+            raise AssertionError("no demo ticker had a DCF")
 
 
 def test_minor_unit_currencies():

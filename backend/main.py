@@ -166,7 +166,7 @@ def stock(ticker: str, period: str = "1y"):
         pass
     watched = bool(db.q("SELECT 1 FROM watchlist WHERE ticker=?", (t,)))
     return ok({"ticker": t, "info": inf, "stats": stats, "scores": sc, "candles": candles,
-               "financials": data.financials(t), "watched": watched})
+               "financials": data.financials(t), "watched": watched, "events": insights.upcoming(inf)})
 
 
 @app.get("/api/stock/{ticker}/news")
@@ -189,11 +189,14 @@ def stock_brief(ticker: str):
 def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: float = 0.09, terminal: float = 0.025):
     t = T(ticker)
     full = _hist_or_404(t, "1y")
-    res = insights.dcf(data.info(t), growth, years, discount, terminal)
+    inf = data.info(t)
+    res = insights.dcf(inf, growth, years, discount, terminal)
     if "fairValue" in res:
         price = float(full["Close"].iloc[-1])
         res["price"] = price
         res["marginOfSafety"] = res["fairValue"] / price - 1
+        res["impliedGrowth"] = insights.implied_growth(inf, price, years, discount, terminal)
+        res["grid"] = insights.sensitivity(inf, res["growth"], years, discount, terminal)
     return ok(res)
 
 

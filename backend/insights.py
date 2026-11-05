@@ -18,6 +18,18 @@ def evaluate_ticker(t, settings):
     return full, inf, sc
 
 
+def upcoming(inf, today=None):
+    """Next earnings and ex-dividend dates. Yahoo often leaves past dates in place, so those count as not announced."""
+    today = today or dt.date.today()
+    out = {}
+    for name, key in (("earnings", "earningsTimestampStart"), ("exDividend", "exDividendDate")):
+        when = dt.date.fromtimestamp(inf[key]) if inf.get(key) else None
+        future = when is not None and when >= today
+        out[name] = when.isoformat() if future else None
+        out[f"{name}Days"] = (when - today).days if future else None
+    return out
+
+
 def _quick_row(t, settings):
     try:
         full, inf, sc = evaluate_ticker(t, settings)
@@ -32,7 +44,7 @@ def _quick_row(t, settings):
         "revGrowth": inf.get("revenueGrowth"), "roe": inf.get("returnOnEquity"), "de": inf.get("debtToEquity"),
         "marketCap": inf.get("marketCap"), "vol": ind.volatility(c), "rsi": float(ind.rsi(c).iloc[-1]),
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
-        "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only",
+        "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only", "events": upcoming(inf),
     }
 
 
@@ -136,6 +148,31 @@ def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
     return {"fairValue": fair, "statementCurrency": inf.get("financialCurrency"), "growth": growth, "years": years, "discount": discount, "terminal": terminal,
             "pvFlows": pv, "pvTerminal": tv_pv, "terminalShare": tv_pv / (pv + tv_pv), "netCash": cash - debt,
             "flows": flows, "startFcf": fcf}
+
+
+def implied_growth(inf, price, years=5, discount=0.09, terminal=0.025):
+    """The yearly free-cash-flow growth today's price assumes, by bisection. None if no rate from -50% to +100% gets there."""
+    def fair(g):
+        return dcf(inf, g, years, discount, terminal).get("fairValue")
+    lo, hi = -0.5, 1.0
+    low, high = fair(lo), fair(hi)
+    if low is None or high is None or not low <= price <= high:
+        return None
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        if fair(mid) < price:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def sensitivity(inf, growth, years=5, discount=0.09, terminal=0.025):
+    """Fair value across growth and discount rates around the chosen ones."""
+    growths = [round(growth + step, 6) for step in (-0.05, -0.025, 0, 0.025, 0.05)]
+    discounts = [round(discount + step, 6) for step in (-0.02, -0.01, 0, 0.01, 0.02)]
+    return {"growth": growths, "discount": discounts,
+            "fairValue": [[dcf(inf, g, years, d, terminal).get("fairValue") for d in discounts] for g in growths]}
 
 
 # ---------------------------------------------------------------- alerts
@@ -256,6 +293,11 @@ def digest(settings):
             items.append({"tone": -1, "ticker": t, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
         elif r["rsi"] <= 30:
             items.append({"tone": 1, "ticker": t, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
+        ev = r["events"]
+        if t in held and ev["earningsDays"] is not None and ev["earningsDays"] <= 14:
+            items.append({"tone": 0, "ticker": t, "text": f"{t} reports earnings in {ev['earningsDays']} days ({ev['earnings']})."})
+        if t in held and ev["exDividendDays"] is not None and ev["exDividendDays"] <= 7:
+            items.append({"tone": 0, "ticker": t, "text": f"{t} goes ex-dividend in {ev['exDividendDays']} days ({ev['exDividend']})."})
         if r["stance"] in ("Weak",) and t in held:
             items.append({"tone": -1, "ticker": t, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
     today = dt.date.today().isoformat()
