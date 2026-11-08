@@ -651,8 +651,19 @@ async function loadPortfolio() {
     });
     $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
     const pos = p.positions.find((x) => x.ticker === btn.dataset.lots);
-    modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}${l.split && l.split !== 1 ? `<div class="muted sm">Restated for splits since: ×${num(l.split, l.split < 1 ? 4 : 0)} shares</div>` : ""}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);
+    modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}${l.split && l.split !== 1 ? `<div class="muted sm">Restated for splits since: ×${num(l.split, l.split < 1 ? 4 : 0)} shares</div>` : ""}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="modal-actions"><button class="btn danger" data-delall title="Every transaction of this holding: purchases, sales and dividends">Delete all</button><button class="btn ghost" data-close>Close</button></div>`);
     $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { if (!confirm("Delete this lot?")) return; await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
+    // The whole holding, sales and dividends included, so nothing is left without the purchase it came from
+    $("[data-delall]", $("#modal")).onclick = async () => {
+      try {
+        const mine = (await api("/api/transactions")).filter((x) => x.ticker === pos.ticker);
+        const count = (k, word) => { const n = mine.filter((x) => (x.kind || "buy") === k).length; return n ? [`${n} ${word}${n > 1 ? "s" : ""}`] : []; };
+        const parts = [...count("buy", "purchase"), ...count("sell", "sale"), ...count("dividend", "dividend")];
+        if (!confirm(`Delete all ${mine.length} transactions of ${pos.ticker} (${parts.join(", ")})? This can't be undone.`)) return;
+        const r = await api(`/api/transactions/ticker/${encodeURIComponent(pos.ticker)}`, { method: "DELETE" });
+        $("#modal").classList.add("hidden"); toast(`Deleted ${r.deleted} transactions of ${pos.ticker}.`); loadPortfolio();
+      } catch (e) { toast(e.message); }
+    };
     });
   });
   renderCoreSatellite(p);

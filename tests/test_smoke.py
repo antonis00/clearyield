@@ -1449,6 +1449,21 @@ def test_fx_series_reads_the_history():
         db.cache_clear()
 
 
+def test_delete_a_whole_holding():
+    from backend import db
+    _reset()
+    with TestClient(app) as c:
+        text = "AAPL,10,100,2024-06-03\nAAPL,5,110,2024-09-02\nAAPL,4,150,2025-01-02,sell\nAAPL,,10,2025-02-03,dividend\nMSFT,2,300,2024-06-03"
+        assert c.post("/api/transactions/import", json={"text": text}).status_code == 200
+        r = c.delete("/api/transactions/ticker/aapl")  # any case, like everywhere else
+        assert r.status_code == 200 and r.json()["deleted"] == 4, r.text
+        assert [x["ticker"] for x in db.q("SELECT ticker FROM transactions")] == ["MSFT"]
+        assert [x["ticker"] for x in c.get("/api/portfolio").json()["positions"]] == ["MSFT"]
+        assert c.delete("/api/transactions/ticker/AAPL").status_code == 404, "nothing left to delete says so"
+        assert c.delete("/api/transactions/ticker/MSFT", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    _reset()
+
+
 def test_ledger_refuses_dates_that_would_break_it():
     from fastapi.testclient import TestClient
 
