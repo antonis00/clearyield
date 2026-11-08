@@ -148,10 +148,21 @@ def _hist_or_404(t, period="5y"):
 
 
 # ---------------------------------------------------------------- meta / search / macro
+def _tiles(settings):
+    """Every tile you can pick: the built-in ones, then your own. Ticker -> display name, in display order."""
+    return {**MACRO, **{c["ticker"]: c["name"] for c in settings.get("custom_tiles") or [] if c.get("ticker") not in MACRO}}
+
+
+def _tile_list(settings):
+    custom = {c["ticker"] for c in settings.get("custom_tiles") or []}
+    return [{"ticker": t, "name": n, "custom": t in custom} for t, n in _tiles(settings).items()]
+
+
 @app.get("/api/meta")
 def meta():
-    return ok({"demo": data.DEMO, "ai": ai.available(), "tiles": [{"ticker": t, "name": n} for t, n in MACRO.items()],
-               "settings": db.get_settings(), "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
+    settings = db.get_settings()
+    return ok({"demo": data.DEMO, "ai": ai.available(), "tiles": _tile_list(settings),
+               "settings": settings, "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
 
@@ -169,8 +180,9 @@ def search(q: str = ""):
 @app.get("/api/macro")
 def macro():
     out = []
-    chosen = set(db.get_settings().get("dashboard_tiles") or [])
-    for t, label in MACRO.items():
+    settings = db.get_settings()
+    chosen = set(settings.get("dashboard_tiles") or [])
+    for t, label in _tiles(settings).items():
         if t not in chosen:
             continue
         try:
@@ -180,6 +192,48 @@ def macro():
         except Exception:
             continue
     return ok(out)
+
+
+MAX_CUSTOM_TILES = 12
+
+
+@app.post("/api/tiles")
+def add_tile(body: dict = Body(...)):
+    """Your own dashboard tile. It's only saved once Yahoo has returned at least two days of prices for it,
+    because some symbols (the Gulf indexes, for one) answer with a single day and would show an empty tile."""
+    t = _ticker(body)
+    if any(c in t for c in " ,/\\"):
+        raise HTTPException(400, "Enter a single Yahoo symbol, like ^AEX or IWDA.AS.")
+    settings = db.get_settings()
+    custom = list(settings.get("custom_tiles") or [])
+    if t in MACRO:
+        raise HTTPException(400, f"{t} is already in the list as \"{MACRO[t]}\". Tick it above.")
+    if any(c["ticker"] == t for c in custom):
+        raise HTTPException(400, f"You already have a tile for {t}.")
+    if len(custom) >= MAX_CUSTOM_TILES:
+        raise HTTPException(400, f"You can have up to {MAX_CUSTOM_TILES} custom tiles. Remove one first.")
+    try:
+        close = data.history(t, "1y")["Close"].dropna()
+    except data.DataError:
+        raise HTTPException(400, f"Yahoo has no price history for {t}. Check the symbol on finance.yahoo.com.")
+    if len(close) < 2:
+        raise HTTPException(400, f"Yahoo only returns {len(close)} day of prices for {t}, so the tile would be empty. Try a fund that tracks it.")
+    name = str(body.get("name") or "").strip()[:40] or data.info(t).get("name") or t
+    custom.append({"ticker": t, "name": name})
+    shown = list(settings.get("dashboard_tiles") or []) + [t]
+    saved = db.set_settings({"custom_tiles": custom, "dashboard_tiles": [x for x in _tiles({"custom_tiles": custom}) if x in shown]})
+    return ok({"settings": saved, "tiles": _tile_list(saved)})
+
+
+@app.delete("/api/tiles/{ticker}")
+def remove_tile(ticker: str):
+    t = T(ticker)
+    settings = db.get_settings()
+    custom = [c for c in settings.get("custom_tiles") or [] if c["ticker"] != t]
+    if len(custom) == len(settings.get("custom_tiles") or []):
+        raise HTTPException(404, f"There's no custom tile for {t}.")
+    saved = db.set_settings({"custom_tiles": custom, "dashboard_tiles": [x for x in settings.get("dashboard_tiles") or [] if x != t]})
+    return ok({"settings": saved, "tiles": _tile_list(saved)})
 
 
 # ---------------------------------------------------------------- stock research
@@ -517,11 +571,12 @@ def settings_get():
 
 @app.post("/api/settings")
 def settings_set(body: dict = Body(...)):
+    body.pop("custom_tiles", None)  # added and removed through /api/tiles, which checks them
     if "dashboard_tiles" in body:
         tiles = body["dashboard_tiles"]
         if not isinstance(tiles, list):
             raise HTTPException(400, "Dashboard tiles must be a list of symbols.")
-        body["dashboard_tiles"] = [t for t in MACRO if t in tiles]  # known ones only, in display order
+        body["dashboard_tiles"] = [t for t in _tiles(db.get_settings()) if t in tiles]  # known ones only, in display order
     if "core_target" in body:
         v = _number(body, "core_target")
         if not 0 <= v <= 100:
