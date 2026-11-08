@@ -470,9 +470,19 @@ async function loadNews() {
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)) + briefFooter(r); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
+// Who wrote the brief, and whether every figure in it could be found in the data it was given
+function briefFooter(r) {
+  if (!r.by) return "";
+  const c = r.check, by = `Written by ${esc(r.by)}.`;
+  if (!c || !c.checked) return `<p class="muted sm">${by}</p>`;
+  const own = c.suggested?.length ? ` The triggers use ${c.suggested.length === 1 ? "a level" : `${c.suggested.length} levels`} of the model's own, not from the data: ${c.suggested.map(esc).join(", ")}.` : "";
+  const facts = c.checked - (c.suggested?.length || 0);
+  if (!c.unmatched.length) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${own} ${by}</p>`;
+  return `<p class="brief-check warn">${c.unmatched.length} of ${facts} figures aren't in the data, so the model may have made them up or worked them out: <b>${c.unmatched.map(esc).join(", ")}</b>. Check them before relying on them.${own} ${by}</p>`;
+}
 $("#btnWatch").onclick = async () => {
   if (state.stock.watched) { await api(`/api/watchlist/${encodeURIComponent(state.ticker)}`, { method: "DELETE" }); state.stock.watched = false; }
   else { await api("/api/watchlist", { method: "POST", body: { ticker: state.ticker } }); state.stock.watched = true; }
@@ -841,10 +851,25 @@ $("#btnAddTile").onclick = async () => {
 };
 ["#ctTicker", "#ctName"].forEach((id) => $(id).onkeydown = (e) => { if (e.key === "Enter") $("#btnAddTile").click(); });
 $("#btnBalanced").onclick = () => $$("[data-w]").forEach((r) => { r.value = 20; r.nextElementSibling.textContent = "20%"; });
+// The sidebar's status icons: lit green when a service is in use, greyed when it isn't. The logos are files in
+// frontend/icons, so the real ones can replace the stand-ins without touching the code.
+const statusIcon = (on, img, alt, tip) => `<span class="st ${on ? "on" : "off"}" role="img" aria-label="${esc(tip)}" data-tip="${esc(tip)}" data-icon="${esc(alt)}"><i style="--icon: url('/static/icons/${img}')"></i></span>`;
+const currencySymbol = (code) => {
+  try { return new Intl.NumberFormat("en", { style: "currency", currency: code }).formatToParts(0).find((x) => x.type === "currency").value; }
+  catch { return code; }
+};
+function aiStatus(a) {
+  const tip = a?.on ? `AI: ${a.model} via ${a.server}${a.thinking === "off" ? ", thinking off" : a.thinking === "on" ? ", thinking on" : ["low", "medium", "high"].includes(a.thinking) ? `, thinking ${a.thinking}` : ""}. Writes research briefs and reads screener questions.`
+    : a?.problem ? `AI isn't set up: ${a.problem}` : "AI is off. Set AI_PROVIDER in .env (see .env.example) for AI-written briefs.";
+  return `<span class="st txt ${a?.on ? "on" : "off"}" role="img" aria-label="${esc(tip)}" data-tip="${esc(tip)}" data-icon="AI">AI</span>`;
+}
 function renderModeBadge() {
-  const m = state.meta;
-  $("#modeBadge").innerHTML = `${m.demo ? '<span class="pill warn">DEMO DATA</span>' : '<span class="pill on">LIVE · Yahoo</span>'}
-    ${m.ai ? '<span class="pill on">AI on</span>' : '<span class="pill">AI off</span>'}<div style="margin-top:6px">Base: ${esc(m.settings.base_currency)}</div>`;
+  const m = state.meta, cur = m.settings.base_currency;
+  $("#modeBadge").innerHTML = `<div class="status">
+    ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance.")}
+    ${aiStatus(m.aiInfo)}
+    <span class="st cur" role="img" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}" data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings.">${esc(currencySymbol(cur))}</span>
+  </div>`;
 }
 $("#btnSaveSettings").onclick = async () => {
   if ($("#sRf").value.trim() === "") return toast("Enter a risk-free rate.");

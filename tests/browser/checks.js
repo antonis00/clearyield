@@ -196,7 +196,8 @@ const CHECKS = {
     // The sidebar follows the base currency
     await page.evaluate(() => { location.hash = "#settings"; }); await page.waitForTimeout(300);
     await page.selectOption("#sBase", "EUR"); await page.click("#btnSaveSettings"); await page.waitForTimeout(500);
-    expect("sidebar shows the new base", /Base: EUR/.test(await page.textContent("#modeBadge")), await page.textContent("#modeBadge"));
+    const cur = await page.evaluate(() => { const c = document.querySelector("#modeBadge [data-currency]"); return `${c.dataset.currency} ${c.textContent}`; });
+    expect("sidebar shows the new base", cur === "EUR €", cur);
     // A blank rate doesn't quietly become 0%, and all-zero weights are refused
     const rate = await page.inputValue("#sRf");
     await page.fill("#sRf", ""); await page.click("#btnSaveSettings"); await page.waitForTimeout(400);

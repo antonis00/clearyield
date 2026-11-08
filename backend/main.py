@@ -23,6 +23,32 @@ def _load_env(env=ROOT / ".env"):
 
 _load_env()
 
+
+def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
+    """On Windows, trust the certificates Windows trusts, as the browser does. Antivirus HTTPS scanning (Kaspersky, for
+    one) and company proxies re-sign secure connections with their own certificate, which Windows has but Python's
+    own list doesn't, so every call to Yahoo or a cloud AI provider would fail. Both yfinance's curl_cffi and httpx
+    read SSL_CERT_FILE, so one bundle covers them. A SSL_CERT_FILE you set yourself is left alone."""
+    if os.name != "nt" or os.getenv("SSL_CERT_FILE"):
+        return None
+    try:
+        import ssl
+
+        import certifi
+        pems = [Path(certifi.where()).read_text(encoding="ascii")]
+        for store in ("ROOT", "CA"):
+            pems += [ssl.DER_cert_to_PEM_cert(der) for der, enc, _ in ssl.enum_certificates(store) if enc == "x509_asn"]
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        bundle.write_text("\n".join(pems), encoding="ascii")
+        os.environ["SSL_CERT_FILE"] = str(bundle)
+        return bundle
+    except Exception as e:  # never stop the app over this: it just behaves as before
+        print(f"Could not add the Windows certificates: {e}")
+        return None
+
+
+_trust_windows_certificates()
+
 import numpy as np  # noqa: E402
 from fastapi import Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
@@ -161,7 +187,7 @@ def _tile_list(settings):
 @app.get("/api/meta")
 def meta():
     settings = db.get_settings()
-    return ok({"demo": data.DEMO, "ai": ai.available(), "tiles": _tile_list(settings),
+    return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": ai.describe(), "tiles": _tile_list(settings),
                "settings": settings, "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
@@ -322,7 +348,7 @@ def stock_brief(ticker: str):
     except data.DataError as e:
         raise HTTPException(404, str(e))
     ctx = {"ticker": t, "info": inf, "scores": sc, "stats": ind.stats(full["Close"], settings.get("risk_free_rate", 0.04)),
-           "news": data.news(t), "financials": data.financials(t)}
+           "news": data.news(t), "financials": data.financials(t), "price": float(full["Close"].iloc[-1])}
     return ok(ai.brief(ctx))
 
 

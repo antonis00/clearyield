@@ -10,6 +10,9 @@ from pathlib import Path
 os.environ["STOCKPILOT_DEMO"] = "1"
 os.environ["STOCKPILOT_DB"] = str(Path(tempfile.mkdtemp()) / "test.db")
 os.environ.pop("ANTHROPIC_API_KEY", None)
+for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING"):
+    os.environ.pop(_k, None)
+os.environ["AI_PROVIDER"] = "none"  # set before .env is read, which never overrides what's already set
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -2144,6 +2147,268 @@ def test_custom_and_preset_tiles():
             assert c.post("/api/tiles", json={"ticker": f"T{i}"}).status_code == 200
         assert "up to 12" in c.post("/api/tiles", json={"ticker": "IWDA.AS2"}).json()["detail"]
     _reset()
+
+
+class _FakeLLM:
+    """A real HTTP server standing in for an AI provider. `replies` is a list of (status, body, delay) used in turn;
+    every request is recorded as (path, headers, json)."""
+
+    def __init__(self, replies):
+        import json
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        self.replies, self.seen = list(replies), []
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                fake.seen.append((self.path, {k.lower(): v for k, v in self.headers.items()}, body))
+                status, reply, delay = fake.replies.pop(0) if fake.replies else (500, {"error": "no more replies"}, 0)
+                time.sleep(delay)
+                data = json.dumps(reply).encode()
+                try:
+                    self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data)))
+                    self.end_headers(); self.wfile.write(data)
+                except OSError:
+                    pass  # the client gave up waiting
+
+            def log_message(self, *a):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _chat(text):
+    return (200, {"choices": [{"message": {"role": "assistant", "content": text}}]}, 0)
+
+
+def _with_env(**env):
+    """Set AI_* variables for one block, and put back what was there."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def block():
+        keys = ("AI_PROVIDER", "AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL")
+        before = {k: os.environ.get(k) for k in keys}
+        for k in keys:
+            os.environ.pop(k, None)
+        os.environ.update({k: v for k, v in env.items() if v is not None})
+        try:
+            yield
+        finally:
+            for k, v in before.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+    return block()
+
+
+def test_ai_providers():
+    from backend import ai
+    ctx = {"ticker": "AAPL", "info": {"name": "Apple"}, "stats": {}, "news": [], "financials": [],
+           "scores": {"factors": {"value": 50}, "composite": 60, "stance": "Favorable", "signals": []}}
+
+    # Which provider is on, from .env alone
+    with _with_env():
+        assert not ai.available() and ai.describe()["provider"] == "none" and ai.describe()["problem"] is None
+        assert ai.brief(ctx)["source"] == "rules"
+    with _with_env(ANTHROPIC_API_KEY="sk-old"):  # an older .env with only the Anthropic key still works
+        c = ai.config()
+        assert ai.available() and c["provider"] == "anthropic" and c["model"] == ai.ANTHROPIC_DEFAULT_MODEL and c["timeout"] == 90
+    with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL="http://localhost:11434/v1", AI_MODEL="llama3.2:3b"):
+        d = ai.describe()
+        assert ai.available() and d == {"on": True, "provider": "openai_compatible", "server": "Ollama", "model": "llama3.2:3b", "thinking": "default", "problem": None}
+        assert ai.config()["timeout"] == 180, "local models get longer"
+    for url, name, timeout in (("http://127.0.0.1:1234/v1", "LM Studio", 180), ("https://openrouter.ai/api/v1", "OpenRouter", 90),
+                               ("https://api.groq.com/openai/v1", "Groq", 90), ("http://192.168.1.20:8080/v1", "192.168.1.20", 180)):
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=url, AI_MODEL="m"):
+            assert (ai.config()["server"], ai.config()["timeout"]) == (name, timeout), url
+    with _with_env(AI_PROVIDER="openai_compatible", AI_MODEL="m"):
+        assert not ai.available() and "AI_BASE_URL" in ai.describe()["problem"]
+    with _with_env(AI_PROVIDER="gemini"):
+        assert not ai.available() and "Unknown AI_PROVIDER" in ai.describe()["problem"]
+    with _with_env(AI_PROVIDER="anthropic", AI_API_KEY="secret-key"):
+        assert "secret-key" not in str(ai.describe()), "the key never leaves the server"
+
+    # openai_compatible: the right URL and body, no key header without a key, and reasoning removed from the brief
+    llm = _FakeLLM([_chat("<think>Let me look at the data first.</think>\n**Snapshot** Apple is fine.")])
+    try:
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url + "/v1", AI_MODEL="llama3.2:3b"):
+            b = ai.brief(ctx)
+            assert (b["source"], b["text"], b["by"]) == ("ai", "**Snapshot** Apple is fine.", "llama3.2:3b via 127.0.0.1") and b["check"] == {"checked": 0, "unmatched": [], "suggested": []}, b
+            path, headers, body = llm.seen[0]
+            assert path == "/v1/chat/completions" and "authorization" not in headers
+            assert body["model"] == "llama3.2:3b" and [m["role"] for m in body["messages"]] == ["system", "user"] and "AAPL" in body["messages"][1]["content"]
+            assert "reasoning_effort" not in body, "nothing extra is sent unless asked for"
+            assert body["temperature"] == 0, "the same data gives the same brief"
+        # Thinking off: asked for the way Ollama understands on this endpoint
+        llm.replies = [_chat("Quick answer.")]
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url + "/v1", AI_MODEL="gemma4:e4b", AI_THINKING="off"):
+            assert ai.brief(ctx)["text"] == "Quick answer." and ai.describe()["thinking"] == "off"
+            assert llm.seen[-1][2]["reasoning_effort"] == "none" and "think" not in llm.seen[-1][2]
+        # With a key (OpenRouter, Groq), it's sent as a bearer token
+        llm.replies = [_chat("Fine.")]
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk-123"):
+            ai.brief(ctx)
+            assert llm.seen[-1][1]["authorization"] == "Bearer gsk-123" and llm.seen[-1][0] == "/chat/completions"
+
+        # Anything going wrong gives the rule-based brief: an error, an empty reply, nobody listening, a timeout
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"):
+            for reply in ((500, {"error": "boom"}, 0), _chat("<think>only thinking</think>"), (200, {"choices": []}, 0)):
+                llm.replies = [reply]
+                b = ai.brief(ctx)
+                assert b["source"] == "rules" and "AI call failed" in b["text"] and "composite score 60" in b["text"], b
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL="http://127.0.0.1:9/v1", AI_MODEL="m"):
+            assert ai.brief(ctx)["source"] == "rules"
+        llm.replies = [(200, {"choices": [{"message": {"content": "late"}}]}, 1.5)]
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_TIMEOUT="0.5"):
+            b = ai.brief(ctx)
+            assert b["source"] == "rules" and "didn't answer within 0 seconds" not in b["text"] and "didn't answer within" in b["text"], b["text"][-80:]
+
+        # Screener questions: fences and reasoning removed, values put in the screener's units, unknown keys dropped
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"):
+            llm.seen.clear()
+            llm.replies = [_chat('<think>gulf means Gulf</think>Here you go:\n```json\n{"markets": ["gulf"], "max_pe": "15", "min_div_yield": 3, "colour": "blue"}\n```')]
+            # The model's values win where it gave one; what only the keyword rules caught (here the dividend sort) is kept
+            rules = ai._parse_rules("cheap gulf dividend payers")
+            assert ai.parse_query("cheap gulf dividend payers") == {**rules, "max_pe": 15.0, "min_div_yield": 0.03, "markets": ["Gulf"]}
+            assert len(llm.seen) == 1
+            # Unreadable once: asked again, and the second answer is used
+            llm.seen.clear()
+            llm.replies = [_chat("I think you want Gulf stocks!"), _chat('{"markets": ["US"], "sort": "growth"}')]
+            got = ai.parse_query("fast growing american companies")
+            assert got["markets"] == ["US"] and got["sort"] == "growth" and got["min_rev_growth"] == 0.10 and "ignored" not in got, got
+            assert len(llm.seen) == 2 and "couldn't be read" in llm.seen[1][2]["messages"][1]["content"]
+            # Unreadable twice: the regex rules take over
+            llm.seen.clear()
+            llm.replies = [_chat("no idea"), (500, {}, 0)]
+            assert ai.parse_query("cheap gulf banks") == ai._parse_rules("cheap gulf banks") and len(llm.seen) == 2
+
+        # The Anthropic path still works, against the same stand-in
+        llm.seen.clear()
+        llm.replies = [(200, {"content": [{"type": "text", "text": "Anthropic brief."}]}, 0)]
+        with _with_env(AI_PROVIDER="anthropic", AI_BASE_URL=llm.url + "/v1", AI_API_KEY="sk-ant", AI_MODEL="claude-x"):
+            b = ai.brief(ctx)
+            assert (b["source"], b["text"], b["by"]) == ("ai", "Anthropic brief.", "claude-x via Anthropic")
+            path, headers, body = llm.seen[0]
+            assert path == "/v1/messages" and headers["x-api-key"] == "sk-ant" and body["model"] == "claude-x" and body["system"] and body["temperature"] == 0
+    finally:
+        llm.close()
+
+    # The sidebar gets the provider through /api/meta
+    with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL="http://localhost:11434/v1", AI_MODEL="llama3.2:3b"):
+        with TestClient(app) as c:
+            m = c.get("/api/meta").json()
+            assert m["ai"] is True and m["aiInfo"]["server"] == "Ollama" and m["aiInfo"]["model"] == "llama3.2:3b"
+
+
+def test_brief_accuracy():
+    import json
+
+    from backend import ai
+    info = {"name": "Apple Inc.", "currency": "USD", "financialCurrency": "USD", "assetClass": "Stocks", "sector": "Technology",
+            "marketCap": 4.98e12, "returnOnEquity": 1.4213, "trailingPE": 38.127, "debtToEquity": 1.03, "dividendYield": 0.0032,
+            "operatingMargins": 0.311, "revenueGrowth": 0.117, "targetMeanPrice": 339.04, "recommendationKey": "buy", "beta": None}
+    scores = {"composite": 61.4, "stance": "Favorable", "signals": [{"tone": 1, "text": "Long-term uptrend: 50-day average is above the 200-day."}],
+              "factors": {"value": 9.0, "quality": 76.6, "growth": 64.0, "momentum": 81.3, "risk": 76.5}}
+    news = [{"title": "Apple unveils new iPhone", "publisher": "Reuters", "time": "2026-11-07T10:00:00Z"},
+            {"title": "Cellcom Israel stock still looks reasonable after a 192% run", "publisher": "Simply Wall St"},
+            {"title": "Market wrap: Nasdaq falls", "summary": "Apple and Microsoft led the decline.", "time": "2026-11-06T21:00:00Z"}]
+    ctx = {"ticker": "AAPL", "info": info, "stats": {"ret1y": 0.2738, "vol1y": 0.2484, "maxDD1y": -0.138, "sharpe1y": 0.94},
+           "scores": scores, "news": news, "financials": [{"year": "2025", "revenue": 391.04e9, "netIncome": None, "fcf": 108.8e9}], "price": 342.37}
+
+    # 1. Figures arrive in their units, nothing raw and nothing null
+    data = ai.brief_data(ctx)
+    flat = json.dumps(data, ensure_ascii=False)
+    assert data["Profitability and balance sheet"]["Return on equity"] == "142.1%" and data["Valuation"]["P/E, trailing 12 months"] == "38.1x"
+    assert data["Company"]["Market capitalisation"] == "4.98T USD" and data["Dividend"]["Dividend yield"] == "0.32%"
+    assert data["Price"]["Target vs last price"] == "-1.0%" and data["Price performance and risk"]["Largest fall from a peak, 1 year"] == "-13.8%"
+    assert data["Annual accounts, oldest first"] == [{"Year": "2025", "Revenue": "391.04B USD", "Free cash flow": "108.80B USD"}]
+    assert "1.4213" not in flat and "null" not in flat and "Beta" not in flat, "missing figures are left out"
+    # 2. What the scores mean, with risk spelled out
+    assert "higher means calmer, so LOWER risk" in data["What the scores mean"] and data["StockPilot scores"]["Risk factor"] == "76.5 out of 100"
+    # 4. Only headlines that name the company, with their dates
+    assert data["Recent headlines naming the company"] == ["2026-11-07 Reuters: Apple unveils new iPhone", "2026-11-06 : Market wrap: Nasdaq falls"]
+    assert ai.relevant_headlines([{"title": "Saudi stocks rise"}], "2222.SR", "Saudi Arabian Oil Company") == [], "a country name alone isn't the company"
+    assert ai.brief_data({**ctx, "news": news[1:2]})["Recent headlines naming the company"] == "None of the recent headlines name the company."
+
+    # 5. The check: figures must be in the data, in the same unit, allowing for rounding and for "fell" instead of a minus
+    facts = json.dumps(data, ensure_ascii=False)
+    good = ("ROE is 142.1%, P/E about 38x, a $4.98 trillion company, revenue of $391 billion. It fell 13.8% from its peak; "
+            "volatility 24.84%. Risk score 76.5 out of 100. The S&P 500 and the 200-day average, 3 risks, in 2025.")
+    assert ai.check_figures(good, facts) == {"checked": 8, "unmatched": []}, ai.check_figures(good, facts)
+    # Written with a non-breaking hyphen and narrow spaces, as some models do
+    fancy = "The 50\u2011day average is above the 200\u2011day; the target implies \u20111.0\u202f% and ROE is 142.1\u202f%."
+    assert ai.check_figures(fancy, facts) == {"checked": 2, "unmatched": []}, ai.check_figures(fancy, facts)
+    bad = "ROE of 1.42, P/E of 3.8x, margins of 27.6%, and growth well above its 5-year average of 8%."
+    assert ai.check_figures(bad, facts)["unmatched"] == ["1.42", "3.8x", "27.6%", "8%"]
+
+    # 3. The rules travel with the prompt, and the result reaches the page
+    # Trigger levels are the model's own suggestions, kept apart from figures claimed to be data
+    trig = "ROE is 142.1%.\n\n**What would change the view**\n- Revenue growth falling below 10%.\n- ROE dropping from 142.1%."
+    assert ai.check_brief(trig, facts) == {"checked": 3, "unmatched": [], "suggested": ["10%"]}
+    llm = _FakeLLM([_chat("**Snapshot** ROE is 142.1% but the P/E of 45x is high.")])
+    try:
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"):
+            b = ai.brief(ctx)
+        prompt = llm.seen[0][2]["messages"][1]["content"]
+        assert "never convert units or calculate new figures" in prompt and '"Return on equity": "142.1%"' in prompt
+        assert b["check"] == {"checked": 2, "unmatched": ["45x"], "suggested": []}
+    finally:
+        llm.close()
+
+
+def test_thinking_and_cloud_setup():
+    import ssl
+    import tempfile
+
+    from backend import ai, main
+    ctx = {"ticker": "AAPL", "info": {"name": "Apple"}, "stats": {}, "news": [], "financials": [],
+           "scores": {"factors": {"value": 50}, "composite": 60, "stance": "Favorable", "signals": []}}
+    groq = dict(AI_PROVIDER="openai_compatible", AI_BASE_URL="https://api.groq.com/openai/v1", AI_MODEL="openai/gpt-oss-120b")
+
+    # The example key from .env.example counts as not set up, so nothing is sent and the sidebar says why
+    with _with_env(**groq, AI_API_KEY="my_api_key", AI_THINKING="on"):
+        d = ai.describe()
+        assert not d["on"] and "placeholder 'my_api_key'" in d["problem"] and d["server"] == "Groq" and ai.config()["timeout"] == 90
+        assert ai.brief(ctx)["source"] == "rules"
+
+    # Thinking on: the provider's own reasoning, with six times the room so it can't use up the reply;
+    # an effort level is passed through; off still sends "none"; unset sends nothing
+    llm = _FakeLLM([_chat("A."), _chat("B."), _chat("C."), _chat("D.")])
+    try:
+        for thinking, effort, room in (("on", None, 900 * 6), ("high", "high", 900 * 6), ("off", "none", 900), ("", None, 900)):
+            with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk_x", AI_THINKING=thinking):
+                assert ai.brief(ctx)["source"] == "ai"
+            body = llm.seen[-1][2]
+            assert body.get("reasoning_effort") == effort and body["max_tokens"] == room, (thinking, body.get("reasoning_effort"), body["max_tokens"])
+    finally:
+        llm.close()
+
+    # Windows: the app trusts what Windows trusts, so antivirus HTTPS scanning doesn't break Yahoo or the AI provider,
+    # and a certificate file you chose yourself is kept
+    if os.name == "nt":
+        bundle = Path(tempfile.mkdtemp()) / "ca.pem"
+        before = os.environ.pop("SSL_CERT_FILE", None)
+        try:
+            assert main._trust_windows_certificates(bundle) == bundle and os.environ["SSL_CERT_FILE"] == str(bundle)
+            text = bundle.read_text(encoding="ascii")
+            windows = sum(1 for store in ("ROOT", "CA") for _, enc, _ in ssl.enum_certificates(store) if enc == "x509_asn")
+            assert text.count("BEGIN CERTIFICATE") > windows, "certifi's list plus every Windows certificate"
+            os.environ["SSL_CERT_FILE"] = "C:/mine.pem"
+            assert main._trust_windows_certificates(bundle) is None and os.environ["SSL_CERT_FILE"] == "C:/mine.pem"
+        finally:
+            os.environ.pop("SSL_CERT_FILE", None)
+            if before:
+                os.environ["SSL_CERT_FILE"] = before
 
 
 def test_minor_unit_currencies():
