@@ -234,6 +234,14 @@ def _since(ticker, date):
     return (float(past.iloc[-1]) if not past.empty else None), float(c.iloc[-1])
 
 
+def _dividend_adjustment(ticker, date):
+    ratio = data.dividend_factor(ticker)
+    if ratio is None:
+        return 1.0
+    past = ratio[ratio.index <= pd.Timestamp(date)]
+    return float(past.iloc[-1]) if not past.empty else 1.0
+
+
 def _entry_result(j, default_benchmark):
     date = dt.date.fromtimestamp(j["ts"])
     out = {"id": j["id"], "ticker": j["ticker"], "action": j["action"], "stance": j["stance"], "score": j["score"],
@@ -242,13 +250,18 @@ def _entry_result(j, default_benchmark):
         then, now = _since(j["ticker"], date)
     except data.DataError as e:
         return {**out, "error": str(e)}
-    entry = j["price"] or then
+    # Prices written down before a split are restated, as Yahoo's prices are: 1,200 before a 10-for-1 split is 120 now
+    factor = ledger.split_factor(data.splits(j["ticker"]), date.isoformat())
+    # Your own price, restated like Yahoo's adjusted prices for the dividends paid since, so the return includes them
+    # as the benchmark's does. Without this a dividend payer always looked worse than it was. Stop and target stay
+    # plain price levels.
+    entry = j["price"] / factor * _dividend_adjustment(j["ticker"], date) if j["price"] else then
     if not entry:
         return {**out, "error": "No price from the day of this entry."}
     out["returnSince"] = now / entry - 1
-    if j["stop_price"] and now <= j["stop_price"]:
+    if j["stop_price"] and now <= j["stop_price"] / factor:
         out["status"] = "Stop hit"
-    elif j["target_price"] and now >= j["target_price"]:
+    elif j["target_price"] and now >= j["target_price"] / factor:
         out["status"] = "Target reached"
     try:
         b_then, b_now = _since(out["benchmark"], date)

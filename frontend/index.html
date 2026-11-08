@@ -243,7 +243,7 @@
       </div>
       <div id="hHint" class="muted sm"></div>
       <details id="pasteBox"><summary class="muted sm">Paste several at once</summary>
-        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total in price. If any line has a problem, nothing is added.</p>
+        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total received in price, in the currency paid (pounds, not pence, for London stocks). If any line has a problem, nothing is added.</p>
         <textarea id="hPaste" rows="5" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
         <div class="form-row"><button class="btn ghost" id="btnPaste">Add these</button></div>
       </details>

@@ -54,19 +54,24 @@ def _risk_shares(series, bucket_of):
     return {b: float(parts[b].cov(whole) / whole.var()) for b in parts.columns}
 
 
-def _bucket_performance(rows, base, bucket_of, dates):
-    """Each bucket's time-weighted return over the days both were held, so neither gets credit for a market the
-    other missed. Closed positions count in the bucket they're in now."""
-    lines = {b: _actual_performance([r for r in rows if bucket_of(r["ticker"]) == b], base) for b in BUCKETS}
+def _bucket_performance(rows, base, bucket_of):
+    """Each bucket's time-weighted return over every day both were held, so neither gets credit for a market the
+    other missed. That's the whole history, not just the past year. Lots with no date count from the first dated
+    trade; with no dated trades at all it's the past year, and says so. Closed positions count in their bucket now."""
+    dated = sorted(r["date"] for r in rows if r.get("date") and (r.get("kind") or "buy") != "dividend")
+    period, since = ("max", pd.Timestamp(dated[0]) - pd.Timedelta(days=7)) if dated else ("1y", None)
+    lines = {b: _actual_performance([r for r in rows if bucket_of(r["ticker"]) == b], base, period, since) for b in BUCKETS}
     if any(v is None for v in lines.values()):
         return None
     start = max(v.index[0] for v in lines.values())
-    out = {"start": start.strftime("%Y-%m-%d"), "days": int(min(len(v[v.index >= start]) for v in lines.values()) - 1)}
+    dates = sorted(set(lines["core"].index) | set(lines["satellite"].index))
+    dates = [d for d in dates if d >= start]
+    out = {"start": start.strftime("%Y-%m-%d"), "pastYearOnly": not dated, "dates": [d.strftime("%Y-%m-%d") for d in dates],
+           "days": int(min(len(v[v.index >= start]) for v in lines.values()) - 1)}
     for b, v in lines.items():
         at_start = v.asof(start)
         out[b] = float(v.iloc[-1] / at_start - 1)
-        line = v.reindex(dates).ffill() / at_start * 100
-        out[f"{b}Line"] = [None if (d < start or pd.isna(x)) else float(x) for d, x in zip(dates, line)]
+        out[f"{b}Line"] = [None if pd.isna(x) else float(x) for x in v.reindex(dates).ffill() / at_start * 100]
     out["edge"] = out["satellite"] - out["core"]
     return out
 
@@ -89,17 +94,19 @@ def _lot_fx(lot, currency, base, today_fx):
     return today_fx, data.fx_is_fixed(currency, base)
 
 
-def _actual_performance(rows, base):
+def _actual_performance(rows, base, period="1y", since=None):
     """Daily index of what was actually held: the shares at each day's close, carried to the next close, at each day's
     FX rate. Trades don't count as gains, and adjusted prices include dividends. None until something has been held overnight."""
     deltas = defaultdict(list)
-    for r in rows:
+    for r in ledger.in_todays_shares(rows):  # the same units as Yahoo's split-adjusted prices
         if r["kind"] != "dividend":
             deltas[r["ticker"]].append((r["date"], r["shares"] if r["kind"] == "buy" else -r["shares"]))
     prices = {}
     for t in deltas:
         try:
-            close = data.history(t, "1y")["Close"]
+            close = data.history(t, period)["Close"]
+            if since is not None:
+                close = close[close.index >= since]
             cur = data.info(t).get("currency")
             rate = data.fx_series(cur, base, close.index)
             prices[t] = close * (rate if rate is not None else data.fx_rate(cur, base))
@@ -154,7 +161,9 @@ def _realised(book, base):
             else:
                 all_dated = False
         for d in p["dividends"]:
-            at, a = _sale_fx(cur, base, d["date"], fx)
+            # A dividend is the total received, which brokers pay in pounds (dinars...), even for a stock quoted in pence (fils)
+            pay = data.main_unit(cur)
+            at, a = _sale_fx(pay, base, d["date"], fx if pay == cur else data.fx_rate(pay, base))
             dividends += d["amount"] * at
             exact = exact and a
             flows.append((dt.date.fromisoformat(d["date"]), d["amount"] * at))
@@ -202,7 +211,9 @@ def summary(settings, extra=None):
             "bucket": bucket_of(t), "bucketDefault": default_bucket(t),
             "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),
         })
-        series[t] = close * p["shares"] * fx
+        # Each day's exchange rate, so risk is what a holder in the base currency lived through, currency moves included
+        rate = data.fx_series(cur, base, close.index)
+        series[t] = close * p["shares"] * (rate if rate is not None else fx)
 
     total = sum(r["value"] for r in rows)
     total_cost = sum(r["cost"] for r in rows)
@@ -270,6 +281,12 @@ def summary(settings, extra=None):
                 risk["benchmarkReturn"] = float(b.iloc[-1] / b.iloc[0] - 1)
 
     warnings = []
+    for t, p in book.items():
+        if p["shares"] > 0 and any(not lot["bought"] for lot in p["lots"]):
+            cut = data.splits(t)
+            if cut:
+                warnings.append(f"{t} has split (latest {cut[-1][0]}, {cut[-1][1]:g} for 1), and it has a lot with no date, so that lot is counted "
+                                f"as entered. If you bought it before the split, add the date so its shares and cost are restated.")
     for r in rows:
         if r["stale"]:
             warnings.append(f"{r['ticker']}'s price is old: Yahoo isn't responding, so this uses {r['asOf']}.")
@@ -334,7 +351,7 @@ def summary(settings, extra=None):
             core_satellite["action"] = "Hold" if abs(gap) <= 0.02 else ("To core" if gap > 0 else "To satellite")
             core_satellite["amount"] = abs(gap) * total
         if perf and not extra:
-            core_satellite["performance"] = _bucket_performance(db.q("SELECT * FROM transactions"), base, bucket_of, actual.index)
+            core_satellite["performance"] = _bucket_performance(db.q("SELECT * FROM transactions"), base, bucket_of)
 
     income = sum(r["value"] * r["dividendYield"] for r in rows)
     return {

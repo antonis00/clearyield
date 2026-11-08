@@ -108,11 +108,16 @@ def slice_period(df, period):
     return ind.window(df, PERIOD_DAYS.get(period, 252))
 
 
-def weekly(view, lines):
+# Markets whose trading week runs Sunday to Thursday. The UAE moved to Monday to Friday in 2022.
+SUN_THU = (".SR", ".QA", ".KW", ".BH", ".OM")
+
+
+def weekly(view, lines, ticker=""):
     """One candle per week, built from the daily ones and dated by the week's first trading day. The indicator
-    lines keep their daily meaning (SMA 50 is still 50 days) and take each week's last daily value."""
+    lines keep their daily meaning (SMA 50 is still 50 days) and take each week's last daily value. Weeks run Monday
+    to Sunday, or Friday to Thursday where trading runs Sunday to Thursday, so a Sunday opens its week there."""
     days = pd.Series(view.index, index=view.index)
-    week = view.index.to_period("W")
+    week = view.index.to_period("W-THU" if ticker.endswith(SUN_THU) else "W")
     g = view.groupby(week)
     first, last = days.groupby(week).first(), days.groupby(week).last()
     candles = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(), "Low": g["Low"].min(),
@@ -176,6 +181,11 @@ INFO_KEYS = [
 
 # Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
 MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.0), "ILA": ("ILS", 100.0), "KWF": ("KWD", 1000.0)}
+
+
+def main_unit(currency):
+    """The currency a payment is made in: pounds for a stock quoted in pence, dinars for one quoted in fils."""
+    return MINOR_UNITS.get(currency, (currency,))[0]
 
 
 def info(ticker):
@@ -340,6 +350,52 @@ def earnings_record(ticker):
 FUND_SECTORS = {"realestate": "Real Estate", "consumer_cyclical": "Consumer Cyclical", "basic_materials": "Basic Materials",
                 "consumer_defensive": "Consumer Defensive", "technology": "Technology", "communication_services": "Communication Services",
                 "financial_services": "Financial Services", "utilities": "Utilities", "industrials": "Industrials", "energy": "Energy", "healthcare": "Healthcare"}
+
+
+def splits(ticker):
+    """[(date, ratio)], oldest first: 10.0 for a 10-for-1 split, 0.1 for a 1-for-10 reverse split. Yahoo's prices are
+    already adjusted for these, so trades recorded before a split have to be restated to match them."""
+    if DEMO:
+        return []
+    key = f"splits:{ticker}"
+    cached = db.cache_get(key, 24 * 3600)
+    if cached is not None:
+        return [tuple(x) for x in cached]
+    try:
+        raw = _yf().Ticker(ticker).splits
+        out = [(pd.Timestamp(d).strftime("%Y-%m-%d"), float(r)) for d, r in raw.items() if r and float(r) > 0 and float(r) != 1.0]
+    except Exception as e:
+        log.warning("splits failed for %s: %s", ticker, e)
+        stale = db.cache_get_stale(key)
+        return [tuple(x) for x in stale] if stale else []  # not cached, so it's asked again next time
+    db.cache_set(key, out)
+    return out
+
+
+def dividend_factor(ticker):
+    """Yahoo's dividend-adjusted price over the plain price, by date (1.0 today, lower before each dividend), or None.
+    Multiplying a price paid on a date by it puts that price on the same footing as the adjusted prices the app uses,
+    so a return measured from it includes the dividends since, like the benchmark's."""
+    if DEMO:
+        return None
+    key = f"divfactor:{ticker}"
+    cached = db.cache_get(key, TTL["history"])
+    if cached is None:
+        try:
+            raw = _yf().Ticker(ticker).history(period="max", interval="1d", auto_adjust=False)
+            ratio = (raw["Adj Close"] / raw["Close"]).dropna()
+            idx = pd.to_datetime(ratio.index)
+            ratio.index = (idx.tz_localize(None) if idx.tz is not None else idx).normalize()
+            if ratio.empty:
+                return None
+            cached = {"index": [d.strftime("%Y-%m-%d") for d in ratio.index], "ratio": [float(v) for v in ratio]}
+            db.cache_set(key, cached)
+        except Exception as e:
+            log.warning("dividend factor failed for %s: %s", ticker, e)
+            cached = db.cache_get_stale(key)
+            if cached is None:
+                return None
+    return pd.Series(cached["ratio"], index=pd.to_datetime(cached["index"]))
 
 
 def fund(ticker):

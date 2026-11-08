@@ -62,7 +62,11 @@ Views are dashboard, research, compare, screener, portfolio, backtest, journal a
 
 ## Gotchas
 - yfinance `dividendYield` is sometimes a percent and sometimes a fraction; `debtToEquity` comes as a percentage (150 = 1.5x).
-- London `.L` prices are in **GBp (pence)**, Kuwait in fils (KWF). See `MINOR_UNITS`.
+- London `.L` prices are in **GBp (pence)**, Kuwait in fils (KWF). See `MINOR_UNITS`. Dividends, though, are entered as the total received in the main currency (pounds, dinars), as brokers pay them: `data.main_unit()`.
+- **Splits:** Yahoo's prices are split-adjusted, so `ledger.in_todays_shares()` restates every dated buy and sale before a split (`data.splits()`) in today's shares inside `replay()`, which all holdings, P&L, XIRR, validation and the performance chart go through. Undated lots can't be placed and stay as entered, with a warning. The journal scorecard restates entry, stop and target the same way.
+- **Journal returns** include dividends on both sides: a price you entered is multiplied by `data.dividend_factor()` (Yahoo's adjusted / plain close on that date), matching the benchmark's adjusted prices.
+- **Weekly candles** for Sunday-to-Thursday markets (`.SR .QA .KW .BH .OM`, `data.SUN_THU`) group Friday to Thursday; the UAE has traded Monday to Friday since 2022.
+- **RSI** of a price that doesn't move is 50, not 100. **Portfolio risk** (volatility, drawdown, Sharpe, beta) uses each day's FX rate, like the performance chart. The Core & satellite comparison runs over the whole history, with undated lots from the first dated trade.
 - Gulf fundamentals on Yahoo are patchy. Expect `None` values, which the UI shows as "—".
 - The Gulf indexes `^TASI.SR` and `^GNRI.QA` return a single day of history, so the dashboard follows the KSA and QAT ETFs instead.
 - European funds are listed only with an exchange suffix (VWCE doesn't exist on Yahoo, VWCE.DE does). Search adds Yahoo's results to the built-in list for this reason.
