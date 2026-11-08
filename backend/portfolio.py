@@ -176,6 +176,15 @@ def _realised(book, base):
     return out, flows, all_dated, unpriced
 
 
+def _income(ticker, shares, price, fx, inf):
+    """A year's dividends in the base currency at today's holding: what each share actually paid over the past year,
+    or Yahoo's yield when the payments aren't available (demo mode, or Yahoo not answering)."""
+    paid = data.dividends_past_year(ticker)
+    if paid is None:
+        return shares * price * fx * (inf.get("dividendYield") or 0)
+    return shares * paid * fx
+
+
 def summary(settings, extra=None):
     """`extra` is a hypothetical lot, included in the figures but never saved."""
     base = settings.get("base_currency", "USD")
@@ -207,7 +216,7 @@ def summary(settings, extra=None):
             "pnlPct": (value / cost - 1) if cost else None, "dayPnl": p["shares"] * (price - prev) * fx,
             "dayPct": price / prev - 1 if prev else None, "sector": inf.get("sector") or inf.get("assetClass"),
             "region": inf.get("region"), "assetClass": inf.get("assetClass"),
-            "dividendYield": inf.get("dividendYield") or 0, "lots": p["lots"],
+            "dividendYield": inf.get("dividendYield") or 0, "income": _income(t, p["shares"], price, fx, inf), "lots": p["lots"],
             "bucket": bucket_of(t), "bucketDefault": default_bucket(t),
             "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),
         })
@@ -227,9 +236,20 @@ def summary(settings, extra=None):
     closed = [c for t, c in realised.items() if not book[t]["shares"]]
     realised_total = sum(c["realised"] for c in realised.values())
     dividends_total = sum(c["dividends"] for c in realised.values())
-    annual = None
-    if all_dated and flows and not missing:
-        annual = ledger.xirr(flows + ([(dt.date.today(), total)] if total else []))
+    # The annual return, or the actual reason there isn't one
+    annual, annual_why = None, None
+    if missing or unpriced:
+        annual_why = "Withheld until every holding has data"
+    elif not all_dated:
+        annual_why = "Needs a date on every purchase and sale"
+    elif not flows:
+        annual_why = "Needs a dated purchase"
+    else:
+        dated = flows + ([(dt.date.today(), total)] if total else [])
+        annual = ledger.xirr(dated)
+        if annual is None:
+            span = (max(d for d, _ in dated) - min(d for d, _ in dated)).days
+            annual_why = "Needs a month or more of history" if span < 30 else "Can't be worked out from these cash flows"
     for r in rows:
         r["weight"] = r["value"] / total if total else 0
 
@@ -353,15 +373,17 @@ def summary(settings, extra=None):
         if perf and not extra:
             core_satellite["performance"] = _bucket_performance(db.q("SELECT * FROM transactions"), base, bucket_of)
 
-    income = sum(r["value"] * r["dividendYield"] for r in rows)
+    income = sum(r["income"] for r in rows)
     return {
         "base": base, "positions": sorted(rows, key=lambda r: -r["value"]), "total": total, "cost": total_cost,
         "pnl": total - total_cost, "pnlPct": (total / total_cost - 1) if total_cost else None,
-        "dayPnl": sum(r["dayPnl"] for r in rows), "allocation": allocation, "performance": perf, "risk": risk,
+        # The latest day of each holding, which on a weekend is Friday for stocks but Sunday for crypto
+        "dayPnl": sum(r["dayPnl"] for r in rows), "dayFrom": min((r["asOf"] for r in rows), default=None),
+        "dayTo": max((r["asOf"] for r in rows), default=None), "allocation": allocation, "performance": perf, "risk": risk,
         "warnings": warnings, "rebalance": rebalance, "coreSatellite": core_satellite, "annualIncome": income, "errors": errors,
         "incomplete": incomplete, "missing": missing, "_series": series,
         "realised": realised_total, "dividends": dividends_total, "totalGain": total - total_cost + realised_total + dividends_total,
-        "xirr": annual, "closed": closed,
+        "xirr": annual, "xirrWhy": annual_why, "closed": closed,
         "note": "The chart follows what you actually held each day, at each day's FX rate, with dividends included in the prices. Trades themselves aren't gains. Lots with no date count as held from the start.",
     }
 

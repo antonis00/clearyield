@@ -38,6 +38,17 @@ function money(v, cur = "USD", d = 2) {
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, minimumFractionDigits: d, maximumFractionDigits: d }).format(v); }
   catch { return `${num(v, d)} ${esc(cur)}`; }
 }
+// "Today" only when every holding's latest price is from today; otherwise the day (or days) the change is for,
+// since at a weekend stocks show Friday's move and crypto the weekend's
+const shortDay = (iso) => new Date(`${iso}T12:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+function dayChange(p) {
+  if (!p.dayTo) return ["Today", ""];
+  const today = new Date().toLocaleDateString("en-CA");
+  if (p.dayFrom === today && p.dayTo === today) return ["Today", ""];
+  return ["Latest day", p.dayFrom === p.dayTo ? shortDay(p.dayTo) : `${shortDay(p.dayFrom)} – ${shortDay(p.dayTo)}, each holding's latest`];
+}
+// A price as it should read: a yield like the 10-year Treasury's in percent, an index in points, anything else in its currency
+const priceOf = (v, r) => r?.priceUnit === "%" ? (isNum(v) ? `${num(v, 2)}%` : "—") : r?.priceUnit === "points" ? num(v, 2) : money(v, r?.currency);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const badge = (st) => `<span class="badge b-${esc((st || "Insufficient").split(" ")[0])}">${esc(st || "n/a")}</span>`;
 const scoreColor = (s) => (!isNum(s) ? C("--muted") : s >= 70 ? C("--up") : s >= 58 ? C("--accent2") : s >= 45 ? C("--neutral") : s >= 35 ? C("--accent") : C("--down"));
@@ -88,7 +99,9 @@ function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
   // Sorting rebuilds the rows, so anything bound to them has to be bound again each time
   return { afterDraw(fn) { after = fn; fn(); } };
 }
-const symCell = (v, r) => `<span class="sym">${esc(v)}</span><span class="sub">${esc(r.name || "")}</span>`;
+// A price Yahoo couldn't refresh is marked wherever it shows, so an old number isn't read as today's
+const oldMark = (r) => r?.stale ? ` <span class="pill warn sm" title="Yahoo isn't responding, so this is the last price it gave${r.asOf ? `, from ${esc(r.asOf)}` : ""}.">old price</span>` : "";
+const symCell = (v, r) => `<span class="sym">${esc(v)}</span>${oldMark(r)}<span class="sub">${esc(r.name || "")}</span>`;
 
 function modal(html, onSubmit) {
   const m = $("#modal"); $("#modalCard").innerHTML = html; m.classList.remove("hidden");
@@ -195,14 +208,14 @@ async function loadDashboard() {
   if (!strip.children.length) loading(strip, "Loading markets…");
   api("/api/macro").then((m) => {
     if (!m.length) { strip.innerHTML = `<div class="muted">No market tiles chosen. <a data-goto="settings">Pick some in Settings →</a></div>`; return; }
-    strip.innerHTML = m.map((x) => `<div class="mcard" data-t="${esc(x.ticker)}" data-stock="${esc(x.ticker)}"><div class="t">${esc(x.name)}</div><div class="v">${num(x.price, x.price > 1000 ? 0 : 2)}</div><div class="sm">${cpct(x.day, 2)} <span class="muted">1D</span> · ${cpct(x.ret1m)} <span class="muted">1M</span></div>${spark(x.spark, (x.ret1m || 0) >= 0)}</div>`).join("");
+    strip.innerHTML = m.map((x) => `<div class="mcard" data-t="${esc(x.ticker)}" data-stock="${esc(x.ticker)}"><div class="t">${esc(x.name)}${oldMark(x)}</div><div class="v">${num(x.price, x.price > 1000 ? 0 : 2)}</div><div class="sm">${cpct(x.day, 2)} <span class="muted">1D</span> · ${cpct(x.ret1m)} <span class="muted">1M</span></div>${spark(x.spark, (x.ret1m || 0) >= 0)}</div>`).join("");
   }).catch((e) => strip.innerHTML = `<div class="muted">${esc(e.message)}</div>`);
 
   api("/api/portfolio").then((p) => {
     $("#dashIncomplete").classList.toggle("hidden", !p.incomplete);
     if (p.incomplete) $("#dashIncomplete").innerHTML = missingNote(p);
     $("#dashPortfolio").innerHTML = p.positions.length ? [
-      ["Value", money(p.total, p.base, 0), ""], ["Today", money(p.dayPnl, p.base, 0), cls(p.dayPnl)],
+      ["Value", money(p.total, p.base, 0), ""], [dayChange(p)[0], money(p.dayPnl, p.base, 0), cls(p.dayPnl), esc(dayChange(p)[1])],
       // Everything gained: what's still held, what was sold, and the dividends, with the parts underneath
       ["Total gain", money(p.totalGain, p.base, 0), cls(p.totalGain), `<span class="${cls(p.pnl)}">${money(p.pnl, p.base, 0)}</span> open · <span class="${cls(p.realised)}">${money(p.realised, p.base, 0)}</span> sold · ${money(p.dividends, p.base, 0)} dividends`],
       ["Est. income / yr", money(p.annualIncome, p.base, 0), ""],
@@ -216,7 +229,7 @@ async function loadDashboard() {
   try {
     const w = await api("/api/watchlist");
     table(wt, [
-      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) },
+      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "price", label: "Price", num: 1, fmt: priceOf },
       { k: "day", label: "1D", num: 1, fmt: (v) => cpct(v, 2) }, { k: "ret1m", label: "1M", num: 1, fmt: (v) => cpct(v) },
       { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) }, { k: "rsi", label: "RSI", num: 1, fmt: (v) => num(v, 0) },
       { k: "composite", label: "Score", num: 1, fmt: (v) => `${num(v, 0)}` }, { k: "stance", label: "Stance", fmt: badge },
@@ -272,7 +285,7 @@ function renderHeader(s) {
   $("#rTags").innerHTML = [i.assetClass, i.region, i.sector, i.currency].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("")
     + (s.events.earnings ? `<span class="pill warn">Earnings ${esc(when(s.events.earnings, s.events.earningsDays))}</span>` : "")
     + (s.events.exDividend ? `<span class="pill warn">Ex-dividend ${esc(when(s.events.exDividend, s.events.exDividendDays))}</span>` : "");
-  $("#rPrice").textContent = money(st.price, i.currency);
+  $("#rPrice").textContent = priceOf(st.price, i);
   $("#rFresh").innerHTML = st.stale ? `<span class="pill warn">Old data from ${esc(st.asOf)}: Yahoo isn't responding</span>` : `<span class="muted sm">Prices to ${esc(st.asOf)}</span>`;
   $("#rChange").innerHTML = `<span class="${cls(st.change)}">${st.change > 0 ? "+" : ""}${num(st.change)} (${pct(st.changePct, 2)})</span> <span class="muted sm">1D</span>`;
   const sc = s.scores.composite;
@@ -402,7 +415,7 @@ function renderFactors(s) {
 function renderStats(s) {
   const i = s.info, st = s.stats, cur = i.currency;
   const rows = [
-    ["Market cap", big(i.marketCap)], ["52w high", money(st.high52, cur)], ["52w low", money(st.low52, cur)], ["RSI (14)", num(st.rsi, 0)],
+    ["Market cap", big(i.marketCap)], ["52w high", priceOf(st.high52, i)], ["52w low", priceOf(st.low52, i)], ["RSI (14)", num(st.rsi, 0)],
     ["1M", cpct(st.ret1m)], ["3M", cpct(st.ret3m)], ["YTD", cpct(st.ytd)], ["1Y", cpct(st.ret1y)], ["5Y CAGR", cpct(st.ret5yCagr)],
     ["Volatility 1Y", pct(st.vol1y, 1, false)], ["Max DD 1Y", cpct(st.maxDD1y)], ["Sharpe 1Y", num(st.sharpe1y)],
     ["Beta (2Y vs bench)", num(st.betaCalc)], ["P/E", num(i.trailingPE, 1)], ["Fwd P/E", num(i.forwardPE, 1)], ["P/B", num(i.priceToBook, 1)],
@@ -589,7 +602,7 @@ async function runScreen(body) {
     $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${filterChips(f)}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
       { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
-      { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
+      { k: "price", label: "Price", num: 1, fmt: priceOf }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
       { k: "revGrowth", label: "Rev g.", num: 1, fmt: (v) => cpct(v) }, { k: "roe", label: "ROE", num: 1, fmt: (v) => pct(v, 0, false) },
       { k: "f_value", label: `Val ${factorInfo("value")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "f_quality", label: `Qual ${factorInfo("quality")}`, num: 1, fmt: (v) => num(v, 0) },
@@ -614,10 +627,12 @@ async function loadPortfolio() {
   if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
   $("#pfKpis").innerHTML = [
     ["Total value", money(p.total, b, 0)], ["Invested", money(p.cost, b, 0)], ["Unrealised P&L", `<span class="${cls(p.pnl)}">${money(p.pnl, b, 0)}</span>`, pct(p.pnlPct)],
-    ["Today", `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`], ["Realised P&L", `<span class="${cls(p.realised)}">${money(p.realised, b, 0)}</span>`], ["Dividends received", money(p.dividends, b, 0)],
-    ["Annual return", isNum(p.xirr) ? cpct(p.xirr) : "—", isNum(p.xirr) ? "Your money's return, with timing" : "Needs dated transactions over a month or more"],
-    ["Est. dividend income / yr", money(p.annualIncome, b, 0)], ["Positions", p.positions.length],
+    [dayChange(p)[0], `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`, esc(dayChange(p)[1])], ["Realised P&L", `<span class="${cls(p.realised)}">${money(p.realised, b, 0)}</span>`], ["Dividends received", money(p.dividends, b, 0)],
+    ["Annual return", isNum(p.xirr) ? cpct(p.xirr) : "—", isNum(p.xirr) ? "Your money's return, with timing" : esc(p.xirrWhy || "")],
+    ["Est. dividend income / yr", money(p.annualIncome, b, 0), "What your holdings paid per share in the past year"], ["Positions", p.positions.length],
   ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
+  // Nothing bought or sold yet: no row of zeros that looks like a result
+  if (!p.positions.length && !p.closed.length && !p.missing.length) $("#pfKpis").innerHTML = `<div class="muted">No transactions yet. Add a purchase above, or paste your broker's export.</div>`;
   table(t, [
     { k: "ticker", label: "Ticker", fmt: symCell }, { k: "shares", label: "Shares", num: 1, fmt: (v) => num(v, v < 1 ? 4 : 2) },
     { k: "avgCost", label: "Avg cost", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) },
@@ -672,7 +687,8 @@ async function loadPortfolio() {
   pie("aAsset", p.allocation.assetClass); pie("aRegion", p.allocation.region); pie("aSector", p.allocation.sectorLookThrough); pie("aCur", p.allocation.currency);
   table($("#pfRebal"), [
     { k: "assetClass", label: "Asset class" }, { k: "target", label: "Target", num: 1, fmt: (v) => pct(v, 1, false) }, { k: "actual", label: "Actual", num: 1, fmt: (v) => pct(v, 1, false) },
-    { k: "drift", label: "Drift", num: 1, fmt: (v) => cpct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
+    // Plain, not green and red: over target isn't a gain and under it isn't a loss (the suggestion carries the colour)
+    { k: "drift", label: "Drift", num: 1, fmt: (v) => pct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
     { k: "trade", label: `Amount (${esc(b)})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
 }

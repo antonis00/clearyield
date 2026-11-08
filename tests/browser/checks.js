@@ -221,6 +221,8 @@ const CHECKS = {
   // Record a buy, a sale and a dividend on the Portfolio page, and see the results
   async ledger(page) {
     await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelector("#pfKpis").innerText.trim(), null, { timeout: 60000 });
+    expect("an empty portfolio says so instead of showing zeros", /No transactions yet/.test(await page.innerText("#pfKpis")), await page.innerText("#pfKpis"));
     const record = async (kind, fields) => {
       await page.selectOption("#hKind", kind);
       for (const [k, v] of Object.entries(fields)) await page.fill(k, v);
