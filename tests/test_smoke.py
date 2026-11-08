@@ -1461,12 +1461,15 @@ def test_old_data_is_flagged():
 def test_moves_name_the_day_they_happened():
     import datetime as dt
 
+    import pandas as pd
+
     from backend import db, insights
     _reset()
     db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('PAST', 1, 100), ('NOW', 1, 100)")
     today = dt.date.today().isoformat()
     past = _steps([0.0] * 300 + [0.05], end="2026-06-01")
     now = _steps([0.0] * 300 + [0.05], end=today)
+    now.index += pd.Timestamp(today) - now.index[-1]  # business days end on Friday at weekends; this must end today
     with _FakeMarket({"PAST": past, "NOW": now}):
         texts = [i["text"] for i in insights.digest(db.get_settings())["items"]]
         db.x("INSERT INTO alerts (ticker, kind, value, created) VALUES ('PAST', 'day_move', 1, 1)")
@@ -1869,6 +1872,92 @@ def test_search_finds_what_yahoo_lists():
     # Germany's other exchanges are European and in euros
     for t in ("VWCE.MU", "VWCE.DU", "X.BE", "X.HM", "X.HA"):
         assert currency_guess(t) == "EUR" and region_of(t) == "Europe", t
+
+
+def test_weekly_candles():
+    import pandas as pd
+
+    from backend import data
+    # Two weeks, the second starting on a Tuesday after a holiday
+    days = pd.DatetimeIndex(["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05",
+                             "2026-06-09", "2026-06-10", "2026-06-11", "2026-06-12"])
+    close = pd.Series([10, 11, 12, 13, 14, 15, 16, 17, 18], index=days, dtype=float)
+    view = pd.DataFrame({"Open": close - 0.5, "High": close + 1, "Low": close - 1, "Close": close, "Volume": 100.0})
+    lines = pd.DataFrame({"sma50": close * 10}, index=days)
+    candles, wl = data.weekly(view, lines)
+    assert list(candles.index.strftime("%Y-%m-%d")) == ["2026-06-01", "2026-06-09"], "dated by each week's first trading day"
+    assert candles.iloc[0].tolist() == [9.5, 15.0, 9.0, 14.0, 500.0], "open, high, low, close, volume"
+    assert candles.iloc[1].tolist() == [14.5, 19.0, 14.0, 18.0, 400.0]
+    assert wl["sma50"].tolist() == [140.0, 180.0], "daily lines taken at each week's last close"
+    assert list(wl.index) == list(candles.index)
+
+
+def test_intraday_candles():
+    import pandas as pd
+
+    from backend import data, db
+    calls = []
+
+    def bars(start, periods, freq, tz):
+        idx = pd.date_range(start, periods=periods, freq=freq, tz=tz)
+        close = pd.Series(range(periods), index=idx, dtype=float) + 100
+        return pd.DataFrame({"Open": close, "High": close + 1, "Low": close - 1, "Close": close, "Volume": 10.0})
+
+    class FakeTicker:
+        def __init__(self, t):
+            self.t = t
+
+        def history(self, period, interval, auto_adjust):
+            calls.append((self.t, period, interval))
+            if self.t == "DOWN":
+                raise RuntimeError("no connection")
+            if self.t == "BTC-USD":
+                return bars("2026-06-08 00:00", 3 * 96, "15min", "UTC")
+            # Two New York sessions of 15-minute candles
+            return pd.concat([bars("2026-06-11 09:30", 26, "15min", "America/New_York"),
+                              bars("2026-06-12 09:30", 26, "15min", "America/New_York")])
+
+    class YF:
+        Ticker = FakeTicker
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    db.init()
+    db.cache_clear()
+    try:
+        one = data.intraday("AAPL", "1d")
+        assert set(one.index.strftime("%Y-%m-%d")) == {"2026-06-12"}, "1D is the latest session"
+        assert one.index[0].strftime("%H:%M") == "09:30", "in the exchange's own clock, not UTC"
+        assert len(data.intraday("AAPL", "5d")) == 52
+        assert calls == [("AAPL", "5d", "5m"), ("AAPL", "5d", "15m")]
+        data.intraday("AAPL", "1d")
+        assert len(calls) == 2, "cached"
+        btc = data.intraday("BTC-USD", "1d")
+        assert btc.index[-1] - btc.index[0] == pd.Timedelta(hours=23, minutes=45), "round the clock: the last 24 hours"
+        try:
+            data.intraday("DOWN", "1d")
+            raise AssertionError("expected DataError")
+        except data.DataError:
+            pass
+        # On the page, a symbol without intraday prices still opens, with the reason in place of the chart
+        with TestClient(app) as c, _FakeMarket({"DOWN": _steps([0.01] * 300)}):
+            j = c.get("/api/stock/DOWN?period=1d").json()["candles"]
+            assert j["time"] == [] and j["intraday"] == "5m" and "intraday" in j["note"]
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        db.cache_clear()
+
+    # Through the API, in demo mode: times as seconds, no daily indicators; weekly bars keep them
+    with TestClient(app) as c:
+        d1 = c.get("/api/stock/AAPL?period=1d").json()["candles"]
+        assert d1["intraday"] == "5m" and len(d1["time"]) == 78 and isinstance(d1["time"][0], int) and "sma50" not in d1
+        assert pd.Timestamp(d1["time"][0], unit="s").strftime("%H:%M") == "09:30"
+        assert c.get("/api/stock/AAPL?period=5d").json()["candles"]["intraday"] == "15m"
+        wk = c.get("/api/stock/AAPL?period=5y&bars=week").json()["candles"]
+        day = c.get("/api/stock/AAPL?period=5y").json()["candles"]
+        assert wk["bars"] == "week" and day["bars"] == "day" and len(day["time"]) / 6 < len(wk["time"]) < len(day["time"]) / 4
+        assert wk["close"][-1] == day["close"][-1] and wk["sma50"][-1] == day["sma50"][-1]
+        assert all(pd.Timestamp(t).dayofweek == 0 for t in wk["time"][1:]), "demo weeks start on Monday"
 
 
 def test_minor_unit_currencies():

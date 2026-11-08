@@ -110,6 +110,11 @@ def index():
     return FileResponse(FRONT / "index.html")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(FRONT / "favicon.svg", media_type="image/svg+xml")
+
+
 def T(t):
     return t.strip().upper()
 
@@ -175,8 +180,29 @@ def macro():
 
 
 # ---------------------------------------------------------------- stock research
+def _candles(view, times, lines=None):
+    return {"time": times, "open": view["Open"].tolist(), "high": view["High"].tolist(), "low": view["Low"].tolist(),
+            "close": view["Close"].tolist(), "volume": view["Volume"].tolist(), **({k: lines[k].tolist() for k in lines.columns} if lines is not None else {})}
+
+
+def _chart(t, full, period, bars):
+    if period in data.INTRADAY:
+        # Times are the exchange's wall clock written as UTC seconds, so the chart's axis reads in local market time.
+        # The indicators are left out: they're computed on daily prices and mean something else on 5-minute candles.
+        try:
+            view = data.intraday(t, period)
+        except data.DataError as e:
+            return {**_candles(full.iloc[:0], []), "intraday": data.INTRADAY[period], "note": str(e)}
+        return {**_candles(view, [int(d.timestamp()) for d in view.index]), "intraday": data.INTRADAY[period]}
+    view = data.slice_period(full, period)
+    lines = ind.bundle(full).loc[view.index]
+    if bars == "week":
+        view, lines = data.weekly(view, lines)
+    return {**_candles(view, [d.strftime("%Y-%m-%d") for d in view.index], lines), "bars": "week" if bars == "week" else "day"}
+
+
 @app.get("/api/stock/{ticker}")
-def stock(ticker: str, period: str = "1y"):
+def stock(ticker: str, period: str = "1y", bars: str = "day"):
     t = T(ticker)
     settings = db.get_settings()
     try:
@@ -184,14 +210,9 @@ def stock(ticker: str, period: str = "1y"):
     except data.DataError as e:
         options = [h["ticker"] for h in data.search_symbols(t)][:4]
         raise HTTPException(404, f"Yahoo has no data for {t}. Did you mean {', '.join(options)}?" if options else str(e))
-    ib = ind.bundle(full)
-    view = data.slice_period(full, period)
-    ib = ib.loc[view.index]
     c = full["Close"]
     price, prev = float(c.iloc[-1]), float(c.iloc[-2]) if len(c) > 1 else None  # some Yahoo indices have one row
-    candles = {"time": [d.strftime("%Y-%m-%d") for d in view.index], "open": view["Open"].tolist(), "high": view["High"].tolist(),
-               "low": view["Low"].tolist(), "close": view["Close"].tolist(), "volume": view["Volume"].tolist(),
-               **{k: ib[k].tolist() for k in ib.columns}}
+    candles = _chart(t, full, period, bars)
     stats = ind.stats(c, settings.get("risk_free_rate", 0.04))
     last_year = ind.window(full, 252)
     stats.update({"price": price, "change": price - prev if prev else None, "changePct": price / prev - 1 if prev else None,

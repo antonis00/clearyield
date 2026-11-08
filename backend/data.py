@@ -50,8 +50,8 @@ def _num(v):
 
 
 # ---------------------------------------------------------------- history
-def _df_to(df):
-    return {"index": [d.strftime("%Y-%m-%d") for d in df.index],
+def _df_to(df, fmt="%Y-%m-%d"):
+    return {"index": [d.strftime(fmt) for d in df.index],
             **{c: [None if pd.isna(v) else float(v) for v in df[c]] for c in df.columns}}
 
 
@@ -106,6 +106,60 @@ def slice_period(df, period):
         out = df[df.index >= start]
         return out if len(out) > 1 else df.iloc[-5:]
     return ind.window(df, PERIOD_DAYS.get(period, 252))
+
+
+def weekly(view, lines):
+    """One candle per week, built from the daily ones and dated by the week's first trading day. The indicator
+    lines keep their daily meaning (SMA 50 is still 50 days) and take each week's last daily value."""
+    days = pd.Series(view.index, index=view.index)
+    week = view.index.to_period("W")
+    g = view.groupby(week)
+    first, last = days.groupby(week).first(), days.groupby(week).last()
+    candles = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(), "Low": g["Low"].min(),
+                            "Close": g["Close"].last(), "Volume": g["Volume"].sum()})
+    candles.index = pd.DatetimeIndex(first.values)
+    lines = lines.loc[last.values]
+    lines.index = candles.index
+    return candles, lines
+
+
+# Ranges drawn with candles from within the day: range -> candle size. Yahoo keeps these for recent days only.
+INTRADAY = {"1d": "5m", "5d": "15m"}
+
+
+def intraday(ticker, period):
+    """The latest session (1D) or the last five (5D), in the exchange's own clock."""
+    interval = INTRADAY[period]
+    key = f"intra:{ticker}:{interval}"
+    cached = db.cache_get(key, 5 * 60)
+    if cached is None:
+        try:
+            df = _demo_intraday(ticker, interval) if DEMO else _fetch_intraday(ticker, interval)
+            db.cache_set(key, _df_to(df, "%Y-%m-%dT%H:%M"))
+        except DataError:
+            cached = db.cache_get_stale(key)
+            if cached is None:
+                raise
+            df = _df_from(cached)
+    else:
+        df = _df_from(cached)
+    if period == "1d" and df.index.hour.nunique() == 24:  # trades around the clock, like crypto: the last 24 hours
+        return df[df.index > df.index[-1] - pd.Timedelta(hours=24)]
+    sessions = sorted(set(df.index.normalize()))[-(1 if period == "1d" else 5):]
+    return df[df.index.normalize().isin(sessions)]
+
+
+def _fetch_intraday(ticker, interval):
+    try:
+        df = _yf().Ticker(ticker).history(period="5d", interval=interval, auto_adjust=True)
+    except Exception as e:
+        raise DataError(f"Could not download intraday prices for {ticker}: {e}")
+    if df is None or df.empty:
+        raise DataError(f"Yahoo has no intraday prices for {ticker}.")
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"]).copy()
+    idx = pd.to_datetime(df.index)
+    df.index = idx.tz_localize(None) if idx.tz is not None else idx  # drops the zone, keeps the exchange's wall-clock time
+    return df[~df.index.duplicated(keep="last")]
 
 
 # ---------------------------------------------------------------- info / fundamentals
@@ -476,6 +530,24 @@ def _demo_history(ticker):
     low = np.minimum(opn, close) * (1 - np.abs(rng.normal(0, 0.006, n)))
     volume = rng.integers(1_000_000, 50_000_000, n).astype(float)
     return pd.DataFrame({"Open": opn, "High": high, "Low": low, "Close": close, "Volume": volume}, index=idx)
+
+
+def _demo_intraday(ticker, interval):
+    """Five sessions of 09:30-16:00 candles that wander from each demo day's open to its close."""
+    minutes = int(interval.rstrip("m"))
+    n = 390 // minutes
+    rng = np.random.default_rng(_seed(ticker) + minutes)
+    frames = []
+    for day, row in _demo_history(ticker).iloc[-5:].iterrows():
+        walk = np.cumsum(rng.normal(0, 1, n + 1))
+        bridge = walk - np.linspace(0, 1, n + 1) * walk[-1]  # starts and ends at zero
+        path = np.linspace(row["Open"], row["Close"], n + 1) + bridge * abs(row["Close"]) * 0.0015
+        opn, close = path[:-1], path[1:]
+        wiggle = np.abs(rng.normal(0, abs(row["Close"]) * 0.0008, n))
+        idx = pd.date_range(day + pd.Timedelta(hours=9, minutes=30), periods=n, freq=f"{minutes}min")
+        frames.append(pd.DataFrame({"Open": opn, "High": np.maximum(opn, close) + wiggle, "Low": np.minimum(opn, close) - wiggle,
+                                    "Close": close, "Volume": rng.integers(20_000, 400_000, n).astype(float)}, index=idx))
+    return pd.concat(frames)
 
 
 SECTORS = ["Technology", "Healthcare", "Financial Services", "Consumer Defensive", "Energy", "Industrials",

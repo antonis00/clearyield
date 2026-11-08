@@ -1,13 +1,14 @@
 /* StockPilot frontend — vanilla JS, Lightweight Charts (price) + Chart.js (everything else). */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const state = { stockRequest: 0, meta: null, ticker: null, period: "1y", stock: null, lw: [], charts: {}, lastScreen: null };
+const state = { stockRequest: 0, meta: null, ticker: null, period: "1y", bars: "day", stock: null, lw: [], charts: {}, lastScreen: null };
 
 const CSS = getComputedStyle(document.documentElement);
 const C = (n) => CSS.getPropertyValue(n).trim();
 const PALETTE = ["#f2b84b", "#4fb3bf", "#a78bfa", "#3fb68b", "#ef5b5b", "#f472b6", "#60a5fa", "#fb923c", "#94a3b8", "#22d3ee"];
+const tint = (token, alpha) => C(token) + alpha; // tokens are #rrggbb, so this adds transparency
 Chart.defaults.color = C("--muted");
-Chart.defaults.borderColor = "#243042";
+Chart.defaults.borderColor = C("--line");
 Chart.defaults.font.family = "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif";
 
 /* ---------------------------------------------------------------- helpers */
@@ -79,6 +80,7 @@ function show(view, push = true) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
+  if (view === "research" && state.redrawResearch && state.stock) redrawResearch();
   if (push) {
     const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
@@ -184,6 +186,8 @@ async function loadDigest() {
 $("#refreshDigest").onclick = loadDigest;
 
 /* ---------------------------------------------------------------- research */
+// The range is how far back the chart goes; bars is how much time each candle covers
+const chartUrl = () => `/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}&bars=${state.bars}`;
 async function openStock(t, period) {
   state.ticker = t.toUpperCase(); state.period = period || state.period;
   show("research");
@@ -192,7 +196,7 @@ async function openStock(t, period) {
   body.classList.remove("hidden"); body.style.opacity = 0.5;
   const request = ++state.stockRequest; // a slower reply for an earlier stock must not overwrite this one
   try {
-    const s = await api(`/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}`);
+    const s = await api(chartUrl());
     if (request !== state.stockRequest) return;
     state.stock = s; body.style.opacity = 1;
     renderHeader(s); renderPrice(s); renderFactors(s); renderStats(s); renderFin(s);
@@ -223,7 +227,7 @@ function renderHeader(s) {
   $("#rChange").innerHTML = `<span class="${cls(st.change)}">${st.change > 0 ? "+" : ""}${num(st.change)} (${pct(st.changePct, 2)})</span> <span class="muted sm">1D</span>`;
   const sc = s.scores.composite;
   $("#rScore").textContent = num(sc, 0);
-  $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, #243042 0)`;
+  $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, ${C("--line")} 0)`;
   $("#rScore").style.boxShadow = `inset 0 0 0 7px ${C("--panel")}`;
   const w = state.meta.settings.weights;
   const basis = i.assetClass === "Other" ? "market indicator" : i.assetClass !== "Stocks" ? "trend & risk only"
@@ -234,53 +238,91 @@ function renderHeader(s) {
 }
 function lwChart(el, height) {
   return LightweightCharts.createChart(el, {
-    height, layout: { background: { color: "transparent" }, textColor: C("--muted"), fontFamily: "IBM Plex Mono" },
-    grid: { vertLines: { color: "#1b2433" }, horzLines: { color: "#1b2433" } }, rightPriceScale: { borderColor: "#243042" },
-    timeScale: { borderColor: "#243042" }, crosshair: { mode: 0 }, autoSize: true,
+    height, layout: { background: { color: "transparent" }, attributionLogo: false, textColor: C("--muted"), fontFamily: "IBM Plex Mono" },
+    grid: { vertLines: { color: C("--grid") }, horzLines: { color: C("--grid") } }, rightPriceScale: { borderColor: C("--line") },
+    timeScale: { borderColor: C("--line") }, crosshair: { mode: 0 }, autoSize: true,
   });
 }
 const series = (c, k) => c.time.map((t, i) => (isNum(c[k][i]) ? { time: t, value: c[k][i] } : null)).filter(Boolean);
 function renderPrice(s) {
   state.lw.forEach((c) => c.remove()); state.lw = [];
-  const c = s.candles;
-  const main = lwChart($("#priceChart"), 400), rsi = lwChart($("#rsiChart"), 110), macd = lwChart($("#macdChart"), 110);
-  state.lw = [main, rsi, macd];
-  main.addCandlestickSeries({ upColor: C("--up"), downColor: C("--down"), borderVisible: false, wickUpColor: C("--up"), wickDownColor: C("--down") })
-    .setData(c.time.map((t, i) => ({ time: t, open: c.open[i], high: c.high[i], low: c.low[i], close: c.close[i] })));
+  const c = s.candles, intraday = c.intraday;
+  $("#indPanes").classList.toggle("hidden", !!intraday);
+  $("#barSeg").classList.toggle("hidden", !!intraday);
+  ["#tSma", "#tBb"].forEach((id) => { $(id).disabled = !!intraday; });
+  $$("#barSeg button").forEach((x) => x.classList.toggle("on", x.dataset.b === c.bars));
+  $("#chartNote").textContent = c.note ? c.note
+    : intraday ? `${intraday.replace("m", "-minute")} candles, in the market's local time. Moving averages, RSI and MACD use daily prices, so they appear from 1M.`
+    : c.bars === "week" ? "One candle per week. The lines are still daily (SMA 50 is 50 days), taken at each week's last close." : "";
+  const main = lwChart($("#priceChart"), 400);
+  state.lw = [main];
+  if (intraday) main.applyOptions({ timeScale: { timeVisible: true, secondsVisible: false } });
+  drawPrice(main, c);
   if ($("#tVol").checked) {
     const v = main.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
     main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    v.setData(c.time.map((t, i) => ({ time: t, value: c.volume[i], color: c.close[i] >= c.open[i] ? "#3fb68b44" : "#ef5b5b44" })));
+    v.setData(c.time.map((t, i) => ({ time: t, value: c.volume[i], color: c.close[i] >= c.open[i] ? tint("--up", "44") : tint("--down", "44") })));
   }
-  if ($("#tSma").checked) {
+  if (!intraday && $("#tSma").checked) {
     main.addLineSeries({ color: C("--accent"), lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "SMA50" }).setData(series(c, "sma50"));
     main.addLineSeries({ color: C("--accent2"), lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, title: "SMA200" }).setData(series(c, "sma200"));
   }
-  if ($("#tBb").checked) {
-    for (const k of ["bbUpper", "bbLower"]) main.addLineSeries({ color: "#a78bfa99", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }).setData(series(c, k));
+  if (!intraday && $("#tBb").checked) {
+    for (const k of ["bbUpper", "bbLower"]) main.addLineSeries({ color: tint("--violet", "99"), lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }).setData(series(c, k));
   }
-  const r = rsi.addLineSeries({ color: "#a78bfa", lineWidth: 1.5, priceLineVisible: false });
-  r.setData(series(c, "rsi"));
-  r.createPriceLine({ price: 70, color: "#ef5b5b88", lineStyle: 2, axisLabelVisible: false });
-  r.createPriceLine({ price: 30, color: "#3fb68b88", lineStyle: 2, axisLabelVisible: false });
-  macd.addHistogramSeries({ priceLineVisible: false }).setData(c.time.map((t, i) => (isNum(c.macdHist[i]) ? { time: t, value: c.macdHist[i], color: c.macdHist[i] >= 0 ? "#3fb68b88" : "#ef5b5b88" } : null)).filter(Boolean));
-  macd.addLineSeries({ color: C("--accent"), lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(series(c, "macd"));
-  macd.addLineSeries({ color: C("--accent2"), lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(series(c, "macdSignal"));
+  if (!intraday) drawIndicators(c);
   main.timeScale().fitContent();
-  // keep the three panes in sync
+  // keep the panes in sync
   let syncing = false;
   state.lw.forEach((src) => src.timeScale().subscribeVisibleLogicalRangeChange((rng) => {
     if (syncing || !rng) return; syncing = true;
     state.lw.forEach((dst) => dst !== src && dst.timeScale().setVisibleLogicalRange(rng)); syncing = false;
   }));
 }
+// Candles show each period's open, high, low and close; area and line show only the close,
+// coloured by whether the price rose or fell over the range on screen
+function drawPrice(chart, c) {
+  const ohlc = c.time.map((t, i) => ({ time: t, open: c.open[i], high: c.high[i], low: c.low[i], close: c.close[i] }));
+  const closes = c.time.map((t, i) => ({ time: t, value: c.close[i] }));
+  const tone = c.close.at(-1) >= c.close[0] ? C("--up") : C("--down");
+  if (state.kind === "line") chart.addLineSeries({ color: tone, lineWidth: 2 }).setData(closes);
+  else if (state.kind === "area") chart.addAreaSeries({ lineColor: tone, topColor: `${tone}55`, bottomColor: `${tone}05`, lineWidth: 2 }).setData(closes);
+  else chart.addCandlestickSeries({ upColor: C("--up"), downColor: C("--down"), borderVisible: false, wickUpColor: C("--up"), wickDownColor: C("--down") }).setData(ohlc);
+}
+function drawIndicators(c) {
+  const rsi = lwChart($("#rsiChart"), 110), macd = lwChart($("#macdChart"), 110);
+  state.lw.push(rsi, macd);
+  const r = rsi.addLineSeries({ color: C("--violet"), lineWidth: 1.5, priceLineVisible: false });
+  r.setData(series(c, "rsi"));
+  r.createPriceLine({ price: 70, color: tint("--down", "88"), lineStyle: 2, axisLabelVisible: false });
+  r.createPriceLine({ price: 30, color: tint("--up", "88"), lineStyle: 2, axisLabelVisible: false });
+  macd.addHistogramSeries({ priceLineVisible: false }).setData(c.time.map((t, i) => (isNum(c.macdHist[i]) ? { time: t, value: c.macdHist[i], color: c.macdHist[i] >= 0 ? tint("--up", "88") : tint("--down", "88") } : null)).filter(Boolean));
+  macd.addLineSeries({ color: C("--accent"), lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(series(c, "macd"));
+  macd.addLineSeries({ color: C("--accent2"), lineWidth: 1, priceLineVisible: false, lastValueVisible: false }).setData(series(c, "macdSignal"));
+}
 // A new period only changes the chart, so your brief, DCF inputs and pre-trade check stay as they are
-$$("#periodSeg button").forEach((b) => b.onclick = async () => {
+async function reloadChart() {
+  const request = ++state.stockRequest;
+  const s = await api(chartUrl());
+  if (request === state.stockRequest) { state.stock = s; renderPrice(s); }
+}
+// Long ranges start with weekly candles, because a thousand daily ones are too crowded to read
+$$("#periodSeg button").forEach((b) => b.onclick = () => {
   $$("#periodSeg button").forEach((x) => x.classList.toggle("on", x === b));
   state.period = b.dataset.p;
-  const request = ++state.stockRequest;
-  const s = await api(`/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}`);
-  if (request === state.stockRequest) { state.stock = s; renderPrice(s); }
+  state.bars = ["2y", "5y"].includes(state.period) ? "week" : "day";
+  reloadChart();
+});
+$$("#barSeg button").forEach((b) => b.onclick = () => { state.bars = b.dataset.b; reloadChart(); });
+// The chart type only changes the drawing, so it needs no new data, and it's remembered for next time
+const markKind = () => $$("#kindSeg button").forEach((x) => x.classList.toggle("on", x.dataset.k === state.kind));
+try { state.kind = localStorage.getItem("chartKind"); } catch { state.kind = null; }
+if (!["candle", "area", "line"].includes(state.kind)) state.kind = "candle"; // also covers a type that no longer exists
+markKind();
+$$("#kindSeg button").forEach((b) => b.onclick = () => {
+  state.kind = b.dataset.k; markKind();
+  try { localStorage.setItem("chartKind", state.kind); } catch { /* private window: just not remembered */ }
+  if (state.stock) renderPrice(state.stock);
 });
 ["#tSma", "#tBb", "#tVol"].forEach((id) => $(id).onchange = () => state.stock && renderPrice(state.stock));
 
@@ -299,8 +341,8 @@ function renderFactors(s) {
   $("#rCoverage").textContent = `Data coverage ${Math.round(s.scores.coverage * 100)}% (${s.scores.metricsScored} of ${s.scores.metricsTotal} metrics)`;
   mkChart("radar", {
     type: "radar",
-    data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: "#f2b84b33", borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
-    options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: "#243042" }, angleLines: { color: "#243042" }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
+    data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: tint("--accent", "33"), borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
   $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "n/a"}</span></div>${bar(f[n])}
     <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}">${isNum(p.score) ? num(p.score, 0) : "n/a"}</span></div>`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
@@ -330,9 +372,9 @@ function renderFin(s) {
   mkChart("finChart", {
     type: "bar",
     data: { labels: f.map((x) => x.year), datasets: [
-      { label: "Revenue", data: f.map((x) => x.revenue), backgroundColor: "#4fb3bfaa" },
-      { label: "Net income", data: f.map((x) => x.netIncome), backgroundColor: "#f2b84baa" },
-      { label: "Free cash flow", data: f.map((x) => x.fcf), backgroundColor: "#a78bfaaa" }] },
+      { label: "Revenue", data: f.map((x) => x.revenue), backgroundColor: tint("--accent2", "aa") },
+      { label: "Net income", data: f.map((x) => x.netIncome), backgroundColor: tint("--accent", "aa") },
+      { label: "Free cash flow", data: f.map((x) => x.fcf), backgroundColor: tint("--violet", "aa") }] },
     options: { plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${big(c.raw)}` } } }, scales: { y: { beginAtZero: true, ticks: { callback: (v) => big(v) } } } },
   });
 }
@@ -713,6 +755,39 @@ $("#restoreFile").onchange = async (e) => {
   try { await api("/api/backup/restore", { method: "POST", body: backup }); toast("Backup restored"); setTimeout(() => location.reload(), 600); }
   catch (err) { toast(err.message); }
 };
+
+/* ---------------------------------------------------------------- theme */
+// Dark, light, or whatever the computer uses. The page's colours follow at once; charts are redrawn with the new ones.
+const savedTheme = () => { try { return localStorage.getItem("theme") || "dark"; } catch { return "dark"; } };
+const lightQuery = matchMedia("(prefers-color-scheme: light)");
+function applyTheme() {
+  const choice = savedTheme();
+  const t = choice === "system" ? (lightQuery.matches ? "light" : "dark") : choice;
+  $$("#themeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.theme === choice));
+  if (document.documentElement.dataset.theme === t) return;
+  document.documentElement.dataset.theme = t;
+  Chart.defaults.color = C("--muted"); Chart.defaults.borderColor = C("--line");
+  for (const ch of Object.values(state.charts)) {
+    for (const sc of Object.values(ch.options.scales || {})) {
+      if (sc.grid) sc.grid.color = C("--line");
+      if (sc.angleLines) sc.angleLines.color = C("--line");
+    }
+    if (ch.config.type === "doughnut") ch.data.datasets.forEach((d) => { d.borderColor = C("--panel"); });
+    ch.update("none");
+  }
+  // A chart drawn while its page is hidden has no width, so Research is redrawn when it's next shown
+  if (state.stock) { if ($("#view-research").classList.contains("hidden")) state.redrawResearch = true; else redrawResearch(); }
+}
+function redrawResearch() {
+  state.redrawResearch = false;
+  renderHeader(state.stock); renderPrice(state.stock); renderFactors(state.stock); renderFin(state.stock);
+}
+$$("#themeSeg button").forEach((b) => b.onclick = () => {
+  try { localStorage.setItem("theme", b.dataset.theme); } catch { /* not remembered, but still applied */ }
+  applyTheme();
+});
+lightQuery.addEventListener("change", applyTheme);
+applyTheme();
 
 /* ---------------------------------------------------------------- boot */
 (async function boot() {

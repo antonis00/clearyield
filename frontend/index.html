@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StockPilot</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script>
+  // Set the theme before anything is drawn, so the page never flashes the other one
+  (function () {
+    let t = "dark";
+    try { t = localStorage.getItem("theme") || "dark"; } catch (e) { /* storage blocked: keep dark */ }
+    if (t === "system") t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/styles.css">
@@ -87,9 +97,18 @@
 
       <div class="card">
         <div class="card-h">
-          <div class="seg" id="periodSeg">
-            <button data-p="1mo">1M</button><button data-p="3mo">3M</button><button data-p="6mo">6M</button>
-            <button data-p="ytd">YTD</button><button data-p="1y" class="on">1Y</button><button data-p="2y">2Y</button><button data-p="5y">5Y</button>
+          <div class="chart-ctl">
+            <div class="seg" id="periodSeg" title="How far back the chart goes">
+              <button data-p="1d">1D</button><button data-p="5d">5D</button>
+              <button data-p="1mo">1M</button><button data-p="3mo">3M</button><button data-p="6mo">6M</button>
+              <button data-p="ytd">YTD</button><button data-p="1y" class="on">1Y</button><button data-p="2y">2Y</button><button data-p="5y">5Y</button>
+            </div>
+            <div class="seg" id="barSeg" title="How much time each candle covers">
+              <button data-b="day" class="on">Day</button><button data-b="week">Week</button>
+            </div>
+            <div class="seg" id="kindSeg" title="How the price is drawn">
+              <button data-k="candle" class="on">Candles</button><button data-k="area">Area</button><button data-k="line">Line</button>
+            </div>
           </div>
           <div class="toggles">
             <label><input type="checkbox" id="tSma" checked> SMA 50/200</label>
@@ -97,11 +116,14 @@
             <label><input type="checkbox" id="tVol" checked> Volume</label>
           </div>
         </div>
+        <div id="chartNote" class="muted sm"></div>
         <div id="priceChart" class="chart-main"></div>
-        <div class="sublabel">RSI (14)</div>
-        <div id="rsiChart" class="chart-sub"></div>
-        <div class="sublabel">MACD (12, 26, 9)</div>
-        <div id="macdChart" class="chart-sub"></div>
+        <div id="indPanes">
+          <div class="sublabel">RSI (14)</div>
+          <div id="rsiChart" class="chart-sub"></div>
+          <div class="sublabel">MACD (12, 26, 9)</div>
+          <div id="macdChart" class="chart-sub"></div>
+        </div>
       </div>
 
       <div class="grid2">
@@ -315,6 +337,9 @@
       </div>
       <div class="card">
         <div class="card-h"><h3>General</h3></div>
+        <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
+          <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
+        </div>
         <div class="form-row">
           <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
           <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>

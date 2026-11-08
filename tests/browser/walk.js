@@ -58,11 +58,21 @@ const SLOW = 150000;
     expect("research: a symbol with no data suggests the right one", /VWCE\.DE/.test(await txt("#researchEmpty")), await txt("#researchEmpty"));
   }
   await research("AAPL");
-  for (const per of ["1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y"]) {
+  for (const per of ["1d", "5d", "1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y"]) {
     const btn = p.locator(`#periodSeg button[data-p="${per}"]`);
     await btn.click(); await p.waitForFunction(() => document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW }); await p.waitForTimeout(250);
   }
   expect("research: all chart periods", (await p.locator("#priceChart canvas").count()) > 0);
+  expect("research: long ranges use weekly candles", await p.evaluate(() => state.stock.candles.bars === "week" && document.querySelector('#barSeg [data-b="week"]').classList.contains("on")));
+  await p.click('#barSeg [data-b="day"]'); await p.waitForFunction(() => state.stock.candles.bars === "day", null, { timeout: SLOW });
+  expect("research: switch back to daily candles", await p.evaluate(() => state.stock.candles.time.length > 1000));
+  for (const k of ["area", "line", "candle"]) {
+    await p.click(`#kindSeg [data-k="${k}"]`); await p.waitForTimeout(250);
+    expect(`research: ${k} chart drawn`, await p.evaluate((x) => document.querySelector(`#kindSeg [data-k="${x}"]`).classList.contains("on"), k) && await canvasDrawn("#priceChart canvas"));
+  }
+  await p.locator("#periodSeg button[data-p='1d']").click(); await p.waitForFunction(() => state.stock.candles.intraday, null, { timeout: SLOW }); await p.waitForTimeout(300);
+  const intra = await p.evaluate(() => ({ n: state.stock.candles.time.length, note: state.stock.candles.note, panes: document.querySelector("#indPanes").classList.contains("hidden") }));
+  expect("research: 1D shows candles within the day, without the daily indicators", intra.n > 0 && intra.panes && (await p.locator("#priceChart canvas").count()) > 0, JSON.stringify(intra));
   await p.locator("#periodSeg button[data-p='1y']").click(); await p.waitForFunction(() => document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
   for (const id of ["#tSma", "#tBb", "#tVol"]) { await p.click(id); await p.waitForTimeout(120); }
   await p.locator(".factor .fh").first().click(); await p.waitForTimeout(100);
@@ -198,6 +208,17 @@ const SLOW = 150000;
   await research("AAPL");
   expect("settings: custom weights shown on Research", /V \d+ · Q \d+/.test(await txt("#rStance")), await txt("#rStance"));
   await nav("settings"); await p.click("#btnBalanced"); await p.selectOption("#sBase", startBase); await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  // Light theme: chosen in Settings, followed by the open Research charts, kept after a reload
+  const bg = () => p.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await p.click('#themeSeg [data-theme="light"]'); await p.waitForTimeout(200);
+  await nav("research"); await p.waitForTimeout(400);
+  const light = await p.evaluate(() => ({ theme: document.documentElement.dataset.theme, grid: state.lw[0]?.options().grid.vertLines.color, width: state.lw[0]?.timeScale().width() }));
+  expect("settings: light theme reaches the charts", light.theme === "light" && light.grid === "#edf0f4" && light.width > 300 && (await bg()) === "rgb(244, 246, 249)", JSON.stringify(light));
+  await p.reload(); await p.waitForTimeout(500);
+  expect("settings: theme remembered", await p.evaluate(() => document.documentElement.dataset.theme) === "light");
+  await nav("settings"); await p.click('#themeSeg [data-theme="dark"]'); await p.waitForTimeout(200);
+  expect("settings: back to dark", (await bg()) === "rgb(13, 17, 23)");
+  expect("favicon", (await p.request.get(new URL("favicon.ico", BASE).href)).ok());
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#btnBackup")]);
   expect("settings: backup downloads", /stockpilot-backup/.test(dl.suggestedFilename()), dl.suggestedFilename());
   await p.click("#btnClearCache"); await p.waitForTimeout(600);

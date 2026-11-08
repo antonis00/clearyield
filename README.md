@@ -39,7 +39,7 @@ Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn o
 | Screen | What it does |
 |---|---|
 | **Dashboard** | Macro strip (S&P 500, Nasdaq, Euro Stoxx, Tadawul, VIX, 10Y yield, gold, oil, BTC, EUR/USD, DXY), portfolio snapshot, daily digest, watchlist with scores |
-| **Research** | Candlestick chart with SMA 50/200, Bollinger bands, volume, RSI and MACD; factor radar with drill-down to every metric; plain-language signals; key stats; 4-year fundamentals; DCF calculator with the growth today's price assumes and a sensitivity grid; next earnings and ex-dividend dates and the record against expectations; for funds, their cost, sectors and top holdings; daily score history; news; AI or rule-based bull/bear brief; pre-trade check showing how a purchase would change your weights, warnings and beta, how it moves with your holdings, and a position size from your stop and risk |
+| **Research** | Candlestick chart from one day (5-minute candles) to five years (daily or weekly candles), with SMA 50/200, Bollinger bands, volume, RSI and MACD; factor radar with drill-down to every metric; plain-language signals; key stats; 4-year fundamentals; DCF calculator with the growth today's price assumes and a sensitivity grid; next earnings and ex-dividend dates and the record against expectations; for funds, their cost, sectors and top holdings; daily score history; news; AI or rule-based bull/bear brief; pre-trade check showing how a purchase would change your weights, warnings and beta, how it moves with your holdings, and a position size from your stop and risk |
 | **Compare** | Growth-of-100 chart, metrics table and return-correlation matrix for up to 8 assets |
 | **Screener** | 95-ticker universe across 5 markets; numeric filters or a plain-language query ("cheap profitable dividend stocks in the Gulf") |
 | **Portfolio** | Ledger of buys, sales and dividends, entered one at a time or pasted as a list, and matched first in, first out. Multi-currency holdings converted to your base currency, unrealised and realised P&L at the FX rate on each date, annual return (XIRR), your actual performance vs benchmark over the past year, volatility/Sharpe/Sortino/beta/drawdown, allocation by asset class/region/sector/currency, looking through funds where Yahoo has the data, concentration warnings, rebalancing vs target allocation, estimated dividend income |
@@ -102,4 +102,4 @@ tests/     test_smoke.py · check_live.py · run_all.py · browser/ (walk throug
 
 ## License
 
-MIT. See [LICENSE](LICENSE). The bundled libraries in `frontend/vendor/` keep their own licenses.
+MIT. See [LICENSE](LICENSE). The bundled libraries in `frontend/vendor/` keep their own licenses. Price charts are made with [TradingView Lightweight Charts™](https://www.tradingview.com/lightweight-charts/) (Apache 2.0), by [TradingView](https://www.tradingview.com/).
