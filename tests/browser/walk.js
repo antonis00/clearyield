@@ -282,6 +282,8 @@ const SLOW = 150000;
   expect("settings: tiles restored", (await p.evaluate(() => state.meta.settings.dashboard_tiles.length)) === defaults.length && defaults.length >= 10, defaults.length);
   // Light theme: chosen in Settings, followed by the open Research charts, kept after a reload
   const bg = () => p.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  expect("settings: navy until a theme is chosen", (await p.evaluate(() => document.documentElement.dataset.theme)) === "navy" && (await bg()) === "rgb(9, 20, 48)"
+    && (await p.evaluate(() => document.querySelector('#themeSeg [data-theme="navy"]').classList.contains("on"))), await bg());
   await p.click('#themeSeg [data-theme="light"]'); await p.waitForTimeout(200);
   await nav("research"); await p.waitForTimeout(400);
   const light = await p.evaluate(() => ({ theme: document.documentElement.dataset.theme, grid: state.lw[0]?.options().grid.vertLines.color, width: state.lw[0]?.timeScale().width() }));
@@ -290,6 +292,13 @@ const SLOW = 150000;
   expect("settings: theme remembered", await p.evaluate(() => document.documentElement.dataset.theme) === "light");
   await nav("settings"); await p.click('#themeSeg [data-theme="dark"]'); await p.waitForTimeout(200);
   expect("settings: back to dark", (await bg()) === "rgb(13, 17, 23)");
+  await p.click('#themeSeg [data-theme="navy"]'); await p.waitForTimeout(200);
+  await nav("research"); await p.waitForTimeout(400);
+  const navyGrid = await p.evaluate(() => state.lw[0]?.options().grid.vertLines.color);
+  await p.reload(); await p.waitForTimeout(500);
+  expect("settings: navy chosen, reaches the charts and is remembered", (await bg()) === "rgb(9, 20, 48)" && navyGrid === "#172a52"
+    && (await p.evaluate(() => document.documentElement.dataset.theme)) === "navy", navyGrid);
+  await nav("settings");
   expect("favicon", (await p.request.get(new URL("favicon.ico", BASE).href)).ok());
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#btnBackup")]);
   expect("settings: backup downloads", /stockpilot-backup/.test(dl.suggestedFilename()), dl.suggestedFilename());

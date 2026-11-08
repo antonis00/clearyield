@@ -59,7 +59,7 @@ Views are dashboard, research, compare, screener, portfolio, backtest, journal a
 - **Sidebar status:** round icons for the data source (the Yahoo mark), AI (the letters "AI", whatever the provider; the hover names the model) and the base currency's symbol, outlined in one colour (green when in use, grey when not), with the normal cursor and a light tint on hover, explained in the tooltip. The Yahoo mark is `frontend/icons/yahoo.svg`, used as a CSS mask so it takes the theme's colour; a replacement needs a transparent background (it's a stand-in; the owner may replace it with the official one).
 - **Opening stocks:** anything with `data-stock="TICKER"` opens that stock through one delegated handler. A left click opens it here; a middle click or Ctrl/Cmd+click opens a new tab. Buttons and links inside a row keep their own job.
 - **Research chart:** ranges 1D/5D (intraday, without the daily indicators) up to 5Y; Day/Week candles (weekly by default on 2Y/5Y); Candles/Area/Line, remembered in localStorage.
-- **Theme:** Dark, Light or Match system, set before first paint from localStorage. Every colour is a CSS token on `:root`, overridden under `:root[data-theme="light"]`; JS reads them with `C("--token")` and `tint()`. Don't hard-code colours.
+- **Theme:** Dark (near-black), Navy (very dark blue, the default), Light or Match system (light or navy), set before first paint from localStorage. Every colour is a CSS token on `:root` (dark), overridden under `:root[data-theme="navy"]` (surfaces only) and `:root[data-theme="light"]`; JS reads them with `C("--token")` and `tint()`. Don't hard-code colours.
 
 ## Gotchas
 - yfinance `dividendYield` is sometimes a percent and sometimes a fraction; `debtToEquity` comes as a percentage (150 = 1.5x).

@@ -955,12 +955,14 @@ $("#restoreFile").onchange = async (e) => {
 })();
 
 /* ---------------------------------------------------------------- theme */
-// Dark, light, or whatever the computer uses. The page's colours follow at once; charts are redrawn with the new ones.
-const savedTheme = () => { try { return localStorage.getItem("theme") || "dark"; } catch { return "dark"; } };
+// Dark, navy, light, or whatever the computer uses (navy when it's dark). The page's colours follow at once; charts
+// are redrawn with the new ones.
+const THEMES = ["dark", "navy", "light", "system"];
+const savedTheme = () => { try { const t = localStorage.getItem("theme"); return THEMES.includes(t) ? t : "navy"; } catch { return "navy"; } };
 const lightQuery = matchMedia("(prefers-color-scheme: light)");
 function applyTheme() {
   const choice = savedTheme();
-  const t = choice === "system" ? (lightQuery.matches ? "light" : "dark") : choice;
+  const t = choice === "system" ? (lightQuery.matches ? "light" : "navy") : choice;
   $$("#themeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.theme === choice));
   if (document.documentElement.dataset.theme === t) return;
   document.documentElement.dataset.theme = t;

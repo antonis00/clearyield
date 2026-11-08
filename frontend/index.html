@@ -8,10 +8,10 @@
 <script>
   // Set the theme before anything is drawn, so the page never flashes the other one
   (function () {
-    let t = "dark";
-    try { t = localStorage.getItem("theme") || "dark"; } catch (e) { /* storage blocked: keep dark */ }
-    if (t === "system") t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-    document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+    let t = "navy";
+    try { t = localStorage.getItem("theme") || "navy"; } catch (e) { /* storage blocked: keep navy */ }
+    if (t === "system") t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "navy";
+    document.documentElement.dataset.theme = ["dark", "navy", "light"].includes(t) ? t : "navy";
   })();
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -341,7 +341,7 @@
         <div class="card">
           <div class="card-h"><h3>General</h3></div>
           <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
-            <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
+            <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="navy">Navy</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
           </div>
           <div class="form-row">
             <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
