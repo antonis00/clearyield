@@ -48,16 +48,15 @@ const loading = (el, msg = "Loading…") => { el.innerHTML = `<div class="muted"
 function mkChart(id, cfg) { state.charts[id]?.destroy(); const ctx = document.getElementById(id); state.charts[id] = new Chart(ctx, cfg); return state.charts[id]; }
 
 /* Generic sortable table. cols: {k,label,fmt(v,row),num,sort} */
-function table(el, cols, rows, { onClick, empty = "Nothing here yet." } = {}) {
+function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
   if (!rows.length) { el.innerHTML = `<div class="muted">${empty}</div>`; return { afterDraw() {} }; }
   let sortK = null, dir = -1, after = () => {};
   const draw = () => {
     const data = [...rows];
     if (sortK) data.sort((a, b) => { const x = a[sortK], y = b[sortK]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
     el.innerHTML = `<table><thead><tr>${cols.map((c) => `<th class="${c.num ? "num" : ""}" data-k="${c.k}">${c.label}${sortK === c.k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>
-      <tbody>${data.map((r, i) => `<tr class="${onClick ? "click" : ""}" data-i="${rows.indexOf(r)}">${cols.map((c) => `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      <tbody>${data.map((r, i) => `<tr class="${stock ? "click" : ""}" data-i="${rows.indexOf(r)}"${stock ? ` data-stock="${esc(stock(r))}"` : ""}>${cols.map((c) => `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     $$("th", el).forEach((th) => th.onclick = () => { const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } draw(); });
-    if (onClick) $$("tbody tr", el).forEach((tr) => tr.onclick = (e) => { if (e.target.closest("button")) return; onClick(rows[+tr.dataset.i]); });
     after();
   };
   draw();
@@ -88,6 +87,22 @@ function show(view, push = true) {
   ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings }[view] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
+
+// Anything marked data-stock opens that stock: a plain click here, a middle click or Ctrl/Cmd+click in a new tab.
+// Buttons and links inside a row keep their own job.
+const openInNewTab = (t) => window.open(`#research/${encodeURIComponent(t)}`, "_blank", "noopener");
+const stockTarget = (e) => (e.target.closest("button, a, input, select, label") ? null : e.target.closest("[data-stock]"));
+document.addEventListener("click", (e) => {
+  const el = e.button === 0 && stockTarget(e);
+  if (!el) return;
+  if (e.ctrlKey || e.metaKey) openInNewTab(el.dataset.stock); else openStock(el.dataset.stock);
+});
+document.addEventListener("auxclick", (e) => {
+  const el = e.button === 1 && stockTarget(e);
+  if (el) { e.preventDefault(); openInNewTab(el.dataset.stock); }
+});
+// Windows starts scroll mode on a middle press; on a stock it should only open the tab
+document.addEventListener("mousedown", (e) => { if (e.button === 1 && stockTarget(e)) e.preventDefault(); });
 document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) show(g.dataset.goto); });
 
 /* ---------------------------------------------------------------- search */
@@ -97,7 +112,11 @@ document.addEventListener("click", (e) => { const g = e.target.closest("[data-go
   const render = () => {
     dd.innerHTML = hits.map((h, i) => `<div data-i="${i}" class="${i === sel ? "sel" : ""}"><b>${esc(h.ticker)}</b><span>${esc(h.name)}</span><span class="muted sm" style="margin-left:auto">${esc(h.market)}</span></div>`).join("");
     dd.classList.toggle("hidden", !hits.length);
-    $$("div", dd).forEach((d) => d.onmousedown = () => pick(hits[+d.dataset.i]));
+    $$("div", dd).forEach((d) => d.onmousedown = (e) => {
+      const h = hits[+d.dataset.i];
+      if (e.button === 1 || e.ctrlKey || e.metaKey) { e.preventDefault(); if (h) openInNewTab(h.ticker); return; }
+      if (e.button === 0) pick(h);
+    });
   };
   const pick = (h) => { if (!h) return; inp.value = ""; hits = []; render(); openStock(h.ticker); };
   inp.oninput = () => {
@@ -146,8 +165,7 @@ async function loadDashboard() {
   if (!strip.children.length) loading(strip, "Loading markets…");
   api("/api/macro").then((m) => {
     if (!m.length) { strip.innerHTML = `<div class="muted">No market tiles chosen. <a data-goto="settings">Pick some in Settings →</a></div>`; return; }
-    strip.innerHTML = m.map((x) => `<div class="mcard" data-t="${esc(x.ticker)}"><div class="t">${esc(x.name)}</div><div class="v">${num(x.price, x.price > 1000 ? 0 : 2)}</div><div class="sm">${cpct(x.day, 2)} <span class="muted">1D</span> · ${cpct(x.ret1m)} <span class="muted">1M</span></div>${spark(x.spark, (x.ret1m || 0) >= 0)}</div>`).join("");
-    $$(".mcard", strip).forEach((c) => c.onclick = () => openStock(c.dataset.t));
+    strip.innerHTML = m.map((x) => `<div class="mcard" data-t="${esc(x.ticker)}" data-stock="${esc(x.ticker)}"><div class="t">${esc(x.name)}</div><div class="v">${num(x.price, x.price > 1000 ? 0 : 2)}</div><div class="sm">${cpct(x.day, 2)} <span class="muted">1D</span> · ${cpct(x.ret1m)} <span class="muted">1M</span></div>${spark(x.spark, (x.ret1m || 0) >= 0)}</div>`).join("");
   }).catch((e) => strip.innerHTML = `<div class="muted">${esc(e.message)}</div>`);
 
   api("/api/portfolio").then((p) => {
@@ -171,7 +189,7 @@ async function loadDashboard() {
       { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) }, { k: "rsi", label: "RSI", num: 1, fmt: (v) => num(v, 0) },
       { k: "composite", label: "Score", num: 1, fmt: (v) => `${num(v, 0)}` }, { k: "stance", label: "Stance", fmt: badge },
       { k: "ticker", label: "", fmt: (v) => `<button class="btn danger" data-rm="${esc(v)}">Remove</button>` },
-    ], w, { onClick: (r) => openStock(r.ticker), empty: "Your watchlist is empty. Research a ticker and click “+ Watchlist”." })
+    ], w, { stock: (r) => r.ticker, empty: "Your watchlist is empty. Research a ticker and click “+ Watchlist”." })
     .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
@@ -179,8 +197,7 @@ async function loadDigest() {
   const ul = $("#digestList"); loading(ul, "Scanning your holdings and watchlist…");
   try {
     const d = await api("/api/digest");
-    ul.innerHTML = d.items.length ? d.items.map((i) => `<li class="t${i.tone}" data-t="${esc(i.ticker || "")}">${esc(i.text)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("") : `<li>Quiet day — nothing notable on your names.</li>`;
-    $$("li[data-t]", ul).forEach((li) => li.dataset.t && (li.onclick = () => openStock(li.dataset.t)));
+    ul.innerHTML = d.items.length ? d.items.map((i) => `<li class="t${i.tone}" data-t="${esc(i.ticker || "")}"${i.ticker ? ` data-stock="${esc(i.ticker)}"` : ""}>${esc(i.text)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("") : `<li>Quiet day — nothing notable on your names.</li>`;
     $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" }); b.closest("li").remove(); checkFiredAlerts(); });
   } catch (e) { ul.innerHTML = `<li>${esc(e.message)}</li>`; }
 }
@@ -494,7 +511,7 @@ $("#btnCompare").onclick = async () => {
       { k: "ret5yCagr", label: "5Y CAGR", num: 1, fmt: (v) => cpct(v) }, { k: "vol1y", label: "Vol", num: 1, fmt: (v) => pct(v, 1, false) },
       { k: "maxDD1y", label: "Max DD 1Y", num: 1, fmt: (v) => cpct(v) }, { k: "sharpe1y", label: "Sharpe", num: 1, fmt: (v) => num(v) },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
-    ], d.meta, { onClick: (r) => openStock(r.ticker) });
+    ], d.meta, { stock: (r) => r.ticker });
     const cm = d.correlation;
     const col = (v) => v >= 0 ? `rgba(239,91,91,${v * 0.7})` : `rgba(79,179,191,${-v * 0.7})`;
     $("#cmpCorr").innerHTML = `<table><tr><th></th>${cm.tickers.map((t) => `<th class="num">${esc(t)}</th>`).join("")}</tr>${cm.matrix.map((row, i) => `<tr><th>${esc(cm.tickers[i])}</th>${row.map((v) => `<td class="num" style="background:${col(v)}">${num(v, 2)}</td>`).join("")}</tr>`).join("")}</table>
@@ -537,7 +554,7 @@ async function runScreen(body) {
       { k: "f_growth", label: "Grow", num: 1, fmt: (v) => num(v, 0) }, { k: "f_momentum", label: "Mom", num: 1, fmt: (v) => num(v, 0) },
       { k: "f_risk", label: "Risk", num: 1, fmt: (v) => num(v, 0) }, { k: "composite", label: "Score", num: 1, fmt: (v) => `<b>${num(v, 0)}</b>` },
       { k: "stance", label: "Stance", fmt: (v, r) => `${badge(v)}${r.scoredOn !== "All factors" ? `<span class="sub">${esc(r.scoredOn)}</span>` : ""}` },
-    ], d.rows, { onClick: (r) => openStock(r.ticker), empty: "No matches — loosen the filters." });
+    ], d.rows, { stock: (r) => r.ticker, empty: "No matches — loosen the filters." });
   } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; } finally { $$("#btnScr,#btnScrQuery").forEach((b) => b.disabled = false); }
 }
 const selectedMarkets = () => $$("#scrMarkets input:checked").map((i) => i.value);
@@ -566,7 +583,7 @@ async function loadPortfolio() {
     { k: "pnl", label: "P&L", num: 1, fmt: (v) => `<span class="${cls(v)}">${money(v, b, 0)}</span>` }, { k: "pnlPct", label: "P&L %", num: 1, fmt: (v) => cpct(v) },
     { k: "weight", label: "Weight", num: 1, fmt: (v) => pct(v, 1, false) },
     { k: "ticker", label: "", fmt: (v) => `<button class="btn danger" data-lots="${esc(v)}">Lots</button>` },
-  ], p.positions, { onClick: (r) => openStock(r.ticker), empty: "No holdings yet — add one above." })
+  ], p.positions, { stock: (r) => r.ticker, empty: "No holdings yet — add one above." })
   .afterDraw(() => $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
     const pos = p.positions.find((x) => x.ticker === btn.dataset.lots);
     modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);

@@ -35,6 +35,12 @@ const SLOW = 150000;
   await nav("dashboard");
   await p.waitForFunction(() => document.querySelectorAll("#macroStrip .mcard").length > 5, null, { timeout: SLOW });
   expect("dashboard: macro strip", (await p.locator("#macroStrip .mcard").count()) >= 10, await p.locator("#macroStrip .mcard").count());
+  // A middle click opens the stock in a new tab and leaves this one where it was
+  const [tab] = await Promise.all([ctx.waitForEvent("page", { timeout: 15000 }), p.locator("#macroStrip .mcard").first().click({ button: "middle" })]);
+  const tile = await p.locator("#macroStrip .mcard").first().getAttribute("data-stock");
+  await tab.waitForFunction(() => document.querySelector("#rSym")?.textContent, null, { timeout: SLOW });
+  expect("dashboard: middle click opens a new tab", (await tab.evaluate(() => document.querySelector("#rSym").textContent)) === tile && (await p.evaluate(() => location.hash)) !== `#research/${tile}`, tile);
+  await tab.close();
 
   // ---- Research: every kind of asset
   for (const t of (MODE === "live" ? ["AAPL", "AZN.L", "SAP.DE", "QNBK.QA", "2222.SR", "EMAAR.AE", "NBK.KW", "SPY", "BTC-USD", "TSM", "^VIX", "^TASI.SR"] : ["AAPL", "AZN.L", "QNBK.QA", "SPY", "BTC-USD"])) {
