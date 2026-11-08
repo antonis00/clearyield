@@ -522,6 +522,49 @@ def test_settings_are_checked_on_save_and_restore():
     _reset()
 
 
+def test_displays_say_what_they_show():
+    import datetime as dt
+
+    from backend import data
+    # A yield reads in percent and an index in points, not dollars
+    assert data.price_unit("^TNX", "INDEX") == "%" and data.price_unit("^GSPC", "INDEX") == "points"
+    assert data.price_unit("DX-Y.NYB", "INDEX") == "points" and data.price_unit("AAPL", "EQUITY") is None and data.price_unit("SPY", "ETF") is None
+    assert data.info("^TNX")["priceUnit"] == "%" and data.info("AAPL")["priceUnit"] is None
+
+    _reset()
+    import pandas as pd
+    stocks = _steps([0.01] * 300, end="2026-05-29")  # weekdays, last close on Friday
+    crypto = pd.Series(stocks.values, index=pd.date_range(end="2026-05-31", periods=len(stocks)))  # every day, to Sunday
+    real = data.dividends_past_year
+    # What was actually paid: nothing for a fund that reinvests, even with a yield on Yahoo; 2 a share for AAPL
+    data.dividends_past_year = lambda t: {"VWCE.DE": 0.0, "AAPL": 2.0}.get(t)
+    infos = {"VWCE.DE": {"dividendYield": 0.02}, "AAPL": {"dividendYield": 0.5}, "BTC-USD": {"dividendYield": 0.01}}
+    try:
+        with TestClient(app) as c, _FakeMarket({"VWCE.DE": stocks, "AAPL": stocks, "BTC-USD": crypto}, infos):
+            p = c.get("/api/portfolio").json()
+            assert p["positions"] == [] and p["dayFrom"] is None and p["xirrWhy"] == "Needs a dated purchase"
+            for t in ("VWCE.DE", "AAPL", "BTC-USD"):
+                assert c.post("/api/transactions", json={"ticker": t, "kind": "buy", "shares": 10, "price": 100}).status_code == 200
+            p = c.get("/api/portfolio").json()
+            # Each holding's latest day: the stocks' and crypto's differ, and both are given
+            assert (p["dayFrom"], p["dayTo"]) == ("2026-05-29", "2026-05-31"), (p["dayFrom"], p["dayTo"])
+            # Payments where known (0 and 2 a share); Yahoo's yield only where they aren't (BTC-USD here)
+            assert abs(p["annualIncome"] - (0 + 10 * 2.0 + 10 * crypto.iloc[-1] * 0.01)) < 1e-6, p["annualIncome"]
+            assert p["xirr"] is None and p["xirrWhy"] == "Needs a date on every purchase and sale"
+        _reset()
+        with TestClient(app) as c, _FakeMarket({"AAPL": stocks, "^GSPC": stocks}):
+            day = (dt.date.today() - dt.timedelta(days=10)).isoformat()
+            assert c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "date": day, "shares": 1, "price": 100}).status_code == 200
+            assert c.get("/api/portfolio").json()["xirrWhy"] == "Needs a month or more of history"
+            # Dashboard tiles say when their price is old
+            tile = [x for x in c.get("/api/macro").json() if x["ticker"] == "^GSPC"]
+            assert tile and tile[0]["stale"] is False and tile[0]["asOf"] == "2026-05-29", tile
+    finally:
+        data.dividends_past_year = real
+        _reset()
+    assert data.dividends_past_year("AAPL") is None, "demo mode uses the yield"
+
+
 def test_old_database_gains_the_new_columns():
     """Upgrading must keep existing journal entries."""
     import sqlite3

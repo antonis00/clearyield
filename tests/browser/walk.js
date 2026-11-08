@@ -53,6 +53,11 @@ const SLOW = 150000;
     }
     expect(`research ${t}`, r.price && r.charts > 0 && r.stats >= 2 && !r.bad, `${r.price} | ${r.stance} | ${r.cov}${r.bad ? " | BAD TEXT" : ""}`);
   }
+  // A yield reads in percent and an index in points, not in dollars
+  await research("^TNX");
+  expect("research: a yield shows in percent", /^\d[\d,.]*%$/.test(await txt("#rPrice")), await txt("#rPrice"));
+  await research("^GSPC");
+  expect("research: an index shows in points", /^\d[\d,.]*$/.test(await txt("#rPrice")) && !/\$/.test(await txt("#statGrid")), await txt("#rPrice"));
   if (MODE === "live") {  // demo mode invents data for any symbol, so there is no unknown ticker there
     await research("NOSUCHTICKER");
     expect("research: unknown ticker explains itself", /No price data/.test(await txt("#researchEmpty")));
@@ -170,6 +175,11 @@ const SLOW = 150000;
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Satellite", null, { timeout: SLOW });
   expect("portfolio: switching a holding's bucket", /Core 0\.0%/.test(await txt("#csSplit")) && (await p.evaluate(() => location.hash)) === "#portfolio", (await txt("#csSplit"))?.slice(0, 60));
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Core", null, { timeout: SLOW }); await p.waitForTimeout(400);
+  // The day's change names its day unless everything is from today; stocks and crypto can differ at a weekend
+  const dayKpi = await p.evaluate(() => [...document.querySelectorAll("#pfKpis .kpi")].map((k) => k.innerText.replace(/\s+/g, " ")).find((t) => /^(Today|Latest day)/i.test(t)) || "");
+  const today = await p.evaluate(() => new Date().toLocaleDateString("en-CA"));
+  expect("portfolio: the day's change says which day", pf.dayFrom === today && pf.dayTo === today ? /^Today/i.test(dayKpi) : /^Latest day/i.test(dayKpi) && /\d/.test(dayKpi.replace(/^Latest day\s*\S+/i, "")), `${dayKpi} | ${pf.dayFrom}–${pf.dayTo}`);
+  expect("portfolio: drift isn't coloured as gain or loss", !(await p.locator("#pfRebal td:nth-child(4) .up, #pfRebal td:nth-child(4) .down").count()));
   expect("portfolio: no bad text", !/undefined|NaN|\[object/.test(await txt("#view-portfolio")));
   await shot("portfolio");
   // A sale and a dividend through the form
@@ -178,7 +188,7 @@ const SLOW = 150000;
   await p.selectOption("#hKind", "buy");
   const led = await p.evaluate(async () => (await fetch("/api/portfolio")).json());
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
-  expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs dated/.test(await txt("#pfKpis")), await txt("#pfKpis"));
+  expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs a date on every purchase and sale/.test(await txt("#pfKpis")), await txt("#pfKpis"));
   expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
   expect("portfolio: look-through adds up", Math.abs(Object.values(led.allocation.sectorLookThrough).reduce((a, b) => a + b, 0) - led.total) < 1e-6, Object.keys(led.allocation.sectorLookThrough).slice(0, 4).join(", "));
   await shot("ledger");

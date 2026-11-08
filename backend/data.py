@@ -188,7 +188,23 @@ def main_unit(currency):
     return MINOR_UNITS.get(currency, (currency,))[0]
 
 
+# Yahoo gives these a currency, but they're a yield in percent (4.1 means 4.1%), not a price
+YIELD_INDEXES = ("^TNX", "^TYX", "^FVX", "^IRX")
+
+
+def price_unit(ticker, quote_type):
+    """How a price should read: "%" for a yield, "points" for an index, None for a price in its currency."""
+    if ticker in YIELD_INDEXES:
+        return "%"
+    return "points" if quote_type == "INDEX" or ticker.startswith("^") else None
+
+
 def info(ticker):
+    out = _info(ticker)
+    return {**out, "priceUnit": price_unit(ticker, out.get("quoteType"))}
+
+
+def _info(ticker):
     key = f"info:v8:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
@@ -370,6 +386,31 @@ def splits(ticker):
         return [tuple(x) for x in stale] if stale else []  # not cached, so it's asked again next time
     db.cache_set(key, out)
     return out
+
+
+def dividends_past_year(ticker):
+    """Dividends per share paid in the past 365 days, in the quote currency, or None if Yahoo didn't answer.
+    What was actually paid: 0 for a fund that reinvests (accumulates) its income, and right for a payer that Yahoo
+    gives no yield for. Yahoo's dividends are split-adjusted, like its prices."""
+    if DEMO:
+        return None
+    key = f"divs:{ticker}"
+    cached = db.cache_get(key, 24 * 3600)
+    if cached is None:
+        try:
+            raw = _yf().Ticker(ticker).dividends
+            idx = pd.to_datetime(raw.index)
+            idx = idx.tz_localize(None) if idx.tz is not None else idx
+            cached = [[d.strftime("%Y-%m-%d"), float(v)] for d, v in zip(idx, raw) if v and float(v) > 0]
+        except Exception as e:
+            log.warning("dividends failed for %s: %s", ticker, e)
+            cached = db.cache_get_stale(key)
+            if cached is None:
+                return None  # not cached, so it's asked again next time
+        else:
+            db.cache_set(key, cached)
+    since = (pd.Timestamp.today().normalize() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
+    return sum(v for d, v in cached if d > since)
 
 
 def dividend_factor(ticker):

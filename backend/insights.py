@@ -45,14 +45,14 @@ def _quick_row(t, settings):
     c = full["Close"]
     return {
         "ticker": t, "name": inf.get("name"), "region": inf.get("region"), "assetClass": inf.get("assetClass"),
-        "sector": inf.get("sector"), "currency": inf.get("currency"), "price": float(c.iloc[-1]),
+        "sector": inf.get("sector"), "currency": inf.get("currency"), "priceUnit": inf.get("priceUnit"), "price": float(c.iloc[-1]),
         "day": ind.ret_over(c, 1), "ret1m": ind.ret_over(c, 21), "ret1y": ind.ret_over(c, 252),
         "pe": inf.get("trailingPE"), "pb": inf.get("priceToBook"), "divYield": inf.get("dividendYield"),
         "revGrowth": inf.get("revenueGrowth"), "roe": inf.get("returnOnEquity"), "de": inf.get("debtToEquity"),
         "marketCap": inf.get("marketCap"), "vol": ind.volatility(c), "rsi": float(ind.rsi(c).iloc[-1]),
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
         "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only", "events": upcoming(inf),
-        "moveDay": on_which_day(c), "stale": data.is_stale(t),
+        "moveDay": on_which_day(c), "stale": data.is_stale(t), "asOf": c.index[-1].strftime("%Y-%m-%d"),
     }
 
 

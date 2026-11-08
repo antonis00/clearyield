@@ -236,7 +236,8 @@ def macro():
         try:
             c = data.history(t, "1y")["Close"]
             out.append({"ticker": t, "name": label, "price": float(c.iloc[-1]), "day": ind.ret_over(c, 1),
-                        "ret1m": ind.ret_over(c, 21), "spark": [float(v) for v in c.iloc[-60:]]})
+                        "ret1m": ind.ret_over(c, 21), "spark": [float(v) for v in c.iloc[-60:]],
+                        "stale": data.is_stale(t), "asOf": c.index[-1].strftime("%Y-%m-%d")})
         except Exception:
             continue
     return ok(out)
