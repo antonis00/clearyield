@@ -264,6 +264,21 @@ const CHECKS = {
     expect("all gone", (await page.locator("#txTable tbody tr").count()) === 0);
     expect("position gone", (await page.locator("#pfTable tbody tr").count()) === 0);
     page.off("dialog", dialogs);
+
+    // Delete all in the Lots pop-up: the whole holding, sales and dividends included, after saying what goes
+    await post(page, "/api/transactions/import", { text: "AAPL,10,100,2024-06-03\nAAPL,5,110,2024-09-02\nAAPL,4,150,2025-01-02,sell\nAAPL,,10,2025-02-03,dividend\nMSFT,2,300,2024-06-03" });
+    await page.evaluate(() => { location.hash = "#dashboard"; }); await page.waitForTimeout(300);
+    await page.evaluate(() => { location.hash = "#portfolio"; });
+    await page.waitForFunction(() => document.querySelectorAll("#pfTable [data-lots]").length === 2, null, { timeout: 60000 });
+    await page.locator('#pfTable [data-lots="AAPL"]').click(); await page.waitForTimeout(300);
+    let asked = "";
+    const answer = (d) => { asked = d.message(); d.accept(); }; page.on("dialog", answer);
+    await page.click("#modal [data-delall]");
+    await page.waitForFunction(() => document.querySelectorAll("#pfTable [data-lots]").length === 1, null, { timeout: 30000 });
+    page.off("dialog", answer);
+    const left = (await post(page, "/api/transactions", null, "GET")).body;
+    expect("delete all asks first, naming what goes", /Delete all 4 transactions of AAPL \(2 purchases, 1 sale, 1 dividend\)/.test(asked), asked);
+    expect("delete all removes the whole holding and nothing else", left.length === 1 && left[0].ticker === "MSFT", JSON.stringify(left.map((x) => x.ticker)));
   },
 
   // The chart period buttons change the chart and nothing else

@@ -195,6 +195,14 @@ def add_many(rows):
     return len(rows)
 
 
+def delete_ticker(ticker):
+    """Delete every transaction of one holding (purchases, sales and dividends) in one go. Other holdings don't
+    depend on them, so the ledger still adds up. Returns how many were deleted."""
+    n = len(db.q("SELECT id FROM transactions WHERE ticker=?", (ticker,)))
+    db.x("DELETE FROM transactions WHERE ticker=?", (ticker,))
+    return n
+
+
 def delete(tid):
     """Delete a transaction unless a later sale depends on it."""
     replay([r for r in db.q("SELECT * FROM transactions") if r["id"] != tid])

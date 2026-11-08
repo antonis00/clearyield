@@ -498,6 +498,15 @@ def import_transactions(body: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
+@app.delete("/api/transactions/ticker/{ticker}")
+def delete_holding(ticker: str):
+    """Every transaction of one holding: its purchases, sales and dividends."""
+    n = ledger.delete_ticker(T(ticker))
+    if not n:
+        raise HTTPException(404, f"There are no transactions of {T(ticker)}.")
+    return ok({"deleted": n})
+
+
 @app.delete("/api/transactions/{tid}")
 @app.delete("/api/holdings/{tid}")
 def delete_transaction(tid: int):
