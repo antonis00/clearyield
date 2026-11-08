@@ -128,7 +128,12 @@ document.addEventListener("auxclick", (e) => {
 });
 // Windows starts scroll mode on a middle press; on a stock it should only open the tab
 document.addEventListener("mousedown", (e) => { if (e.button === 1 && stockTarget(e)) e.preventDefault(); });
-document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) show(g.dataset.goto); });
+document.addEventListener("click", (e) => {
+  const g = e.target.closest("[data-goto]");
+  if (!g || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return; // let the browser open those in a new tab
+  e.preventDefault();
+  show(g.dataset.goto);
+});
 
 /* ---------------------------------------------------------------- search */
 (() => {
