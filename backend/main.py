@@ -104,6 +104,12 @@ async def _alert_loop():
 @asynccontextmanager
 async def lifespan(app):
     db.init()
+    try:
+        gone = db.cache_prune()
+        if gone:
+            log.info("removed %d cache entries not refreshed for %d days", gone, db.CACHE_KEEP_DAYS)
+    except Exception as e:  # never stop the app over housekeeping
+        log.warning("cache pruning failed: %s", e)
     task = asyncio.create_task(_alert_loop())
     yield
     task.cancel()

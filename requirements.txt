@@ -1,6 +1,9 @@
-fastapi>=0.110
-uvicorn>=0.29
-yfinance>=1.8
-pandas>=2.1
-numpy>=1.26
-httpx>=0.27
+# The versions every test last passed with. Upgrade on purpose, then run tests\run_all.py.
+fastapi==0.162.0
+uvicorn==0.54.0
+yfinance==1.8.0
+pandas==3.1.1
+numpy==2.5.4
+httpx==0.28.1
+# Imported directly for the certificate bundle; kept current rather than pinned, since it's the list of trusted roots
+certifi>=2024.2.2

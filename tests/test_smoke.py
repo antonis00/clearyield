@@ -1,6 +1,8 @@
 """Offline smoke test: runs every endpoint against synthetic demo data.
 
-    STOCKPILOT_DEMO=1 python -m pytest tests -q      (or: python tests/test_smoke.py)
+    python tests/test_smoke.py              every test; failures are named, and the run goes on
+    python tests/test_smoke.py splits -v    only tests whose name contains "splits", showing the app's log
+    STOCKPILOT_DEMO=1 python -m pytest tests -q
 """
 import os
 import sys
@@ -15,9 +17,15 @@ for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING")
 os.environ["AI_PROVIDER"] = "none"  # set before .env is read, which never overrides what's already set
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import warnings  # noqa: E402
+
+warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")  # about the library, not the app
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.main import app  # noqa: E402
+from backend import db as _db  # noqa: E402
+
+_db.init()  # the tables exist from the start, so any test can run on its own
 
 
 def test_all():
@@ -139,7 +147,7 @@ def test_real_yahoo_shapes():
     try:
         assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v8:EMPTY.X") is None
         db.cache_set("info:v8:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v8:OLD.X'")
+        db.cache_expire("info:v8:OLD.X")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -245,7 +253,7 @@ def test_fx_failure_never_guesses_a_rate():
             pass
         # An expired real rate beats any guess, and stays marked as expired
         db.cache_set("fx:CADUSD", 0.71)
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'fx:CADUSD'")
+        db.cache_expire("fx:CADUSD")
         assert abs(data.fx_rate("CAD", "USD") - 0.71) < 1e-9
         assert db.cache_get("fx:CADUSD", 3600) is None
 
@@ -1513,7 +1521,7 @@ def test_old_data_is_flagged():
     idx = pd.bdate_range(end="2026-06-01", periods=300)
     old = pd.DataFrame({c: [100.0] * 300 for c in ("Open", "High", "Low", "Close", "Volume")}, index=idx)
     db.cache_set("hist:OLD:5y", data._df_to(old))
-    db.x("UPDATE cache SET ts = 0 WHERE key = 'hist:OLD:5y'")
+    db.cache_expire("hist:OLD:5y")
 
     class Down:
         def history(self, **kw):
@@ -1541,7 +1549,7 @@ def test_old_data_is_flagged():
         assert insights.check_alerts(db.get_settings()) == []
         # An old FX rate is flagged too
         db.cache_set("fx:EURUSD", 1.1)
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'fx:EURUSD'")
+        db.cache_expire("fx:EURUSD")
         assert data.fx_rate("EUR", "USD") == 1.1 and data.is_stale_fx("EUR")
     finally:
         data._yf, data.DEMO = real_yf, real_demo
@@ -1596,7 +1604,7 @@ def test_empty_statements_are_retried_soon():
         assert 3000 < age_left <= 3600, age_left  # kept for an hour, not a day
         # Good figures from before aren't replaced by an empty reply
         db.cache_set("fin:Y", [{"year": "2025", "revenue": 1.0}])
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'fin:Y'")
+        db.cache_expire("fin:Y")
         assert data.financials("Y") == [{"year": "2025", "revenue": 1.0}]
     finally:
         data._yf, data.DEMO = real_yf, real_demo
@@ -1615,6 +1623,96 @@ def test_clearing_the_cache_keeps_the_fallback():
     assert db.cache_get("hist:KEEP:5y", 10 ** 6) is None, "next load fetches fresh data"
     assert db.cache_get_stale("hist:KEEP:5y") == {"x": 1}, "and old data is there if Yahoo fails"
     db.cache_clear()
+
+
+def test_cache_in_memory_and_failures_kept_briefly():
+    import tempfile
+    import time
+    from pathlib import Path
+
+    import pandas as pd
+
+    from backend import data, db
+    db.cache_clear()
+    # The copy in memory: each read is its own copy, ages are the database's, and expiring or clearing reaches it
+    db.cache_set("k", {"a": [1, 2]})
+    first = db.cache_get("k", 60)
+    first["a"].append(3)
+    assert db.cache_get("k", 60) == {"a": [1, 2]}, "one caller can't change what another reads"
+    assert db.q("SELECT value FROM cache WHERE key = 'k'")[0]["value"] == '{"a": [1, 2]}'
+    db.cache_set("old", 1, ts=time.time() - 100)
+    assert db.cache_get("old", 50) is None and db.cache_get("old", 200) == 1 and db.cache_get_stale("old") == 1
+    db.cache_expire("k")
+    assert db.cache_get("k", 60) is None and db.cache_get_stale("k") == {"a": [1, 2]}
+    hist = data.history("AAPL", "1y")
+    assert data.history("AAPL", "1y").equals(hist), "a history read twice is the same, though the first copy's index was taken"
+    # Pruning drops only what hasn't been refreshed for 90 days; Clear cache keeps the age, so an expired fresh entry stays
+    db.cache_set("recent", 1)
+    db.cache_set("dead", 1, ts=time.time() - 91 * 86400)
+    db.cache_set("old-but-expired", 1, ts=time.time() - 91 * 86400)
+    db.cache_expire()
+    assert db.cache_get("recent", 10 ** 6) is None and db.cache_get_stale("recent") == 1, "expired, with the fallback kept"
+    db.cache_expire()  # twice is the same as once
+    assert db.cache_prune() == 2
+    assert db.cache_get_stale("recent") == 1 and db.cache_get_stale("dead") is None and db.cache_get_stale("old-but-expired") is None
+    assert db.cache_prune() == 0
+    db.cache_clear()
+    assert db.cache_get_stale("k") is None
+    # A different database file doesn't see this one's entries
+    db.cache_set("only-here", 1)
+    real_path = db.DB_PATH
+    db.DB_PATH = Path(tempfile.mkdtemp()) / "other.db"
+    try:
+        db.init()
+        assert db.cache_get_stale("only-here") is None
+    finally:
+        db.DB_PATH = real_path
+
+    def hours_left(key, ttl):
+        return (ttl - (time.time() - db.q("SELECT ts FROM cache WHERE key = ?", (key,))[0]["ts"])) / 3600
+
+    class Funds:
+        sector_weightings, top_holdings = {}, None
+
+    state = {"fail": False}
+
+    class Listing:
+        funds_data = Funds()
+
+        @property
+        def earnings_history(self):
+            if state["fail"]:
+                raise RuntimeError("rate limited")
+            return pd.DataFrame({"epsActual": [1.0], "epsEstimate": [0.9], "surprisePercent": [0.11]}, index=[pd.Timestamp("2026-03-31")])
+
+    class NothingFound:
+        def __init__(self, q, **kw):
+            self.quotes = []
+
+    class YF:
+        Ticker = staticmethod(lambda t: Listing())
+
+    YF.Search = NothingFound
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    try:
+        # An empty answer is kept for an hour, not a day or a week, since a rate limit looks the same
+        assert data.search_symbols("vwce") == [] and 0.8 < hours_left("search:vwce", 24 * 3600) <= 1
+        assert data.fund("GLD") == {"sectors": {}, "holdings": []} and 0.8 < hours_left("fund:GLD", 7 * 24 * 3600) <= 1
+        # ...and doesn't replace what was known
+        good = {"sectors": {"Technology": 0.3}, "holdings": [{"ticker": "AAPL", "name": "Apple", "weight": 0.07}]}
+        db.cache_set("fund:SPY", good, ts=1)
+        assert data.fund("SPY") == good
+        # A failure keeps the last earnings instead of blanking them
+        rec = data.earnings_record("AAPL")
+        assert rec and rec[0]["actual"] == 1.0
+        db.cache_expire("earn:AAPL")
+        state["fail"] = True
+        assert data.earnings_record("AAPL") == rec
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+        db.cache_clear()
 
 
 def test_rsi_waits_for_enough_data():
@@ -2072,7 +2170,7 @@ def test_intraday_candles():
         day = c.get("/api/stock/AAPL?period=5y").json()["candles"]
         assert wk["bars"] == "week" and day["bars"] == "day" and len(day["time"]) / 6 < len(wk["time"]) < len(day["time"]) / 4
         assert wk["close"][-1] == day["close"][-1] and wk["sma50"][-1] == day["sma50"][-1]
-        assert all(pd.Timestamp(t).dayofweek == 0 for t in wk["time"][1:]), "demo weeks start on Monday"
+        assert all(pd.Timestamp(t).day_of_week == 0 for t in wk["time"][1:]), "demo weeks start on Monday"
 
 
 def test_fund_regions_follow_what_they_hold():
@@ -2722,7 +2820,22 @@ def test_backtest_uses_history_before_the_window():
 
 
 if __name__ == "__main__":
-    for name, fn in list(globals().items()):
-        if name.startswith("test_"):
+    import logging
+    import time
+    import traceback
+    if "-v" not in sys.argv:  # the tests make Yahoo fail on purpose, so its warnings are expected; -v shows them
+        logging.disable(logging.WARNING)
+    only = [a for a in sys.argv[1:] if not a.startswith("-")]
+    tests = [(n, f) for n, f in list(globals().items()) if n.startswith("test_") and (not only or any(o in n for o in only))]
+    failed, start = [], time.perf_counter()
+    for name, fn in tests:
+        try:
             fn()
-    print("OK - all endpoints passed")
+        except Exception:  # keep going, so one failure doesn't hide the rest
+            failed.append(name)
+            print(f"FAIL {name}\n{traceback.format_exc()}", flush=True)
+    took = time.perf_counter() - start
+    if failed:
+        print(f"{len(tests) - len(failed)} of {len(tests)} tests passed in {took:.0f}s. Failed: {', '.join(failed)}")
+        sys.exit(1)
+    print(f"OK - all {len(tests)} tests passed in {took:.0f}s")

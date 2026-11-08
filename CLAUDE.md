@@ -12,13 +12,14 @@ Personal, self-hosted investing dashboard. The goal is a smart decision-support 
 ```powershell
 .\run.bat                     # creates .venv on first run; live Yahoo data on http://localhost:8001
 .\run.bat --demo              # synthetic offline data
-.\.venv\Scripts\python tests\test_smoke.py      # offline end-to-end tests (demo mode)
+.\.venv\Scripts\python tests\test_smoke.py      # offline end-to-end tests (demo mode); add a name part to run some, -v for the app's log
 .\.venv\Scripts\python tests\run_all.py         # everything: offline tests, browser checks, demo and live walks, raw-Yahoo comparison
 .\.venv\Scripts\python tests\run_all.py --offline   # skip the live parts
 .\.venv\Scripts\python tests\run_all.py --only walk-live
 ```
 - The browser checks need `npm install` once in `tests/browser`, and use the installed Chrome (`channel: "chrome"`).
-- `run_all.py` gives each browser check its own server and temporary database, so the owner's data isn't touched.
+- `run_all.py` gives each browser check its own server and temporary database, so the owner's data isn't touched. It leaves out the app's log lines, ends with each failing step by name, and on a failure prints the end of that check's output and its server's log.
+- `requirements.txt` pins the versions the tests last passed with (certifi only has a floor). `run.bat` installs again whenever `requirements.txt` changes (it keeps a copy in `.venv\requirements.installed`). Upgrade on purpose, then run `run_all.py`.
 - `uvicorn --reload` has not reliably picked up Python changes on this machine. Restart the server after backend edits.
 
 Optional settings go in `.env` (see `.env.example`):
@@ -74,6 +75,7 @@ Views are dashboard, research, compare, screener, portfolio, backtest, journal a
 - **Browser tests:** Playwright's `fill()` sets the value without key events. Use `pressSequentially()` when the point is that typing works.
 - **Tests and AI:** `tests/test_smoke.py` and the servers started by `run_all.py` set `AI_PROVIDER=none`, so they never wait on the model in `.env`. `_FakeLLM` in the smoke tests is a real local HTTP server standing in for a provider.
 - **Certificates on Windows:** Kaspersky on this machine (and company proxies elsewhere) re-signs HTTPS, which Python's own certificate list rejects. At startup `main._trust_windows_certificates()` writes certifi's list plus the Windows root certificates trusted for server authentication (not intermediates, not code-signing-only roots) to `data/ca-bundle.pem` and sets `SSL_CERT_FILE`, which both yfinance's curl_cffi and httpx read, so `run.bat` reaches Yahoo and cloud AI providers. An `SSL_CERT_FILE` set beforehand is kept.
+- **Cache:** `db.py` keeps a copy in memory of each cache row (as its JSON text, decoded afresh on every read), so a portfolio view doesn't open SQLite for every history and rate. Change the cache only through `cache_set`/`cache_expire`/`cache_clear`/`cache_prune`, never with SQL, or the copy goes out of step. Clear cache makes the time negative (expired, age kept); at startup `cache_prune()` drops anything not refreshed for 90 days. An empty answer from Yahoo (search, fund holdings, financials, earnings) is kept for an hour, never over what was known, since a rate limit looks the same.
 - **Displays say what they show:** `info()` adds `priceUnit` (`"%"` for yields like `^TNX`, `"points"` for indexes, else none) and the page formats prices with `priceOf()`, never `money()` alone. The day's change reads "Today" only when every holding's latest price is from today, else "Latest day" with the dates (`dayFrom`/`dayTo`). Estimated income is what each share actually paid over the past year (`data.dividends_past_year()`, so accumulating funds give 0), with Yahoo's yield only as a fallback. An old price (Yahoo not answering) is marked "old price" wherever it shows. A missing annual return gives its real reason (`xirrWhy`).
 - **Security:** the app has no login, so the middleware answers only a localhost `Host` and refuses `/api/` requests another site made through the browser (`Sec-Fetch-Site` other than same-origin/none, or an `Origin` that isn't this host; scripts with neither pass). Anything that spends the AI allowance is a POST (the brief). Every setting goes through `db.check_settings()` on save and restore (a bad stored value falls back to the default), and anything stored is escaped with `esc()` before it goes into HTML.
 - DCF fair value converts statement currency to quote currency, but cross-listed stocks remain approximate.
