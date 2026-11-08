@@ -114,29 +114,80 @@ def x(sql, params=()):
 
 
 # ---- cache ----
+# A copy in memory of each cache row this process has read or written, as (stored JSON, timestamp). One portfolio
+# view reads the same price histories and rates many times, and each read was a new SQLite connection: this skips
+# that while keeping the same ages. Every read decodes its own copy, so no caller can change another's data. Only
+# this process writes the cache; anything that changes it must go through these functions.
+_mem = {}
+
+
+def _mem_key(key):
+    return (str(DB_PATH), key)
+
+
+def _cache_row(key):
+    k = _mem_key(key)
+    if k not in _mem:
+        rows = q("SELECT value, ts FROM cache WHERE key=?", (key,))
+        if not rows:
+            return None
+        _mem[k] = (rows[0]["value"], rows[0]["ts"])
+    return _mem[k]
+
+
 def cache_get(key, ttl):
-    rows = q("SELECT value, ts FROM cache WHERE key=?", (key,))
-    if rows and time.time() - rows[0]["ts"] < ttl:
-        return json.loads(rows[0]["value"])
+    row = _cache_row(key)
+    if row and time.time() - row[1] < ttl:
+        return json.loads(row[0])
     return None
 
 
 def cache_get_stale(key):
-    rows = q("SELECT value FROM cache WHERE key=?", (key,))
-    return json.loads(rows[0]["value"]) if rows else None
+    row = _cache_row(key)
+    return json.loads(row[0]) if row else None
 
 
 def cache_set(key, value, ts=None):
-    x("INSERT OR REPLACE INTO cache (key, value, ts) VALUES (?,?,?)", (key, json.dumps(value), ts or time.time()))
+    text, ts = json.dumps(value), ts or time.time()
+    x("INSERT OR REPLACE INTO cache (key, value, ts) VALUES (?,?,?)", (key, text, ts))
+    _mem[_mem_key(key)] = (text, ts)
 
 
-def cache_expire():
-    """Make everything refresh on its next use, keeping old values to fall back on if Yahoo fails."""
-    x("UPDATE cache SET ts = 0")
+def cache_expire(key=None):
+    """Make everything (or one key) refresh on its next use, keeping old values to fall back on if Yahoo fails.
+    The time written becomes negative: always too old to use, but still known, so pruning can tell its age."""
+    if key is None:
+        x("UPDATE cache SET ts = -abs(ts)")
+        _mem.clear()
+    else:
+        x("UPDATE cache SET ts = -abs(ts) WHERE key = ?", (key,))
+        _mem.pop(_mem_key(key), None)
+
+
+CACHE_KEEP_DAYS = 90
+
+
+def cache_prune(days=CACHE_KEEP_DAYS):
+    """Drop what hasn't been refreshed for `days`: a symbol no longer looked at, or a key from an older version.
+    Anything in use is refreshed within a week, so only dead entries go. Returns how many rows were removed."""
+    cutoff = time.time() - days * 86400
+    with _lock:
+        c = _connect()
+        try:
+            gone = c.execute("DELETE FROM cache WHERE abs(ts) < ?", (cutoff,)).rowcount
+            c.commit()
+            if gone:
+                c.execute("VACUUM")  # give the space back to the disk
+        finally:
+            c.close()
+    if gone:
+        _mem.clear()
+    return gone
 
 
 def cache_clear():
     x("DELETE FROM cache")
+    _mem.clear()
 
 
 # ---- backup ----

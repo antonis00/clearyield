@@ -359,6 +359,10 @@ def earnings_record(ticker):
     except Exception as e:  # Yahoo has none for funds, and answers with an error
         log.info("no earnings history for %s: %s", ticker, e)
         out = []
+    if not out:  # none, or a failure: keep what's known, and ask again within the hour
+        old = db.cache_get_stale(key)
+        if old:
+            return old
     db.cache_set(key, out, ts=None if out else time.time() - TTL["fin"] + 3600)
     return out
 
@@ -454,8 +458,16 @@ def fund(ticker):
         holdings = [{"ticker": str(sym), "name": r["Name"], "weight": _num(r["Holding Percent"])} for sym, r in top.iterrows()] if top is not None else []
     except Exception as e:
         log.info("no fund data for %s: %s", ticker, e)
-        return {"sectors": {}, "holdings": []}
+        return db.cache_get_stale(key) or {"sectors": {}, "holdings": []}
     out = {"sectors": sectors, "holdings": holdings}
+    if not sectors and not holdings:
+        # Bond and gold funds have none, but Yahoo answers a rate limit the same way: keep what's known, and ask
+        # again within the hour instead of a week
+        old = db.cache_get_stale(key)
+        if old and (old["sectors"] or old["holdings"]):
+            return old
+        db.cache_set(key, out, ts=time.time() - 7 * 24 * 3600 + 3600)
+        return out
     db.cache_set(key, out)
     return out
 
@@ -477,10 +489,11 @@ def search_symbols(text):
         quotes = _yf().Search(text, max_results=10, news_count=0, timeout=5).quotes
     except Exception as e:
         log.warning("symbol search failed for %s: %s", text, e)
-        return []
+        return db.cache_get_stale(key) or []
     out = [{"ticker": q["symbol"], "name": q.get("longname") or q.get("shortname") or q["symbol"],
             "market": f"{SEARCH_TYPES[q['quoteType']]} · {q.get('exchange', '')}"} for q in quotes if q.get("symbol") and q.get("quoteType") in SEARCH_TYPES]
-    db.cache_set(key, out)
+    # Nothing found is kept for an hour, not a day: Yahoo answers a rate limit with an empty list too
+    db.cache_set(key, out, ts=None if out else time.time() - 24 * 3600 + 3600)
     return out
 
 
