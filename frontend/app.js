@@ -55,6 +55,21 @@ const FACTOR_INFO = {
 // A small "i" that explains something on hover or keyboard focus; the text is shown by the floating tooltip below
 const infoIcon = (text) => `<span class="info" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
 const factorInfo = (name) => infoIcon(FACTOR_INFO[name]);
+// Why a factor has no score, in words, instead of a bare "n/a"
+const ACCOUNTS = ["value", "quality", "growth"];
+const KIND = { ETFs: "funds", Crypto: "crypto", Other: "indexes, currencies and futures" };
+function factorGap(info, name) {
+  if (ACCOUNTS.includes(name) && info.assetClass !== "Stocks") return `Doesn't apply to ${KIND[info.assetClass] || "this kind of asset"}: there are no company accounts to measure.`;
+  if (ACCOUNTS.includes(name)) return "Yahoo has none of the figures this uses for this company.";
+  return "Needs more price history than Yahoo has for this symbol.";
+}
+// What the overall score is built from, or why there isn't one
+function compositeBasis(info, scores) {
+  if (info.assetClass === "Other") return ["not given to market indicators", "Indexes, currencies and futures get no overall score, because they aren't something you hold. Their momentum and risk are still shown below for context."];
+  if (info.assetClass !== "Stocks") return ["trend & risk only", `${KIND[info.assetClass] === "crypto" ? "Crypto has" : "Funds have"} no company accounts, so value, quality and growth don't apply. The score is the momentum and risk factors only, so compare it with other ${KIND[info.assetClass]}, not with a stock's.`];
+  const missing = ACCOUNTS.concat(["momentum", "risk"]).filter((k) => !isNum(scores.factors[k]));
+  return [null, missing.length ? `Built from the factors that have data. Left out: ${missing.join(", ")}.` : null];
+}
 function mkChart(id, cfg) { state.charts[id]?.destroy(); const ctx = document.getElementById(id); state.charts[id] = new Chart(ctx, cfg); return state.charts[id]; }
 
 /* Generic sortable table. cols: {k,label,fmt(v,row),num,sort} */
@@ -258,10 +273,10 @@ function renderHeader(s) {
   $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, ${C("--line")} 0)`;
   $("#rScore").style.boxShadow = `inset 0 0 0 7px ${C("--panel")}`;
   const w = state.meta.settings.weights;
-  const basis = i.assetClass === "Other" ? "market indicator" : i.assetClass !== "Stocks" ? "trend & risk only"
-    : Object.values(w).every((v) => Math.abs(v - 0.2) < 0.005) ? "balanced"
-    : Object.entries(w).map(([k, v]) => `${k[0].toUpperCase()} ${Math.round(v * 100)}`).join(" · ");
-  $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})</div>`;
+  const [kind, why] = compositeBasis(i, s.scores);
+  const basis = kind || (Object.values(w).every((v) => Math.abs(v - 0.2) < 0.005) ? "balanced"
+    : Object.entries(w).map(([k, v]) => `${k[0].toUpperCase()} ${Math.round(v * 100)}`).join(" · "));
+  $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})${why ? ` ${infoIcon(why)}` : ""}</div>`;
   $("#btnWatch").textContent = s.watched ? "✓ Watching" : "+ Watchlist";
 }
 function lwChart(el, height) {
@@ -372,7 +387,7 @@ function renderFactors(s) {
     data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: tint("--accent", "33"), borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
-  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "n/a"}</span></div>${bar(f[n])}
+  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}
     <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}">${isNum(p.score) ? num(p.score, 0) : "n/a"}</span></div>`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
   $$(".factor .fh").forEach((h) => h.onclick = (e) => { if (!e.target.closest(".info")) h.parentElement.classList.toggle("open"); });
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
