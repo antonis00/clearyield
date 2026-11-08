@@ -249,6 +249,13 @@
       </details>
     </div>
     <div class="card"><div class="card-h"><h3>Positions</h3></div><div id="pfTable" class="tablewrap"></div></div>
+    <div class="card hidden" id="csCard">
+      <div class="card-h"><h3>Core &amp; satellite</h3><span class="muted sm">Broad index funds start as core, everything else as satellite. Switch any holding in Positions; set the target in Settings.</span></div>
+      <div class="grid2 cs-body">
+        <div id="csSplit"></div>
+        <div><canvas id="csPerf" height="150"></canvas><div id="csPerfNote" class="muted sm"></div></div>
+      </div>
+    </div>
     <div class="grid2">
       <div class="card"><div class="card-h"><h3>Your performance vs benchmark (up to 1Y)</h3></div><canvas id="pfPerf" height="200"></canvas><div class="muted sm" id="pfNote"></div></div>
       <div class="card"><div class="card-h"><h3>Risk</h3><span class="muted sm">Returns are what you earned. The rest applies today's holdings to the past year.</span></div><div id="pfRisk" class="statgrid"></div><ul id="pfWarn" class="signals"></ul></div>
@@ -347,6 +354,7 @@
         </div>
         <h4>Target allocation (%)</h4>
         <div class="form-row" id="targetInputs"></div>
+        <div class="form-row"><label>Core share of the portfolio %<input type="number" id="sCore" min="0" max="100" step="5"></label></div>
         <h4>Dashboard tiles</h4>
         <div id="tileChoices" class="tile-choices"></div>
         <div class="form-row"><button class="btn" id="btnSaveSettings">Save settings</button><button class="btn ghost" id="btnClearCache">Refresh all data</button></div>

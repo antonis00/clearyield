@@ -60,6 +60,18 @@ label.block { margin: 8px 0; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { background: transparent; color: var(--muted); border: 0; padding: 6px 11px; font: 500 12px var(--mono); cursor: pointer; }
 .seg button.on { background: var(--line); color: var(--text); }
+.cs-body { margin-bottom: 0; align-items: start; }
+.split { position: relative; display: flex; height: 14px; border-radius: 7px; overflow: visible; background: var(--panel2); margin: 26px 0 8px; }
+.split i { display: block; height: 100%; }
+.split i:first-child { background: var(--accent2); border-radius: 7px 0 0 7px; } .split i:last-child { background: var(--accent); border-radius: 0 7px 7px 0; }
+.split b { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--text); }
+.split b::after { content: attr(data-label); position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.cs-core { color: var(--accent2); } .cs-sat { color: var(--accent); }
+.split-legend { display: flex; justify-content: space-between; font: 12px var(--mono); }
+.cs-lines p { margin: 10px 0 0; font-size: 13px; }
+.btn.bucket { padding: 2px 8px; font-size: 11px; }
+.btn.bucket.core { color: var(--accent2); border-color: color-mix(in srgb, var(--accent2) 50%, transparent); }
+.btn.bucket.satellite { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .tile-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 12px; font-size: 13px; margin: 4px 0 8px; }
 .tile-choices label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .chart-ctl { display: flex; gap: 8px; flex-wrap: wrap; }

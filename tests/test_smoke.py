@@ -147,7 +147,7 @@ def _reset():
     """Clear the user tables so a test starts from an empty app."""
     from backend import db
     db.init()
-    for table in ("transactions", "watchlist", "journal", "alerts", "settings", "score_history"):
+    for table in ("transactions", "watchlist", "journal", "alerts", "settings", "score_history", "buckets"):
         db.x(f"DELETE FROM {table}")
 
 
@@ -460,7 +460,7 @@ def test_backup_restores_everything_or_nothing():
         r = c.get("/api/backup")
         assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
         backup = r.json()
-        assert backup["version"] == 3 and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
+        assert backup["version"] == 4 and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
         assert "cache" not in backup  # market data can always be downloaded again
 
         before = {t: db.q(f"SELECT * FROM {t}") for t in ("watchlist", "transactions", "journal", "alerts", "settings")}
@@ -2002,6 +2002,89 @@ def test_dashboard_tiles_are_chosen_in_settings():
         assert c.post("/api/settings", json={"dashboard_tiles": "^GSPC"}).status_code == 400
         assert c.post("/api/settings", json={"dashboard_tiles": []}).json()["dashboard_tiles"] == []
         assert c.get("/api/macro").json() == []
+    _reset()
+
+
+def test_core_and_satellite():
+    from backend import db
+    _reset()
+    spy = _steps([0.001] * 300)  # core: a steady climb
+    aapl = _steps([0.03, -0.02] * 150)  # satellite: jumpy
+    d0, d1 = spy.index[100], spy.index[200]
+    day = lambda d: d.date().isoformat()
+    buy = lambda c, t, d, n: c.post("/api/transactions", json={"ticker": t, "kind": "buy", "date": day(d), "shares": n, "price": 100}).status_code
+    with TestClient(app) as c, _FakeMarket({"SPY": spy, "AAPL": aapl}):
+        assert buy(c, "SPY", d0, 10) == 200 and buy(c, "AAPL", d0, 10) == 200
+        p = c.get("/api/portfolio").json()
+        pos = {r["ticker"]: r for r in p["positions"]}
+        assert pos["SPY"]["bucket"] == "core" and pos["AAPL"]["bucket"] == "satellite", "broad funds start as core, stocks as satellite"
+        cs = p["coreSatellite"]
+        core = pos["SPY"]["value"] / p["total"]
+        assert abs(cs["core"] - core) < 1e-9 and abs(cs["satellite"] - (1 - core)) < 1e-9 and cs["target"] == 0.8
+        assert cs["action"] == ("To core" if core < 0.78 else "To satellite" if core > 0.82 else "Hold")
+        assert abs(cs["amount"] - abs(0.8 - core) * p["total"]) < 1e-6
+        slices = p["allocation"]["bucket"]
+        assert set(slices) == {"Core", "Satellite"} and abs(slices["Core"] - pos["SPY"]["value"]) < 1e-6 and abs(slices["Satellite"] - pos["AAPL"]["value"]) < 1e-6
+        # Who carries the swings: the shares add up to 1, and the jumpy satellite carries more than its share of the money
+        risk = cs["riskShare"]
+        assert abs(risk["core"] + risk["satellite"] - 1) < 1e-9 and risk["satellite"] > cs["satellite"], risk
+        # Each bucket's return over the time both were held, by hand: no trades in that window, so price over price
+        perf = cs["performance"]
+        assert perf["start"] == day(d0)
+        assert abs(perf["core"] - (spy.iloc[-1] / spy[d0] - 1)) < 1e-9 and abs(perf["satellite"] - (aapl.iloc[-1] / aapl[d0] - 1)) < 1e-9
+        assert abs(perf["edge"] - (perf["satellite"] - perf["core"])) < 1e-12
+        first = next(i for i, v in enumerate(perf["coreLine"]) if v is not None)
+        assert p["performance"]["dates"][first] == day(d0) and perf["coreLine"][first] == 100 and perf["satelliteLine"][first] == 100
+
+        # Switching a holding, and switching it back, which leaves nothing stored
+        assert c.post("/api/buckets", json={"ticker": "aapl", "bucket": "core"}).json() == {"ticker": "AAPL", "bucket": "core"}
+        assert db.q("SELECT bucket FROM buckets WHERE ticker='AAPL'")[0]["bucket"] == "core"
+        p2 = c.get("/api/portfolio").json()
+        assert p2["coreSatellite"]["core"] == 1 and p2["coreSatellite"]["performance"] is None, "nothing to compare with no satellite"
+        assert c.post("/api/buckets", json={"ticker": "AAPL", "bucket": "satellite"}).status_code == 200
+        assert db.q("SELECT * FROM buckets") == []
+        assert c.post("/api/buckets", json={"ticker": "AAPL", "bucket": "growth"}).status_code == 400
+        assert c.post("/api/buckets", json={"ticker": "", "bucket": "core"}).status_code == 400
+
+        # The target is yours; out-of-range values are refused
+        for bad in (150, -5, "lots"):
+            assert c.post("/api/settings", json={"core_target": bad}).status_code == 400, bad
+        assert c.post("/api/settings", json={"core_target": 60}).json()["core_target"] == 60
+        assert c.get("/api/portfolio").json()["coreSatellite"]["target"] == 0.6
+    _reset()
+
+    # Fairness: when the core is bought later, both are compared only from then on
+    with TestClient(app) as c, _FakeMarket({"SPY": spy, "AAPL": aapl}):
+        assert buy(c, "AAPL", d0, 10) == 200 and buy(c, "SPY", d1, 10) == 200
+        perf = c.get("/api/portfolio").json()["coreSatellite"]["performance"]
+        assert perf["start"] == day(d1) and abs(perf["satellite"] - (aapl.iloc[-1] / aapl[d1] - 1)) < 1e-9, perf["start"]
+        assert perf["days"] == len(spy[spy.index >= d1]) - 1
+    _reset()
+
+    # With a holding's data missing, the split is shown but no amount is suggested
+    with TestClient(app) as c:
+        with _FakeMarket({"SPY": spy, "AAPL": aapl}):
+            assert buy(c, "SPY", d0, 10) == 200 and buy(c, "AAPL", d0, 10) == 200
+        with _FakeMarket({"SPY": spy, "AAPL": None}):
+            cs = c.get("/api/portfolio").json()["coreSatellite"]
+        assert cs["core"] == 1 and "action" not in cs and "amount" not in cs
+    _reset()
+
+
+def test_buckets_are_in_backups():
+    from backend import db
+    _reset()
+    with TestClient(app) as c:
+        db.x("INSERT INTO buckets (ticker, bucket) VALUES ('NVDA', 'core')")
+        backup = c.get("/api/backup").json()
+        assert backup["version"] == 4 and backup["buckets"] == [{"ticker": "NVDA", "bucket": "core"}]
+        db.x("DELETE FROM buckets")
+        assert c.post("/api/backup/restore", json=backup).status_code == 200
+        assert db.q("SELECT * FROM buckets") == [{"ticker": "NVDA", "bucket": "core"}]
+        # A backup from before buckets existed restores, and leaves the defaults
+        older = {k: v for k, v in backup.items() if k != "buckets"}
+        assert c.post("/api/backup/restore", json={**older, "version": 3}).status_code == 200
+        assert db.q("SELECT * FROM buckets") == []
     _reset()
 
 

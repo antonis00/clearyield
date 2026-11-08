@@ -334,6 +334,16 @@ def get_portfolio():
     return ok(p)
 
 
+@app.post("/api/buckets")
+def set_bucket(body: dict = Body(...)):
+    t = _ticker(body)
+    try:
+        portfolio.set_bucket(t, body.get("bucket"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return ok({"ticker": t, "bucket": portfolio.bucket_lookup()(t)})
+
+
 @app.post("/api/holdings")
 def add_holding(body: dict = Body(...)):
     # A shorter way to record a purchase, used by the form on Research
@@ -512,6 +522,11 @@ def settings_set(body: dict = Body(...)):
         if not isinstance(tiles, list):
             raise HTTPException(400, "Dashboard tiles must be a list of symbols.")
         body["dashboard_tiles"] = [t for t in MACRO if t in tiles]  # known ones only, in display order
+    if "core_target" in body:
+        v = _number(body, "core_target")
+        if not 0 <= v <= 100:
+            raise HTTPException(400, "The core share is a percentage from 0 to 100.")
+        body["core_target"] = v
     return ok(db.set_settings(body))
 
 

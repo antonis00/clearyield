@@ -7,6 +7,7 @@ import pandas as pd
 
 from . import data, db, ledger
 from . import indicators as ind
+from .universe import default_bucket
 
 
 def positions(extra=None):
@@ -18,6 +19,56 @@ def positions(extra=None):
 
 
 NO_SECTOR = "Funds: other or no sector data"
+BUCKETS = ("core", "satellite")
+
+
+def bucket_lookup():
+    """A function giving each ticker's bucket: the one you chose, or the default for it."""
+    chosen = {r["ticker"]: r["bucket"] for r in db.q("SELECT ticker, bucket FROM buckets")}
+    return lambda t: chosen.get(t) or default_bucket(t)
+
+
+def set_bucket(ticker, bucket):
+    """Only choices that differ from the default are stored, so switching back leaves nothing behind."""
+    if bucket not in BUCKETS:
+        raise ValueError("A holding is either core or satellite.")
+    if bucket == default_bucket(ticker):
+        db.x("DELETE FROM buckets WHERE ticker=?", (ticker,))
+    else:
+        db.x("INSERT OR REPLACE INTO buckets (ticker, bucket) VALUES (?,?)", (ticker, bucket))
+
+
+def _risk_shares(series, bucket_of):
+    """Each bucket's share of the portfolio's daily variance, over the past year with today's holdings. A day's
+    portfolio return is the sum of each bucket's part of it, so the shares are cov(part, total) / var(total) and add
+    up to 1. A small, jumpy satellite can carry far more of the swings than of the money."""
+    values = pd.concat(series, axis=1).sort_index().ffill()
+    previous = values.shift(1)
+    live = previous.notna() & values.notna()
+    start = previous.where(live).sum(axis=1).replace(0, float("nan"))
+    parts = pd.DataFrame({b: (values[cols] - previous[cols]).where(live[cols]).sum(axis=1) / start
+                          for b in BUCKETS if (cols := [t for t in values.columns if bucket_of(t) == b])}).dropna()
+    whole = parts.sum(axis=1)
+    if len(parts) < 20 or not whole.var() > 0:
+        return None
+    return {b: float(parts[b].cov(whole) / whole.var()) for b in parts.columns}
+
+
+def _bucket_performance(rows, base, bucket_of, dates):
+    """Each bucket's time-weighted return over the days both were held, so neither gets credit for a market the
+    other missed. Closed positions count in the bucket they're in now."""
+    lines = {b: _actual_performance([r for r in rows if bucket_of(r["ticker"]) == b], base) for b in BUCKETS}
+    if any(v is None for v in lines.values()):
+        return None
+    start = max(v.index[0] for v in lines.values())
+    out = {"start": start.strftime("%Y-%m-%d"), "days": int(min(len(v[v.index >= start]) for v in lines.values()) - 1)}
+    for b, v in lines.items():
+        at_start = v.asof(start)
+        out[b] = float(v.iloc[-1] / at_start - 1)
+        line = v.reindex(dates).ffill() / at_start * 100
+        out[f"{b}Line"] = [None if (d < start or pd.isna(x)) else float(x) for d, x in zip(dates, line)]
+    out["edge"] = out["satellite"] - out["core"]
+    return out
 
 
 def _value_index(series):
@@ -123,6 +174,7 @@ def summary(settings, extra=None):
     bench_t = settings.get("benchmark", "SPY")
     rows, series, errors, missing = [], {}, [], []
     book = positions(extra)
+    bucket_of = bucket_lookup()
     for t, p in book.items():
         if p["shares"] <= 0:
             continue
@@ -147,6 +199,7 @@ def summary(settings, extra=None):
             "dayPct": price / prev - 1 if prev else None, "sector": inf.get("sector") or inf.get("assetClass"),
             "region": inf.get("region"), "assetClass": inf.get("assetClass"),
             "dividendYield": inf.get("dividendYield") or 0, "lots": p["lots"],
+            "bucket": bucket_of(t), "bucketDefault": default_bucket(t),
             "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),
         })
         series[t] = close * p["shares"] * fx
@@ -176,6 +229,7 @@ def summary(settings, extra=None):
         return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
     allocation = {"assetClass": alloc("assetClass"), "region": alloc("region"), "sector": alloc("sector"), "currency": alloc("currency")}
+    allocation["bucket"] = {b.capitalize(): v for b, v in alloc("bucket").items()}
 
     # Looking through funds: their sectors, and the single stocks among their top holdings (Yahoo only lists 10, so that part is partial)
     through = defaultdict(float)
@@ -268,12 +322,26 @@ def summary(settings, extra=None):
             rebalance.append({"assetClass": c, "target": tgt, "actual": act, "drift": act - tgt,
                               "trade": diff * total, "action": "Add" if diff > 0.02 else ("Trim" if diff < -0.02 else "Hold")})
 
+    # Core and satellite: the split against your target, who carries the risk, and whether the picks are paying off
+    core_satellite = None
+    if rows:
+        target = settings.get("core_target", 80) / 100
+        core = sum(r["value"] for r in rows if r["bucket"] == "core") / total if total else 0
+        core_satellite = {"target": target, "core": core, "satellite": 1 - core, "drift": core - target,
+                          "riskShare": _risk_shares(series, bucket_of) if len(series) > 1 else None}
+        if not incomplete:  # the same rule as rebalancing: no amounts while a holding is missing from the total
+            gap = target - core
+            core_satellite["action"] = "Hold" if abs(gap) <= 0.02 else ("To core" if gap > 0 else "To satellite")
+            core_satellite["amount"] = abs(gap) * total
+        if perf and not extra:
+            core_satellite["performance"] = _bucket_performance(db.q("SELECT * FROM transactions"), base, bucket_of, actual.index)
+
     income = sum(r["value"] * r["dividendYield"] for r in rows)
     return {
         "base": base, "positions": sorted(rows, key=lambda r: -r["value"]), "total": total, "cost": total_cost,
         "pnl": total - total_cost, "pnlPct": (total / total_cost - 1) if total_cost else None,
         "dayPnl": sum(r["dayPnl"] for r in rows), "allocation": allocation, "performance": perf, "risk": risk,
-        "warnings": warnings, "rebalance": rebalance, "annualIncome": income, "errors": errors,
+        "warnings": warnings, "rebalance": rebalance, "coreSatellite": core_satellite, "annualIncome": income, "errors": errors,
         "incomplete": incomplete, "missing": missing, "_series": series,
         "realised": realised_total, "dividends": dividends_total, "totalGain": total - total_cost + realised_total + dividends_total,
         "xirr": annual, "closed": closed,

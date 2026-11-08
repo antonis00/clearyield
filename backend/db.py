@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, kind TEXT, value REAL,
     active INTEGER DEFAULT 1, created REAL, triggered REAL, message TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS buckets (ticker TEXT PRIMARY KEY, bucket TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS score_history (
     date TEXT NOT NULL, ticker TEXT NOT NULL, composite REAL, stance TEXT, factors TEXT, PRIMARY KEY (date, ticker));
 """
@@ -43,6 +44,7 @@ DEFAULT_SETTINGS = {
     "targets": {"Stocks": 65, "ETFs": 30, "Crypto": 5},
     "benchmark": "SPY",
     "dashboard_tiles": DEFAULT_TILES,
+    "core_target": 80,
 }
 
 
@@ -134,8 +136,8 @@ def cache_clear():
 
 # ---- backup ----
 # Score history is here because Yahoo has no past fundamentals, so it could never be rebuilt
-USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history")
-BACKUP_VERSION = 3
+USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history", "buckets")
+BACKUP_VERSION = 4
 
 
 def export_user_data():
@@ -147,7 +149,7 @@ def export_user_data():
 
 def read_backup(backup):
     """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
-    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, BACKUP_VERSION):
+    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, BACKUP_VERSION):
         raise ValueError("This isn't a StockPilot backup, or it's from a different version.")
     if backup["version"] == 1:  # before the ledger, when there was a table of current lots
         lots = backup.get("holdings")
@@ -157,6 +159,8 @@ def read_backup(backup):
                                               "shares": r.get("shares"), "price": r.get("cost"), "note": r.get("note") or ""} for r in lots]}
     if backup["version"] < 3:
         backup = {**backup, "score_history": []}
+    if backup["version"] < 4:
+        backup = {**backup, "buckets": []}
     for t in USER_TABLES:
         if not isinstance(backup.get(t), list) or not all(isinstance(r, dict) for r in backup[t]):
             raise ValueError(f"The backup's {t} section isn't usable.")

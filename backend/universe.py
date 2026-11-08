@@ -80,6 +80,18 @@ CURRENCY_BY_SUFFIX = {
 }
 
 
+# Broad, market-weighted index funds: the usual core of a core-and-satellite portfolio. Everything else (single
+# stocks, sector, country, factor and thematic funds, crypto) starts as a satellite. Any holding can be switched.
+CORE_FUNDS = {
+    "VWCE.DE", "VWCE.MI", "VWCE.AS", "VWRL.L", "VWRA.L", "VWRL.AS", "IWDA.AS", "SWDA.L", "EUNL.DE", "ACWI", "URTH", "VT",
+    "SPY", "VOO", "IVV", "CSPX.L", "VUSA.L", "SXR8.DE", "VTI", "VXUS", "VEA", "EFA", "VWO", "IEMG", "BND", "AGG",
+}
+
+
+def default_bucket(ticker):
+    return "core" if ticker in CORE_FUNDS else "satellite"
+
+
 def name_of(ticker):
     for group in UNIVERSE.values():
         if ticker in group:

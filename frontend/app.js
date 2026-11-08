@@ -582,13 +582,23 @@ async function loadPortfolio() {
     { k: "dayPct", label: "1D", num: 1, fmt: (v) => cpct(v, 2) }, { k: "value", label: `Value (${b})`, num: 1, fmt: (v) => money(v, b, 0) },
     { k: "pnl", label: "P&L", num: 1, fmt: (v) => `<span class="${cls(v)}">${money(v, b, 0)}</span>` }, { k: "pnlPct", label: "P&L %", num: 1, fmt: (v) => cpct(v) },
     { k: "weight", label: "Weight", num: 1, fmt: (v) => pct(v, 1, false) },
+    { k: "bucket", label: "Bucket", fmt: (v, r) => `<button class="btn ghost bucket ${v}" data-bucket="${esc(r.ticker)}" title="${v === r.bucketDefault ? "The default for this holding." : "Chosen by you."} Click to make it ${v === "core" ? "satellite" : "core"}.">${v === "core" ? "Core" : "Satellite"}</button>` },
     { k: "ticker", label: "", fmt: (v) => `<button class="btn danger" data-lots="${esc(v)}">Lots</button>` },
   ], p.positions, { stock: (r) => r.ticker, empty: "No holdings yet — add one above." })
-  .afterDraw(() => $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
+  .afterDraw(() => {
+    $$("[data-bucket]", t).forEach((btn) => btn.onclick = async () => {
+      const pos = p.positions.find((x) => x.ticker === btn.dataset.bucket);
+      btn.disabled = true;
+      try { await api("/api/buckets", { method: "POST", body: { ticker: pos.ticker, bucket: pos.bucket === "core" ? "satellite" : "core" } }); loadPortfolio(); }
+      catch (e) { btn.disabled = false; toast(e.message); }
+    });
+    $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
     const pos = p.positions.find((x) => x.ticker === btn.dataset.lots);
     modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);
     $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { if (!confirm("Delete this lot?")) return; await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
-  }));
+    });
+  });
+  renderCoreSatellite(p);
   if (p.errors?.length) toast(p.errors.join(" · "));
   const tx = await api("/api/transactions");
   const curOf = Object.fromEntries(p.positions.map((x) => [x.ticker, x.currency]));
@@ -623,6 +633,35 @@ async function loadPortfolio() {
     { k: "drift", label: "Drift", num: 1, fmt: (v) => cpct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
     { k: "trade", label: `Amount (${b})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
+}
+function renderCoreSatellite(p) {
+  const cs = p.coreSatellite, b = p.base;
+  $("#csCard").classList.toggle("hidden", !cs);
+  if (!cs) return;
+  const at = (v) => Math.min(Math.max(v * 100, 0), 100);
+  const target = `${Math.round(cs.target * 100)}/${Math.round((1 - cs.target) * 100)}`;
+  const advice = cs.action === undefined ? "No suggestion until every holding has data."
+    : cs.action === "Hold" ? `Within 2 points of your ${target} target.`
+    : `Move about ${money(cs.amount, b, 0)} ${cs.action === "To core" ? "from satellite to core" : "from core to satellite"} to reach ${target}, or put new money into ${cs.action === "To core" ? "core" : "satellite"} until it gets there.`;
+  const r = cs.riskShare, share = (v) => pct(Math.abs(v ?? 0) < 0.005 ? 0 : v, 0, false); // no "-0%"
+  const risk = !r ? "Risk shares need two or more holdings with a few weeks of prices."
+    : `Satellite is ${pct(cs.satellite, 0, false)} of the money and ${share(r.satellite)} of the portfolio's day-to-day swings; core ${pct(cs.core, 0, false)} and ${share(r.core)}. (Past year, today's holdings.)`;
+  const pf = cs.performance;
+  const judge = !pf ? "Hold both core and satellite for a while to compare how they did."
+    : `Since ${esc(pf.start)}, while you held both: core ${cpct(pf.core)}, satellite ${cpct(pf.satellite)}. `
+      + `Your satellites ${pf.edge >= 0 ? "are ahead of" : "trail"} the core by ${num(Math.abs(pf.edge) * 100, 1)} points`
+      + (pf.days < 60 ? `, but ${pf.days} trading days is too short to judge.` : ".");
+  $("#csSplit").innerHTML = `
+    <div class="split"><i style="width:${at(cs.core)}%"></i><i style="width:${100 - at(cs.core)}%"></i><b style="left:calc(${at(cs.target)}% - 1px)" data-label="target ${target}"></b></div>
+    <div class="split-legend"><span class="cs-core">Core ${pct(cs.core, 1, false)}</span><span class="cs-sat">Satellite ${pct(cs.satellite, 1, false)}</span></div>
+    <div class="cs-lines"><p>${advice}</p><p>${risk}</p><p>${judge}</p></div>`;
+  $("#csPerfNote").textContent = pf ? "Each bucket's time-weighted return from the first day both were held, at 100. Closed positions count in the bucket they're in now." : "";
+  if (!pf) { state.charts.csPerf?.destroy(); delete state.charts.csPerf; $("#csPerf").classList.add("hidden"); return; }
+  $("#csPerf").classList.remove("hidden");
+  const line = (label, data, color) => ({ label, data, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false });
+  const from = Math.max(0, pf.coreLine.findIndex((v) => v !== null)); // start where both are held
+  mkChart("csPerf", { type: "line", data: { labels: p.performance.dates.slice(from), datasets: [line("Core", pf.coreLine.slice(from), C("--accent2")), line("Satellite", pf.satelliteLine.slice(from), C("--accent"))] },
+    options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 6 } } } } });
 }
 let formQuote = null;
 $("#hTicker").onchange = async () => {
@@ -742,6 +781,7 @@ function loadSettings() {
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${k}<input type="number" data-tgt="${k}" value="${v}"></label>`).join("");
+  $("#sCore").value = s.core_target;
   const shown = new Set(s.dashboard_tiles);
   $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label><input type="checkbox" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}</label>`).join("");
 }
@@ -753,13 +793,16 @@ function renderModeBadge() {
 }
 $("#btnSaveSettings").onclick = async () => {
   if ($("#sRf").value.trim() === "") return toast("Enter a risk-free rate.");
+  const core = Number($("#sCore").value);
+  if ($("#sCore").value.trim() === "" || !(core >= 0 && core <= 100)) return toast("The core share is a percentage from 0 to 100.");
   if (!$$("[data-w]").some((r) => Number(r.value) > 0)) return toast("Give at least one factor some weight.");
   const w = Object.fromEntries($$("[data-w]").map((r) => [r.dataset.w, Number(r.value)]));
   const tot = Object.values(w).reduce((a, b) => a + b, 0) || 1;
   const body = { weights: Object.fromEntries(Object.entries(w).map(([k, v]) => [k, v / tot])), base_currency: $("#sBase").value,
     risk_free_rate: Number($("#sRf").value) / 100, benchmark: $("#sBench").value.trim().toUpperCase() || "SPY",
     targets: Object.fromEntries($$("[data-tgt]").map((i) => [i.dataset.tgt, Number(i.value)])),
-    dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile) };
+    dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile),
+    core_target: Number($("#sCore").value) };
   state.meta.settings = await api("/api/settings", { method: "POST", body });
   renderModeBadge(); loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
 };

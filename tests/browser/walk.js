@@ -140,11 +140,19 @@ const SLOW = 150000;
   const sum = pf.positions.reduce((a, r) => a + r.value, 0);
   expect("portfolio: 5 positions, all priced", pf.positions.length === 5 && !pf.incomplete, `total ${Math.round(pf.total)} ${pf.base}, P&L ${Math.round(pf.pnl)}`);
   expect("portfolio: positions add up to the total", Math.abs(sum - pf.total) < 1e-6);
-  for (const k of ["assetClass", "region", "sector", "currency"]) expect(`portfolio: ${k} allocation adds up`, Math.abs(Object.values(pf.allocation[k]).reduce((a, b) => a + b, 0) - pf.total) < 1e-6);
+  for (const k of ["assetClass", "region", "sector", "currency", "bucket"]) expect(`portfolio: ${k} allocation adds up`, Math.abs(Object.values(pf.allocation[k]).reduce((a, b) => a + b, 0) - pf.total) < 1e-6);
   expect("portfolio: risk figures present", pf.risk.volatility != null && pf.risk.sharpe != null && pf.risk.beta != null && pf.performance.dates.length > 200, `vol ${pf.risk.volatility?.toFixed(3)} beta ${pf.risk.beta?.toFixed(2)}, ${pf.performance.dates.length} days`);
   expect("portfolio: undated lot warned about", pf.base === "USD" ? true : pf.warnings.some((w) => w.includes("SPY") && w.includes("exchange rate")), pf.warnings.find((w) => w.includes("exchange rate")) ?? "(USD base)");
   expect("portfolio: rebalancing shown", (await p.locator("#pfRebal tbody tr").count()) >= 3);
   for (const id of ["#pfPerf", "#aAsset", "#aRegion", "#aSector", "#aCur"]) expect(`portfolio: chart ${id}`, await canvasDrawn(id));
+  // Core and satellite: SPY is core by default, the rest satellite; the risk shares add up; the comparison is drawn
+  const cs = pf.coreSatellite, spy = pf.positions.find((r) => r.ticker === "SPY");
+  expect("portfolio: core is the index fund", spy.bucket === "core" && Math.abs(cs.core - spy.value / pf.total) < 1e-9 && cs.action, `core ${(cs.core * 100).toFixed(1)}%, ${cs.action}`);
+  expect("portfolio: risk shares add up", Math.abs(cs.riskShare.core + cs.riskShare.satellite - 1) < 1e-9, JSON.stringify(cs.riskShare));
+  expect("portfolio: core vs satellite compared", cs.performance && (await canvasDrawn("#csPerf")) && /Since \d{4}-\d\d-\d\d/.test(await txt("#csSplit")), (await txt("#csSplit"))?.slice(-120));
+  await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Satellite", null, { timeout: SLOW });
+  expect("portfolio: switching a holding's bucket", /Core 0\.0%/.test(await txt("#csSplit")) && (await p.evaluate(() => location.hash)) === "#portfolio", (await txt("#csSplit"))?.slice(0, 60));
+  await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Core", null, { timeout: SLOW }); await p.waitForTimeout(400);
   expect("portfolio: no bad text", !/undefined|NaN|\[object/.test(await txt("#view-portfolio")));
   await shot("portfolio");
   // A sale and a dividend through the form
