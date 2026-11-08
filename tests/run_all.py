@@ -35,6 +35,7 @@ def with_server(demo, command):
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         env = {**os.environ, "STOCKPILOT_DB": str(Path(tmp) / "check.db")}
         env.pop("ANTHROPIC_API_KEY", None)
+        env["AI_PROVIDER"] = "none"  # the browser checks expect rule-based briefs, not a wait on a model from .env
         env["STOCKPILOT_DEMO"] = "1" if demo else "0"
         log = open(Path(tmp) / "server.log", "w")
         server = subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(port), "--log-level", "warning"],

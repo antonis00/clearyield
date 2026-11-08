@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Stand-in for the Yahoo Finance mark, used as a one-colour shape: any image with a transparent background works -->
+  <g fill="none" stroke="#000" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 20 L25 36 L36 20"/>
+    <path d="M25 36 L25 47"/>
+    <path d="M47 17 L45 37"/>
+  </g>
+  <circle cx="44.4" cy="46" r="3" fill="#000"/>
+</svg>
