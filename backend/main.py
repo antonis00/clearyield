@@ -8,6 +8,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,6 +25,9 @@ def _load_env(env=ROOT / ".env"):
 _load_env()
 
 
+SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
+
+
 def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
     """On Windows, trust the certificates Windows trusts, as the browser does. Antivirus HTTPS scanning (Kaspersky, for
     one) and company proxies re-sign secure connections with their own certificate, which Windows has but Python's
@@ -36,8 +40,10 @@ def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
 
         import certifi
         pems = [Path(certifi.where()).read_text(encoding="ascii")]
-        for store in ("ROOT", "CA"):
-            pems += [ssl.DER_cert_to_PEM_cert(der) for der, enc, _ in ssl.enum_certificates(store) if enc == "x509_asn"]
+        # Only root certificates Windows trusts for websites (server authentication), not intermediates or ones meant
+        # for code signing or email, so nothing is trusted here that Windows itself wouldn't trust for a website
+        pems += [ssl.DER_cert_to_PEM_cert(der) for der, enc, trust in ssl.enum_certificates("ROOT")
+                 if enc == "x509_asn" and (trust is True or SERVER_AUTH in trust)]
         bundle.parent.mkdir(parents=True, exist_ok=True)
         bundle.write_text("\n".join(pems), encoding="ascii")
         os.environ["SSL_CERT_FILE"] = str(bundle)
@@ -117,7 +123,21 @@ async def only_local_addresses(request, call_next):
     host = request.headers.get("host", "")
     if (host if host.endswith("]") else host.rsplit(":", 1)[0]) not in LOCAL_HOSTS:
         return JSONResponse({"detail": "StockPilot only answers on localhost."}, status_code=400)
+    if request.url.path.startswith("/api/") and _from_another_site(request, host):
+        return JSONResponse({"detail": "StockPilot only answers its own page."}, status_code=403)
     return await call_next(request)
+
+
+def _from_another_site(request, host):
+    """True for a request another website (or another app on this machine) made through your browser. Browsers say
+    where a request came from, and a page can't change that, so this stops a site you visit from clearing the cache,
+    changing your data or spending your AI allowance. Your own page, a typed address and scripts with neither header
+    (the tests, curl) pass."""
+    site = request.headers.get("sec-fetch-site")
+    if site and site not in ("same-origin", "none"):
+        return True
+    origin = request.headers.get("origin")
+    return bool(origin) and urlsplit(origin).netloc != host
 
 
 @app.middleware("http")
@@ -158,6 +178,8 @@ def _number(body, key, default=None):
     if v is None and default is not None:
         return default
     try:
+        if isinstance(v, bool):  # float(True) is 1.0, which would pass for a real number
+            raise TypeError
         n = float(v)
     except (TypeError, ValueError):
         raise HTTPException(400, f"{key.replace('_', ' ').capitalize()} must be a number.")
@@ -339,7 +361,7 @@ def stock_news(ticker: str):
     return ok(data.news(T(ticker)))
 
 
-@app.get("/api/stock/{ticker}/brief")
+@app.post("/api/stock/{ticker}/brief")  # a POST because it can spend your AI allowance
 def stock_brief(ticker: str):
     t = T(ticker)
     settings = db.get_settings()
@@ -608,7 +630,10 @@ def settings_set(body: dict = Body(...)):
         if not 0 <= v <= 100:
             raise HTTPException(400, "The core share is a percentage from 0 to 100.")
         body["core_target"] = v
-    return ok(db.set_settings(body))
+    try:
+        return ok(db.set_settings(body))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------------------------------------------------------------- backup
