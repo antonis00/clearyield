@@ -134,9 +134,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v7:EMPTY.X") is None
-        db.cache_set("info:v7:OLD.X", {"trailingPE": 12.0})
-        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v7:OLD.X'")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v8:EMPTY.X") is None
+        db.cache_set("info:v8:OLD.X", {"trailingPE": 12.0})
+        db.x("UPDATE cache SET ts = 0 WHERE key = 'info:v8:OLD.X'")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -1847,12 +1847,14 @@ def test_search_finds_what_yahoo_lists():
         with TestClient(app) as c:
             hits = c.get("/api/search?q=vwce").json()
             assert [h["ticker"] for h in hits] == ["VWCE.DE", "VWCE.MI"], "only things the app can analyse"
-            assert hits[0]["name"] == "Vanguard FTSE All-World UCITS ETF" and hits[0]["market"] == "ETF · GER"
+            # VWCE.DE is in the built-in list, so that entry comes first and Yahoo's copy of it is dropped
+            assert hits[0]["market"] == "ETFs" and hits[1]["name"] == "Vanguard All-World" and hits[1]["market"] == "ETF · MIL"
             c.get("/api/search?q=vwce")
             assert calls.count("vwce") == 1, "repeat searches use the cache"
             # The built-in list comes first, and nothing appears twice
             apple = c.get("/api/search?q=apple").json()
             assert [h["ticker"] for h in apple] == ["AAPL", "APLE"] and apple[0]["market"] == "US"
+            assert apple[1]["name"] == "Apple Hospitality" and apple[1]["market"] == "Stock · NYQ", "Yahoo's long name and type"
             # With Yahoo down or nothing found, a typed symbol can still be tried
             assert c.get("/api/search?q=down").json() == [{"ticker": "DOWN", "name": "Look up this symbol on Yahoo Finance", "market": "Any"}]
             assert not db.cache_get_stale("search:down")
@@ -1958,6 +1960,49 @@ def test_intraday_candles():
         assert wk["bars"] == "week" and day["bars"] == "day" and len(day["time"]) / 6 < len(wk["time"]) < len(day["time"]) / 4
         assert wk["close"][-1] == day["close"][-1] and wk["sma50"][-1] == day["sma50"][-1]
         assert all(pd.Timestamp(t).dayofweek == 0 for t in wk["time"][1:]), "demo weeks start on Monday"
+
+
+def test_fund_regions_follow_what_they_hold():
+    from backend import db
+    from backend.universe import UNIVERSE, region_of
+    assert "VWCE.DE" in UNIVERSE["ETFs"]
+    expected = {"VWCE.DE": "Global", "SPY": "US", "QQQ": "US", "VWO": "Emerging", "VXUS": "International", "EFA": "International",
+                "KSA": "Gulf", "QAT": "Gulf"}
+    assert {t: region_of(t) for t in expected} == expected
+    # Only the named funds: other listings and plain stocks still go by exchange
+    assert region_of("VWCE.MI") == "Europe" and region_of("SAP.DE") == "Europe" and region_of("AAPL") == "US"
+    _reset()
+    db.cache_clear()  # the region is stored with each symbol's details
+    with TestClient(app) as c:
+        assert c.get("/api/search?q=vwce").json()[0]["ticker"] == "VWCE.DE", "found in the built-in list first"
+        for t in ("VWCE.DE", "AAPL", "SAP.DE"):
+            assert c.post("/api/transactions", json={"ticker": t, "kind": "buy", "shares": 10, "price": 100}).status_code == 200
+        p = c.get("/api/portfolio").json()
+        pos = {r["ticker"]: r for r in p["positions"]}
+        regions = p["allocation"]["region"]
+        assert set(regions) == {"Global", "US", "Europe"}, regions
+        assert abs(regions["Global"] - pos["VWCE.DE"]["value"]) < 1e-6, "its own slice, not counted as Europe"
+        assert abs(regions["Europe"] - pos["SAP.DE"]["value"]) < 1e-6
+    _reset()
+
+
+def test_dashboard_tiles_are_chosen_in_settings():
+    from backend.universe import DEFAULT_TILES, MACRO
+    _reset()
+    with TestClient(app) as c:
+        catalog = [t["ticker"] for t in c.get("/api/meta").json()["tiles"]]
+        assert catalog == list(MACRO) and "KSA" in catalog and "QAT" in catalog and "^TASI.SR" not in catalog
+        assert [m["ticker"] for m in c.get("/api/macro").json()] == DEFAULT_TILES, "a new app shows the default set"
+        # Unknown symbols are dropped and the order is the catalogue's, whatever order they were sent in
+        saved = c.post("/api/settings", json={"dashboard_tiles": ["QAT", "^GSPC", "NOPE"]}).json()
+        assert saved["dashboard_tiles"] == ["^GSPC", "QAT"]
+        tiles = c.get("/api/macro").json()
+        assert [m["ticker"] for m in tiles] == ["^GSPC", "QAT"] and tiles[1]["name"] == "Qatar (QAT ETF)"
+        assert len(tiles[1]["spark"]) > 20, "the Gulf tiles have history, unlike the indexes they replace"
+        assert c.post("/api/settings", json={"dashboard_tiles": "^GSPC"}).status_code == 400
+        assert c.post("/api/settings", json={"dashboard_tiles": []}).json()["dashboard_tiles"] == []
+        assert c.get("/api/macro").json() == []
+    _reset()
 
 
 def test_minor_unit_currencies():

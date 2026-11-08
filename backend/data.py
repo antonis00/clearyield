@@ -179,7 +179,7 @@ MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.
 
 
 def info(ticker):
-    key = f"info:v7:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v8:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached

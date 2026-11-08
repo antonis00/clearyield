@@ -208,6 +208,18 @@ const SLOW = 150000;
   await research("AAPL");
   expect("settings: custom weights shown on Research", /V \d+ · Q \d+/.test(await txt("#rStance")), await txt("#rStance"));
   await nav("settings"); await p.click("#btnBalanced"); await p.selectOption("#sBase", startBase); await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  // Dashboard tiles: pick two, see two, then put the defaults back
+  await nav("settings");
+  const defaults = await p.evaluate(() => $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile));
+  await p.evaluate(() => $$("[data-tile]").forEach((i) => { i.checked = ["^GSPC", "KSA"].includes(i.dataset.tile); }));
+  await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  await nav("dashboard"); await p.waitForFunction(() => document.querySelectorAll("#macroStrip .mcard").length === 2, null, { timeout: SLOW });
+  const tiles = await p.evaluate(() => [...document.querySelectorAll("#macroStrip .mcard")].map((c) => c.dataset.t + " " + c.querySelector(".sm").textContent));
+  expect("settings: dashboard shows only the chosen tiles", tiles.length === 2 && tiles.every((t) => !/—/.test(t)), tiles.join(" | "));
+  await nav("settings");
+  await p.evaluate((d) => $$("[data-tile]").forEach((i) => { i.checked = d.includes(i.dataset.tile); }), defaults);
+  await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  expect("settings: tiles restored", (await p.evaluate(() => state.meta.settings.dashboard_tiles.length)) === defaults.length && defaults.length >= 10, defaults.length);
   // Light theme: chosen in Settings, followed by the open Research charts, kept after a reload
   const bg = () => p.evaluate(() => getComputedStyle(document.body).backgroundColor);
   await p.click('#themeSeg [data-theme="light"]'); await p.waitForTimeout(200);

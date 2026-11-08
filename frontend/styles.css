@@ -60,6 +60,8 @@ label.block { margin: 8px 0; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { background: transparent; color: var(--muted); border: 0; padding: 6px 11px; font: 500 12px var(--mono); cursor: pointer; }
 .seg button.on { background: var(--line); color: var(--text); }
+.tile-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 12px; font-size: 13px; margin: 4px 0 8px; }
+.tile-choices label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .chart-ctl { display: flex; gap: 8px; flex-wrap: wrap; }
 #chartNote:not(:empty) { margin: -4px 0 8px; }
 .toggles { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }

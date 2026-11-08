@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+from .universe import DEFAULT_TILES
+
 DB_PATH = Path(os.getenv("STOCKPILOT_DB", Path(__file__).resolve().parent.parent / "data" / "stockpilot.db"))
 _lock = threading.Lock()
 
@@ -40,6 +42,7 @@ DEFAULT_SETTINGS = {
     "weights": {"value": 0.2, "quality": 0.2, "growth": 0.2, "momentum": 0.2, "risk": 0.2},
     "targets": {"Stocks": 65, "ETFs": 30, "Crypto": 5},
     "benchmark": "SPY",
+    "dashboard_tiles": DEFAULT_TILES,
 }
 
 

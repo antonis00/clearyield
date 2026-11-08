@@ -33,7 +33,7 @@ UNIVERSE = {
         "VWO": "Emerging Markets ETF", "SCHD": "US Dividend ETF", "VYM": "High Dividend Yield ETF",
         "GLD": "Gold ETF", "TLT": "20+Y Treasury ETF", "BND": "Total Bond ETF", "VNQ": "US REIT ETF",
         "IWM": "Russell 2000 ETF", "EFA": "Developed ex-US ETF", "XLK": "Tech Sector ETF",
-        "XLE": "Energy Sector ETF", "XLV": "Health Care Sector ETF",
+        "XLE": "Energy Sector ETF", "XLV": "Health Care Sector ETF", "VWCE.DE": "Vanguard FTSE All-World (Acc)",
     },
     "Crypto": {
         "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana", "BNB-USD": "BNB",
@@ -41,10 +41,22 @@ UNIVERSE = {
     },
 }
 
+# Every tile the dashboard can show, in display order. You pick which ones in Settings.
+# The Gulf indexes (^TASI.SR, ^GNRI.QA) are on Yahoo but return a single day of history, so the Saudi and
+# Qatari markets are followed through the iShares country ETFs, which trade in New York and have full history.
 MACRO = {
-    "^GSPC": "S&P 500", "^IXIC": "Nasdaq", "^STOXX50E": "Euro Stoxx 50", "^TASI.SR": "Tadawul (TASI)",
-    "^VIX": "VIX", "^TNX": "US 10Y yield", "GC=F": "Gold", "CL=F": "WTI Oil", "BTC-USD": "Bitcoin",
-    "EURUSD=X": "EUR/USD", "DX-Y.NYB": "US Dollar Index",
+    "^GSPC": "S&P 500", "^IXIC": "Nasdaq", "^RUT": "Russell 2000", "^STOXX50E": "Euro Stoxx 50", "^GDAXI": "DAX",
+    "^FTSE": "FTSE 100", "^N225": "Nikkei 225", "^HSI": "Hang Seng", "KSA": "Saudi Arabia (KSA ETF)",
+    "QAT": "Qatar (QAT ETF)", "^VIX": "VIX", "^TNX": "US 10Y yield", "GC=F": "Gold", "SI=F": "Silver",
+    "CL=F": "WTI Oil", "BZ=F": "Brent Oil", "NG=F": "Natural Gas", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum",
+    "EURUSD=X": "EUR/USD", "GBPUSD=X": "GBP/USD", "USDJPY=X": "USD/JPY", "DX-Y.NYB": "US Dollar Index",
+}
+DEFAULT_TILES = ["^GSPC", "^IXIC", "^STOXX50E", "KSA", "QAT", "^VIX", "^TNX", "GC=F", "CL=F", "BTC-USD", "EURUSD=X", "DX-Y.NYB"]
+
+# Funds whose region is what they hold, not where they're listed: VWCE trades in Frankfurt but owns the world
+REGION_BY_TICKER = {
+    "VWCE.DE": "Global", "SPY": "US", "QQQ": "US", "VWO": "Emerging", "VXUS": "International", "EFA": "International",
+    "KSA": "Gulf", "QAT": "Gulf",
 }
 
 REGION_BY_SUFFIX = {
@@ -76,6 +88,8 @@ def name_of(ticker):
 
 
 def region_of(ticker, quote_type=None):
+    if ticker in REGION_BY_TICKER:
+        return REGION_BY_TICKER[ticker]
     if ticker.endswith("-USD") or quote_type == "CRYPTOCURRENCY":
         return "Crypto"
     for suf, reg in REGION_BY_SUFFIX.items():

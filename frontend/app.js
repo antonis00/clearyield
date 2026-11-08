@@ -145,6 +145,7 @@ async function loadDashboard() {
   const strip = $("#macroStrip");
   if (!strip.children.length) loading(strip, "Loading markets…");
   api("/api/macro").then((m) => {
+    if (!m.length) { strip.innerHTML = `<div class="muted">No market tiles chosen. <a data-goto="settings">Pick some in Settings →</a></div>`; return; }
     strip.innerHTML = m.map((x) => `<div class="mcard" data-t="${esc(x.ticker)}"><div class="t">${esc(x.name)}</div><div class="v">${num(x.price, x.price > 1000 ? 0 : 2)}</div><div class="sm">${cpct(x.day, 2)} <span class="muted">1D</span> · ${cpct(x.ret1m)} <span class="muted">1M</span></div>${spark(x.spark, (x.ret1m || 0) >= 0)}</div>`).join("");
     $$(".mcard", strip).forEach((c) => c.onclick = () => openStock(c.dataset.t));
   }).catch((e) => strip.innerHTML = `<div class="muted">${esc(e.message)}</div>`);
@@ -724,6 +725,8 @@ function loadSettings() {
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${k}<input type="number" data-tgt="${k}" value="${v}"></label>`).join("");
+  const shown = new Set(s.dashboard_tiles);
+  $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label><input type="checkbox" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}</label>`).join("");
 }
 $("#btnBalanced").onclick = () => $$("[data-w]").forEach((r) => { r.value = 20; r.nextElementSibling.textContent = "20%"; });
 function renderModeBadge() {
@@ -738,7 +741,8 @@ $("#btnSaveSettings").onclick = async () => {
   const tot = Object.values(w).reduce((a, b) => a + b, 0) || 1;
   const body = { weights: Object.fromEntries(Object.entries(w).map(([k, v]) => [k, v / tot])), base_currency: $("#sBase").value,
     risk_free_rate: Number($("#sRf").value) / 100, benchmark: $("#sBench").value.trim().toUpperCase() || "SPY",
-    targets: Object.fromEntries($$("[data-tgt]").map((i) => [i.dataset.tgt, Number(i.value)])) };
+    targets: Object.fromEntries($$("[data-tgt]").map((i) => [i.dataset.tgt, Number(i.value)])),
+    dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile) };
   state.meta.settings = await api("/api/settings", { method: "POST", body });
   renderModeBadge(); loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
 };

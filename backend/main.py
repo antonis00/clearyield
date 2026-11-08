@@ -150,7 +150,7 @@ def _hist_or_404(t, period="5y"):
 # ---------------------------------------------------------------- meta / search / macro
 @app.get("/api/meta")
 def meta():
-    return ok({"demo": data.DEMO, "ai": ai.available(),
+    return ok({"demo": data.DEMO, "ai": ai.available(), "tiles": [{"ticker": t, "name": n} for t, n in MACRO.items()],
                "settings": db.get_settings(), "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
@@ -169,7 +169,10 @@ def search(q: str = ""):
 @app.get("/api/macro")
 def macro():
     out = []
+    chosen = set(db.get_settings().get("dashboard_tiles") or [])
     for t, label in MACRO.items():
+        if t not in chosen:
+            continue
         try:
             c = data.history(t, "1y")["Close"]
             out.append({"ticker": t, "name": label, "price": float(c.iloc[-1]), "day": ind.ret_over(c, 1),
@@ -504,6 +507,11 @@ def settings_get():
 
 @app.post("/api/settings")
 def settings_set(body: dict = Body(...)):
+    if "dashboard_tiles" in body:
+        tiles = body["dashboard_tiles"]
+        if not isinstance(tiles, list):
+            raise HTTPException(400, "Dashboard tiles must be a list of symbols.")
+        body["dashboard_tiles"] = [t for t in MACRO if t in tiles]  # known ones only, in display order
     return ok(db.set_settings(body))
 
 
