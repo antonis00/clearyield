@@ -50,7 +50,12 @@ with TestClient(app) as c:
     total = cost_total = 0
     for t, s, k, d in lots:
         px = float(close(t).iloc[-1])
-        value = s * px * to_eur_now[cur[t]]
+        # Splits and bonus issues since the purchase (Kuwaiti banks give 5% bonus shares most years), straight from Yahoo
+        split = 1.0
+        for when, ratio in yf.Ticker(t).splits.items():
+            if pd.Timestamp(when).tz_localize(None).normalize() > pd.Timestamp(d):
+                split *= float(ratio)
+        value = s * split * px * to_eur_now[cur[t]]
         e_then = at(eurusd, d)
         then = {"USD": 1 / e_then, "GBp": at(gbpusd, d) / 100 / e_then, "QAR": float(close("QARUSD=X", period="5d").iloc[-1]) / e_then, "KWF": at(kwdusd, d) / 1000 / e_then}[cur[t]]
         cost = s * k * then

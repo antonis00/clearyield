@@ -224,6 +224,8 @@ const SLOW = 150000;
   await nav("dashboard"); await p.waitForTimeout(1000);
   await p.waitForFunction(() => /Value/i.test(document.querySelector("#dashPortfolio").innerText), null, { timeout: SLOW });
   await p.waitForTimeout(4000);
+  const gain = await p.evaluate(async () => { const pf = await (await fetch("/api/portfolio")).json(); const k = [...document.querySelectorAll("#dashPortfolio .kpi")].find((x) => /Total gain/i.test(x.innerText)); return { pf: { total: pf.totalGain, parts: pf.pnl + pf.realised + pf.dividends }, text: k?.innerText.replace(/\s+/g, " ") }; });
+  expect("dashboard: total gain includes sales and dividends", Math.abs(gain.pf.total - gain.pf.parts) < 1e-6 && /open · .* sold · .* dividends/.test(gain.text || ""), gain.text);
   expect("dashboard: portfolio snapshot and digest", !/undefined|NaN|\[object/.test(await txt("#view-dashboard")), (await txt("#dashPortfolio")).slice(0, 90));
   await shot("dashboard");
   const wlBtn = p.locator("#watchTable [data-rm]").first();

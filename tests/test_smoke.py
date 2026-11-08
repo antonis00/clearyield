@@ -1532,6 +1532,14 @@ def test_rsi_waits_for_enough_data():
     r = ind.rsi(s)
     assert r.iloc[:14].isna().all() and r.iloc[14:].notna().all()
     assert r.iloc[14] == 0.0  # 14 straight falls
+    # A price that doesn't move is neutral, not overbought; only rises is 100
+    flat = ind.rsi(pd.Series([10.0] * 30))
+    assert flat.iloc[14:].eq(50.0).all() and flat.iloc[:14].isna().all()
+    assert ind.rsi(pd.Series([10.0] * 20 + [10.0 + i for i in range(1, 16)])).iloc[-1] == 100.0
+    # And a stock stuck at one price doesn't trigger an "overbought" signal
+    from backend import scoring
+    texts = " ".join(x["text"] for x in scoring.signals({"assetClass": "Stocks"}, pd.Series([25.0] * 300, index=pd.bdate_range("2024-01-01", periods=300))))
+    assert "overbought" not in texts.lower(), texts
 
 
 def test_market_indicators_are_not_scored_like_investments():
@@ -1895,6 +1903,15 @@ def test_weekly_candles():
     assert candles.iloc[1].tolist() == [14.5, 19.0, 14.0, 18.0, 400.0]
     assert wl["sma50"].tolist() == [140.0, 180.0], "daily lines taken at each week's last close"
     assert list(wl.index) == list(candles.index)
+    # Tadawul and Qatar trade Sunday to Thursday: a Sunday opens its week rather than closing the one before
+    gulf = pd.DatetimeIndex(["2025-01-05", "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-12", "2025-01-13"])
+    gc = pd.Series([1, 2, 3, 4, 5, 6, 7], index=gulf, dtype=float)
+    gv = pd.DataFrame({"Open": gc, "High": gc, "Low": gc, "Close": gc, "Volume": 1.0})
+    for t in ("2222.SR", "QNBK.QA", "NBK.KW"):
+        c, _ = data.weekly(gv, pd.DataFrame({"sma50": gc}, index=gulf), t)
+        assert [(d.strftime("%a"), r.Open, r.Close) for d, r in c.iterrows()] == [("Sun", 1, 5), ("Sun", 6, 7)], t
+    c, _ = data.weekly(gv, pd.DataFrame({"sma50": gc}, index=gulf), "EMAAR.AE")  # the UAE trades Monday to Friday
+    assert len(c) == 3
 
 
 def test_intraday_candles():
@@ -2037,7 +2054,7 @@ def test_core_and_satellite():
         assert abs(perf["core"] - (spy.iloc[-1] / spy[d0] - 1)) < 1e-9 and abs(perf["satellite"] - (aapl.iloc[-1] / aapl[d0] - 1)) < 1e-9
         assert abs(perf["edge"] - (perf["satellite"] - perf["core"])) < 1e-12
         first = next(i for i, v in enumerate(perf["coreLine"]) if v is not None)
-        assert p["performance"]["dates"][first] == day(d0) and perf["coreLine"][first] == 100 and perf["satelliteLine"][first] == 100
+        assert perf["dates"][0] == day(d0) and perf["coreLine"][0] == 100 and perf["satelliteLine"][0] == 100 and not perf["pastYearOnly"]
 
         # Switching a holding, and switching it back, which leaves nothing stored
         assert c.post("/api/buckets", json={"ticker": "aapl", "bucket": "core"}).json() == {"ticker": "AAPL", "bucket": "core"}
@@ -2409,6 +2426,162 @@ def test_thinking_and_cloud_setup():
             os.environ.pop("SSL_CERT_FILE", None)
             if before:
                 os.environ["SSL_CERT_FILE"] = before
+
+
+def test_stock_splits():
+    from backend import data, db, insights, ledger
+    # A reverse split shrinks the share count; a split on the trade's own date has already happened
+    assert ledger.split_factor([("2024-06-10", 10.0)], "2024-06-07") == 10 and ledger.split_factor([("2024-06-10", 10.0)], "2024-06-10") == 1
+    assert ledger.split_factor([("2020-01-01", 4.0), ("2024-06-10", 10.0)], "2019-05-01") == 40 and ledger.split_factor([("2024-01-01", 0.1)], "2023-01-01") == 0.1
+
+    _reset()
+    px = _steps([0.0] * 300) * 1.2  # Yahoo's prices are split-adjusted: 120 throughout
+    d = [px.index[i].date().isoformat() for i in (50, 100, 150, 200)]  # bought, split, bought again, sold
+    real_splits = data.splits
+    data.splits = lambda t: [(d[1], 10.0)] if t in ("NVDA", "AMD") else []
+    try:
+        with TestClient(app) as c, _FakeMarket({"NVDA": px, "AMD": px}):
+            tx = lambda **k: c.post("/api/transactions", json={"ticker": "NVDA", **k})
+            assert tx(kind="buy", date=d[0], shares=10, price=1200).status_code == 200  # before the split
+            assert tx(kind="buy", date=d[2], shares=5, price=130).status_code == 200    # after it
+            r = tx(kind="sell", date=d[3], shares=50, price=140)
+            assert r.status_code == 200, "50 of the 100 post-split shares, not more than the 10 entered: " + r.text
+            p = c.get("/api/portfolio").json()
+            pos = p["positions"][0]
+            assert abs(pos["shares"] - 55) < 1e-9 and abs(pos["cost"] - (50 * 120 + 5 * 130)) < 1e-6, pos
+            assert abs(pos["value"] - 55 * 120) < 1e-6 and abs(p["realised"] - 50 * (140 - 120)) < 1e-6
+            assert [round(x["shares"], 6) for x in pos["lots"]] == [50, 5] and pos["lots"][0]["split"] == 10 and pos["lots"][1]["split"] == 1
+            # The chart: a flat price is a flat line, before and after the split (unadjusted, the holding went negative)
+            perf = p["performance"]["portfolio"]
+            assert max(perf) - min(perf) < 1e-6, (min(perf), max(perf))
+            assert not any("split" in w for w in p["warnings"])
+            # An undated lot can't be placed either side of the split, so it's left as entered, with a note
+            assert c.post("/api/transactions", json={"ticker": "AMD", "kind": "buy", "shares": 1, "price": 100}).status_code == 200
+            notes = [w for w in c.get("/api/portfolio").json()["warnings"] if "has split" in w]
+            assert len(notes) == 1 and notes[0].startswith("AMD has split") and "no date" in notes[0], notes
+
+            # Journal: an entry at 1,200 with a stop at 1,000, written before the split, is 120 and 100 in today's prices
+            ts = __import__("datetime").datetime.fromisoformat(d[0]).timestamp()
+            db.x("INSERT INTO journal (ts, ticker, action, price, stop_price) VALUES (?, 'NVDA', 'buy', 1200, 1000)", (ts,))
+            j = db.q("SELECT * FROM journal")[0]
+            r = insights._entry_result({**j, "stance": None, "score": None, "benchmark": None, "outcome": "", "target_price": None}, "NVDA")
+            assert abs(r["returnSince"]) < 1e-9 and r["status"] == "Open", r
+    finally:
+        data.splits = real_splits
+        _reset()
+
+    # Fetching: none in demo mode, and a failed fetch isn't remembered, so it's tried again
+    assert data.splits("AAPL") == []
+    calls = []
+
+    class Broken:
+        @property
+        def splits(self):
+            calls.append(1)
+            raise RuntimeError("rate limited")
+
+    class YF:
+        Ticker = staticmethod(lambda t: Broken())
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    try:
+        assert data.splits("XYZ") == [] and data.splits("XYZ") == [] and len(calls) == 2
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+
+
+def test_dividends_are_in_the_currency_paid():
+    from backend import data
+    assert data.main_unit("GBp") == "GBP" and data.main_unit("KWF") == "KWD" and data.main_unit("EUR") == "EUR"
+    px = _steps([0.0] * 300) * 0.7
+    for base, ticker, quote in (("GBP", "VOD.L", "GBp"), ("KWD", "NBK.KW", "KWF")):
+        _reset()
+        with TestClient(app) as c, _FakeMarket({ticker: px}, {ticker: {"currency": quote}}):
+            c.post("/api/settings", json={"base_currency": base})
+            day = px.index[100].date().isoformat()
+            assert c.post("/api/transactions", json={"ticker": ticker, "kind": "buy", "date": day, "shares": 100, "price": 70}).status_code == 200
+            assert c.post("/api/transactions", json={"ticker": ticker, "kind": "dividend", "date": px.index[200].date().isoformat(), "amount": 40}).status_code == 200
+            p = c.get("/api/portfolio").json()
+            # 40 pounds (dinars) received is 40 in the base, not 0.40 (0.04) as if it were pence (fils)
+            assert abs(p["dividends"] - 40) < 1e-9, (ticker, p["dividends"])
+            # Prices stay in the quote unit: 100 shares at 70 pence are worth 70 pounds, at 70 fils 7 dinars
+            divisor = data.MINOR_UNITS[quote][1]
+            assert abs(p["positions"][0]["value"] - 100 * float(px.iloc[-1]) / divisor) < 1e-9, p["positions"][0]["value"]
+    _reset()
+
+
+def test_core_satellite_uses_the_whole_history():
+    _reset()
+    spy = _steps([0.0008] * 600)  # about two and a half years, ending 2026-06-01
+    aapl = _steps([0.02, -0.015] * 300)
+    d0 = spy.index[50]  # bought well over a year before the end
+    day = d0.date().isoformat()
+    with TestClient(app) as c, _FakeMarket({"SPY": spy, "AAPL": aapl}):
+        for t in ("SPY", "AAPL"):
+            assert c.post("/api/transactions", json={"ticker": t, "kind": "buy", "date": day, "shares": 10, "price": 100}).status_code == 200
+        perf = c.get("/api/portfolio").json()["coreSatellite"]["performance"]
+        # From the real first day both were held, not from a year ago, and over the whole period
+        assert perf["start"] == day and perf["dates"][0] == day and not perf["pastYearOnly"], perf["start"]
+        assert abs(perf["core"] - (spy.iloc[-1] / spy[d0] - 1)) < 1e-9 and abs(perf["satellite"] - (aapl.iloc[-1] / aapl[d0] - 1)) < 1e-9
+        assert len(perf["dates"]) == len(perf["coreLine"]) == len(perf["satelliteLine"]) == len(spy[spy.index >= d0])
+    _reset()
+    # With no dated purchase there's no start to go by: the past year, and it says so
+    with TestClient(app) as c, _FakeMarket({"SPY": spy, "AAPL": aapl}):
+        for t in ("SPY", "AAPL"):
+            assert c.post("/api/transactions", json={"ticker": t, "kind": "buy", "shares": 10, "price": 100}).status_code == 200
+        perf = c.get("/api/portfolio").json()["coreSatellite"]["performance"]
+        assert perf["pastYearOnly"] and (spy.index[-1] - __import__("pandas").Timestamp(perf["start"])).days <= 366, perf["start"]
+    _reset()
+
+
+def test_risk_includes_currency_moves():
+    import pandas as pd
+
+    from backend import data
+    from backend import indicators as ind
+    _reset()
+    flat = _steps([0.0] * 300)  # a US fund whose price never moves
+    eur_per_usd = pd.Series([0.9 + 0.02 * ((i % 5) - 2) for i in range(len(flat))], index=flat.index)  # the rate does
+    real = data.fx_series
+    data.fx_series = lambda cur, base, index: eur_per_usd.reindex(index).ffill() if (cur, base) == ("USD", "EUR") else real(cur, base, index)
+    try:
+        with TestClient(app) as c, _FakeMarket({"SPY": flat}):
+            c.post("/api/settings", json={"base_currency": "EUR"})
+            assert c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "shares": 10, "price": 100}).status_code == 200
+            risk = c.get("/api/portfolio").json()["risk"]
+        # For a euro investor this was risky, all of it from the dollar: the same volatility as the rate itself
+        assert risk["volatility"] > 0.05, risk
+        assert abs(risk["volatility"] - ind.volatility(ind.window(eur_per_usd, 252))) < 1e-9, (risk["volatility"], ind.volatility(eur_per_usd))
+    finally:
+        data.fx_series = real
+        _reset()
+
+
+def test_scorecard_counts_dividends_on_both_sides():
+    import datetime as dt
+
+    import pandas as pd
+
+    from backend import data, db, insights
+    _reset()
+    flat = _steps([0.0] * 300)  # adjusted closes: 100 throughout, for the stock and the benchmark
+    entry_day = flat.index[100]
+    # 4% paid out since the entry: Yahoo's adjusted price on that day is 0.96 of what was actually paid
+    ratio = pd.Series([0.96 if d <= flat.index[150] else 1.0 for d in flat.index], index=flat.index)
+    real = data.dividend_factor
+    data.dividend_factor = lambda t: ratio if t == "XOM" else None
+    try:
+        with _FakeMarket({"XOM": flat, "SPY": flat}):
+            db.x("INSERT INTO journal (ts, ticker, action, price) VALUES (?, 'XOM', 'buy', 104.1667)",
+                 (dt.datetime.combine(entry_day.date(), dt.time(12)).timestamp(),))
+            j = {**db.q("SELECT * FROM journal")[0], "stance": None, "score": None, "benchmark": "SPY", "outcome": "", "target_price": None, "stop_price": None}
+            r = insights._entry_result(j, "SPY")
+        # Paid 104.17, now 100 plus about 4.17 of dividends: even, like the flat benchmark. Before, it read -4%.
+        assert abs(r["returnSince"]) < 1e-4 and abs(r["excess"]) < 1e-4, r
+    finally:
+        data.dividend_factor = real
+        _reset()
+    assert data.dividend_factor("XOM") is None, "no adjustment in demo mode"
 
 
 def test_minor_unit_currencies():

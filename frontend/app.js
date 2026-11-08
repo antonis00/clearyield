@@ -203,8 +203,10 @@ async function loadDashboard() {
     if (p.incomplete) $("#dashIncomplete").innerHTML = missingNote(p);
     $("#dashPortfolio").innerHTML = p.positions.length ? [
       ["Value", money(p.total, p.base, 0), ""], ["Today", money(p.dayPnl, p.base, 0), cls(p.dayPnl)],
-      ["Total P&L", money(p.pnl, p.base, 0), `${cls(p.pnl)}`, pct(p.pnlPct)], ["Est. income / yr", money(p.annualIncome, p.base, 0), ""],
-    ].map(([l, v, c, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v ${c}">${v}</div>${s ? `<div class="s ${c}">${s}</div>` : ""}</div>`).join("")
+      // Everything gained: what's still held, what was sold, and the dividends, with the parts underneath
+      ["Total gain", money(p.totalGain, p.base, 0), cls(p.totalGain), `<span class="${cls(p.pnl)}">${money(p.pnl, p.base, 0)}</span> open · <span class="${cls(p.realised)}">${money(p.realised, p.base, 0)}</span> sold · ${money(p.dividends, p.base, 0)} dividends`],
+      ["Est. income / yr", money(p.annualIncome, p.base, 0), ""],
+    ].map(([l, v, c, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v ${c}">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("")
       : `<div class="muted">No holdings yet. <a data-goto="portfolio">Add your first position →</a></div>`;
   }).catch(() => {});
 
@@ -634,7 +636,7 @@ async function loadPortfolio() {
     });
     $$("[data-lots]", t).forEach((btn) => btn.onclick = () => {
     const pos = p.positions.find((x) => x.ticker === btn.dataset.lots);
-    modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);
+    modal(`<h3>${esc(pos.ticker)} lots</h3><table><tr><th>Date</th><th class="num">Shares</th><th class="num">Cost</th><th>Note</th><th></th></tr>${pos.lots.map((l) => `<tr><td>${esc(l.bought || "—")}${l.split && l.split !== 1 ? `<div class="muted sm">Restated for splits since: ×${num(l.split, l.split < 1 ? 4 : 0)} shares</div>` : ""}</td><td class="num">${num(l.shares, 4)}</td><td class="num">${money(l.cost, pos.currency)}</td><td>${esc(l.note)}</td><td><button class="btn danger" data-del="${l.id}">Delete</button></td></tr>`).join("")}</table><div class="form-row"><button class="btn ghost" data-close>Close</button></div>`);
     $$("[data-del]", $("#modal")).forEach((d) => d.onclick = async () => { if (!confirm("Delete this lot?")) return; await api(`/api/holdings/${d.dataset.del}`, { method: "DELETE" }); $("#modal").classList.add("hidden"); loadPortfolio(); });
     });
   });
@@ -645,7 +647,7 @@ async function loadPortfolio() {
   table($("#txTable"), [
     { k: "date", label: "Date", fmt: (v) => esc(v || "no date") }, { k: "ticker", label: "Ticker", fmt: (v) => `<span class="sym">${esc(v)}</span>` }, { k: "kind", label: "Type", fmt: (v) => esc(v) },
     { k: "shares", label: "Shares", num: 1, fmt: (v) => (isNum(v) ? num(v, v < 1 ? 4 : 2) : "") },
-    { k: "price", label: "Price or amount", num: 1, fmt: (v, r) => money(r.kind === "dividend" ? r.amount : v, curOf[r.ticker] ?? null) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
+    { k: "price", label: "Price or amount", num: 1, fmt: (v, r) => (r.kind === "dividend" ? money(r.amount, MAIN_UNIT[curOf[r.ticker]] || (curOf[r.ticker] ?? null)) : money(v, curOf[r.ticker] ?? null)) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
     { k: "id", label: "", fmt: (v) => `<button class="btn danger" data-tdel="${v}">Delete</button>` },
   ], tx, { empty: "Nothing recorded yet." })
   .afterDraw(() => $$("[data-tdel]", $("#txTable")).forEach((d) => d.onclick = async () => {
@@ -688,21 +690,22 @@ function renderCoreSatellite(p) {
     : `Satellite is ${pct(cs.satellite, 0, false)} of the money and ${share(r.satellite)} of the portfolio's day-to-day swings; core ${pct(cs.core, 0, false)} and ${share(r.core)}. (Past year, today's holdings.)`;
   const pf = cs.performance;
   const judge = !pf ? "Hold both core and satellite for a while to compare how they did."
-    : `Since ${esc(pf.start)}, while you held both: core ${cpct(pf.core)}, satellite ${cpct(pf.satellite)}. `
+    : `${pf.pastYearOnly ? `Over the past year (your purchases have no dates), from ${esc(pf.start)}` : `Since ${esc(pf.start)}, while you held both`}: core ${cpct(pf.core)}, satellite ${cpct(pf.satellite)}. `
       + `Your satellites ${pf.edge >= 0 ? "are ahead of" : "trail"} the core by ${num(Math.abs(pf.edge) * 100, 1)} points`
       + (pf.days < 60 ? `, but ${pf.days} trading days is too short to judge.` : ".");
   $("#csSplit").innerHTML = `
     <div class="split"><i style="width:${at(cs.core)}%"></i><i style="width:${100 - at(cs.core)}%"></i><b style="left:calc(${at(cs.target)}% - 1px)" data-label="target ${target}"></b></div>
     <div class="split-legend"><span class="cs-core">Core ${pct(cs.core, 1, false)}</span><span class="cs-sat">Satellite ${pct(cs.satellite, 1, false)}</span></div>
     <div class="cs-lines"><p>${advice}</p><p>${risk}</p><p>${judge}</p></div>`;
-  $("#csPerfNote").textContent = pf ? "Each bucket's time-weighted return from the first day both were held, at 100. Closed positions count in the bucket they're in now." : "";
+  $("#csPerfNote").textContent = pf ? "Each bucket's time-weighted return from the first day both were held, at 100. Lots without a date count from your first dated trade; closed positions count in the bucket they're in now." : "";
   if (!pf) { state.charts.csPerf?.destroy(); delete state.charts.csPerf; $("#csPerf").classList.add("hidden"); return; }
   $("#csPerf").classList.remove("hidden");
   const line = (label, data, color) => ({ label, data, borderColor: color, borderWidth: 2, pointRadius: 0, spanGaps: false });
-  const from = Math.max(0, pf.coreLine.findIndex((v) => v !== null)); // start where both are held
-  mkChart("csPerf", { type: "line", data: { labels: p.performance.dates.slice(from), datasets: [line("Core", pf.coreLine.slice(from), C("--accent2")), line("Satellite", pf.satelliteLine.slice(from), C("--accent"))] },
+  mkChart("csPerf", { type: "line", data: { labels: pf.dates, datasets: [line("Core", pf.coreLine, C("--accent2")), line("Satellite", pf.satelliteLine, C("--accent"))] },
     options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 6 } } } } });
 }
+// Stocks quoted in a fraction of a currency: prices are in that fraction, dividends in the main currency
+const MAIN_UNIT = { GBp: "GBP", GBX: "GBP", ZAc: "ZAR", ILA: "ILS", KWF: "KWD" };
 let formQuote = null;
 $("#hTicker").onchange = async () => {
   const hint = $("#hHint"), t = $("#hTicker").value.trim();
@@ -712,7 +715,9 @@ $("#hTicker").onchange = async () => {
   if (!q || $("#hTicker").value.trim() !== t) return;
   formQuote = q;
   const unit = { GBp: " (pence, 1/100 of a pound)", GBX: " (pence, 1/100 of a pound)", ZAc: " (cents, 1/100 of a rand)", ILA: " (agorot, 1/100 of a shekel)", KWF: " (fils, 1/1000 of a dinar)" }[q.currency] || "";
-  hint.textContent = `${q.ticker} trades in ${q.currency}${unit}. Latest price ${num(q.price)}.`;
+  const pay = MAIN_UNIT[q.currency];
+  hint.textContent = `${q.ticker} trades in ${q.currency}${unit}. Latest price ${num(q.price)}.` + (pay ? ` Enter prices in ${q.currency} and dividends in ${pay}, as your broker pays them.` : "");
+  $("#hKind").onchange(); // the dividend label names the currency too
 };
 $("#btnPaste").onclick = async () => {
   try {
@@ -723,7 +728,8 @@ $("#btnPaste").onclick = async () => {
 $("#hKind").onchange = () => {
   const dividend = $("#hKind").value === "dividend";
   $("#hSharesWrap").classList.toggle("hidden", dividend);
-  $("#hCostLabel").textContent = dividend ? "Total received" : "Price / share";
+  const pay = formQuote && MAIN_UNIT[formQuote.currency];
+  $("#hCostLabel").textContent = dividend ? `Total received${pay ? ` (${pay})` : ""}` : "Price / share";
 };
 $("#btnAddHolding").onclick = async () => {
   const kind = $("#hKind").value, value = $("#hCost").value;

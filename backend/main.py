@@ -280,7 +280,7 @@ def _chart(t, full, period, bars):
     view = data.slice_period(full, period)
     lines = ind.bundle(full).loc[view.index]
     if bars == "week":
-        view, lines = data.weekly(view, lines)
+        view, lines = data.weekly(view, lines, t)
     return {**_candles(view, [d.strftime("%Y-%m-%d") for d in view.index], lines), "bars": "week" if bars == "week" else "day"}
 
 

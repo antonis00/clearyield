@@ -40,10 +40,41 @@ def _valid_date(t, required):
     return date
 
 
-def replay(rows):
-    """{ticker: {"lots": open lots, "sales": each sale per lot it came from, "dividends": [...]}}. Raises LedgerError."""
+def split_factor(splits, date):
+    """How many of today's shares one share bought on `date` has become. A split on the trade's own date has already
+    happened by then: Yahoo dates a split by its first trading day at the new price."""
+    factor = 1.0
+    for when, ratio in splits:
+        if date < when:
+            factor *= ratio
+    return factor
+
+
+def in_todays_shares(rows, splits_of=None):
+    """Buys and sales dated before a split, restated in today's shares: 10 bought at 1,200 before a 10-for-1 split
+    become 100 at 120. The money is unchanged, and the units now match Yahoo's split-adjusted prices and any sales
+    entered after the split. Undated buys are left as entered, since it can't be known which side of a split they fall."""
+    if splits_of is None:
+        from . import data  # here, not at the top: data doesn't need the ledger, and tests swap data's functions
+        splits_of = data.splits
+    known, out = {}, []
+    for t in rows:
+        kind = t.get("kind") or "buy"
+        if kind in ("buy", "sell") and t.get("date") and isinstance(t.get("shares"), (int, float)) and isinstance(t.get("price"), (int, float)):
+            if t["ticker"] not in known:
+                known[t["ticker"]] = splits_of(t["ticker"])
+            factor = split_factor(known[t["ticker"]], t["date"])
+            if factor != 1.0:
+                t = {**t, "shares": t["shares"] * factor, "price": t["price"] / factor, "split": factor}
+        out.append(t)
+    return out
+
+
+def replay(rows, splits_of=None):
+    """{ticker: {"lots": open lots, "sales": each sale per lot it came from, "dividends": [...]}}, in today's shares.
+    Raises LedgerError."""
     book = {}
-    for t in sorted(rows, key=_order):
+    for t in sorted(in_todays_shares(rows, splits_of), key=_order):
         kind = t.get("kind") or "buy"
         if kind not in KINDS:
             raise LedgerError(f"{t.get('ticker')}: unknown transaction type '{kind}'.")
@@ -51,7 +82,7 @@ def replay(rows):
         date = _valid_date(t, required=kind != "buy")
         if kind == "buy":
             p["lots"].append({"id": t.get("id"), "ticker": t["ticker"], "shares": _positive(t, "shares"), "cost": _positive(t, "price", True),
-                              "bought": date, "note": t.get("note") or ""})
+                              "bought": date, "note": t.get("note") or "", "split": t.get("split", 1.0)})
         elif kind == "dividend":
             p["dividends"].append({"id": t.get("id"), "date": date, "amount": _positive(t, "amount")})
         else:
