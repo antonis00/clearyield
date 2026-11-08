@@ -36,7 +36,7 @@ def test_all():
             j = r.json()
             assert len(j["candles"]["close"]) > 200 and j["scores"]["stance"]
             assert c.get(f"/api/stock/{t}/news").status_code == 200
-            assert c.get(f"/api/stock/{t}/brief").json()["text"]
+            assert c.post(f"/api/stock/{t}/brief").json()["text"]
 
         d = c.get("/api/dcf/AAPL").json()
         assert "fairValue" in d or "error" in d
@@ -484,6 +484,42 @@ def test_backup_restores_everything_or_nothing():
         assert c.post("/api/backup/restore", json=extra).status_code == 200
         assert [h["ticker"] for h in db.q("SELECT * FROM transactions")] == ["X"]
         assert db.q("SELECT * FROM settings WHERE key = 'hack'") == []
+
+
+def test_settings_are_checked_on_save_and_restore():
+    from backend import db
+    _reset()
+    xss = '<img src=x onerror="alert(1)">'
+    bad = [{"base_currency": xss}, {"base_currency": 5}, {"risk_free_rate": "4%"}, {"risk_free_rate": 9},
+           {"weights": {"value": 1, xss: 0.5}}, {"weights": {"value": "x"}}, {"weights": {"value": 0, "risk": 0}},
+           {"targets": {"Stocks": -5}}, {"targets": "all"}, {"targets": {xss: 10}}, {"benchmark": xss},
+           {"dashboard_tiles": "SPY"}, {"core_target": True}, {"risk_free_rate": float("nan")}]
+    with TestClient(app) as c:
+        before = c.get("/api/settings").json()
+        for body in bad:
+            r = c.post("/api/settings", content=__import__("json").dumps(body, allow_nan=True), headers={"content-type": "application/json"})
+            assert r.status_code == 400, (body, r.status_code, r.text)
+            assert c.get("/api/settings").json() == before, body
+        good = {"base_currency": "EUR", "risk_free_rate": 0.035, "benchmark": "VWCE.DE",
+                "weights": {"value": 0.5, "quality": 0.5, "growth": 0, "momentum": 0, "risk": 0}, "targets": {"Stocks": 70, "ETFs": 30}}
+        s = c.post("/api/settings", json=good).json()
+        assert all(s[k] == v for k, v in good.items()), s
+
+        # A backup carrying a bad setting or bucket is refused and changes nothing
+        backup = c.get("/api/backup").json()
+        for broken in ({**backup, "settings": {**backup["settings"], "base_currency": xss}},
+                       {**backup, "settings": {**backup["settings"], "targets": {xss: 1}}},
+                       {**backup, "buckets": [{"ticker": "AAPL", "bucket": xss}]}):
+            r = c.post("/api/backup/restore", json=broken)
+            assert r.status_code == 400 and ("usable" in r.text or "core or satellite" in r.text), r.text
+            assert c.get("/api/settings").json() == s
+        assert c.post("/api/backup/restore", json=backup).status_code == 200 and c.get("/api/settings").json() == s
+
+        # A bad value already in the database, from before these checks, falls back to the default instead of breaking pages
+        db.x("INSERT OR REPLACE INTO settings (key, value) VALUES ('targets', ?)", ('"oops"',))
+        assert c.get("/api/settings").json()["targets"] == db.DEFAULT_SETTINGS["targets"]
+        assert c.get("/api/portfolio").status_code == 200
+    _reset()
 
 
 def test_old_database_gains_the_new_columns():
@@ -1068,6 +1104,20 @@ def test_only_local_addresses_are_served():
         for host in ("localhost:8001", "127.0.0.1:8001", "[::1]:8001"):
             assert c.get("/api/meta", headers={"Host": host}).status_code == 200, host
 
+        # A website you visit can't make your browser clear the cache, change data or spend the AI allowance
+        local = {"Host": "localhost:8001"}
+        for attack in ({"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},  # same-site: another app on this machine
+                       {"Origin": "https://evil.example"}, {"Origin": "http://localhost:8000"}, {"Origin": "null"}):
+            for call in (lambda h: c.post("/api/cache/clear", headers=h), lambda h: c.post("/api/stock/AAPL/brief", headers=h),
+                         lambda h: c.post("/api/settings", json={"base_currency": "EUR"}, headers=h), lambda h: c.get("/api/backup", headers=h)):
+                assert call({**local, **attack}).status_code == 403, attack
+        assert c.get("/api/settings").json()["base_currency"] == "USD"
+        # Your own page, an address typed in the browser and scripts still work; so does opening the page from a link
+        for fine in ({"Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:8001"}, {"Sec-Fetch-Site": "none"}, {}):
+            assert c.post("/api/cache/clear", headers={**local, **fine}).status_code == 200, fine
+        assert c.get("/", headers={**local, "Sec-Fetch-Site": "cross-site"}).status_code == 200
+        assert c.get("/api/stock/AAPL/brief").status_code == 405, "the brief is a POST, so a link or image can't ask for one"
+
     # A .env saved by Notepad starts with a byte-order mark, which used to rename the key
     env = Path(tempfile.mkdtemp()) / ".env"
     env.write_bytes("\ufeffSTOCKPILOT_TEST_KEY=héllo\n".encode("utf-8"))
@@ -1638,10 +1688,10 @@ def test_brief_uses_your_risk_free_rate():
     ai.brief = lambda ctx: seen.update(ctx) or {"source": "rules", "text": "x"}
     try:
         with TestClient(app) as c:
-            c.get("/api/stock/AAPL/brief")
+            c.post("/api/stock/AAPL/brief")
             low = seen["stats"]["sharpe1y"]
             c.post("/api/settings", json={"risk_free_rate": 0.20})
-            c.get("/api/stock/AAPL/brief")
+            c.post("/api/stock/AAPL/brief")
             assert seen["stats"]["sharpe1y"] < low
     finally:
         ai.brief = real
@@ -2418,8 +2468,14 @@ def test_thinking_and_cloud_setup():
         try:
             assert main._trust_windows_certificates(bundle) == bundle and os.environ["SSL_CERT_FILE"] == str(bundle)
             text = bundle.read_text(encoding="ascii")
-            windows = sum(1 for store in ("ROOT", "CA") for _, enc, _ in ssl.enum_certificates(store) if enc == "x509_asn")
-            assert text.count("BEGIN CERTIFICATE") > windows, "certifi's list plus every Windows certificate"
+            import certifi
+            roots = [der for der, enc, trust in ssl.enum_certificates("ROOT") if enc == "x509_asn" and (trust is True or main.SERVER_AUTH in trust)]
+            own = Path(certifi.where()).read_text(encoding="ascii").count("BEGIN CERTIFICATE")
+            assert text.count("BEGIN CERTIFICATE") == own + len(roots), "certifi's list plus the Windows roots trusted for websites"
+            # Nothing from the intermediate store, and no root Windows trusts only for something else (code signing, email)
+            others = [der for der, enc, trust in ssl.enum_certificates("ROOT") if enc == "x509_asn" and trust is not True and main.SERVER_AUTH not in trust]
+            others += [der for der, enc, _ in ssl.enum_certificates("CA") if enc == "x509_asn" and der not in roots]
+            assert not any(ssl.DER_cert_to_PEM_cert(der) in text for der in others if ssl.DER_cert_to_PEM_cert(der) not in Path(certifi.where()).read_text(encoding="ascii"))
             os.environ["SSL_CERT_FILE"] = "C:/mine.pem"
             assert main._trust_windows_certificates(bundle) is None and os.environ["SSL_CERT_FILE"] == "C:/mine.pem"
         finally:

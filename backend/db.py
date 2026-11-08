@@ -1,6 +1,9 @@
 """SQLite storage: cache, watchlist, transactions, journal, alerts, settings."""
 import json
+import logging
+import math
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -10,6 +13,7 @@ from .universe import DEFAULT_TILES
 
 DB_PATH = Path(os.getenv("STOCKPILOT_DB", Path(__file__).resolve().parent.parent / "data" / "stockpilot.db"))
 _lock = threading.Lock()
+log = logging.getLogger("stockpilot.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL);
@@ -167,7 +171,13 @@ def read_backup(backup):
             raise ValueError(f"The backup's {t} section isn't usable.")
     if not isinstance(backup.get("settings"), dict):
         raise ValueError("The backup's settings section isn't usable.")
-    return backup
+    try:
+        settings = check_settings(backup["settings"])
+    except ValueError as e:
+        raise ValueError(f"The backup's settings aren't usable: {e}")
+    if any(r.get("bucket") not in ("core", "satellite") for r in backup["buckets"]):
+        raise ValueError("Every bucket in the backup must be core or satellite.")
+    return {**backup, "settings": settings}
 
 
 def restore_user_data(backup):
@@ -186,7 +196,7 @@ def restore_user_data(backup):
                     marks = ",".join("?" * len(cols))
                     c.execute(f"INSERT INTO {t} ({','.join(cols)}) VALUES ({marks})", [row[k] for k in cols])
             c.execute("DELETE FROM settings")
-            for k, v in backup["settings"].items():
+            for k, v in backup["settings"].items():  # already checked by read_backup
                 if k in DEFAULT_SETTINGS:
                     c.execute("INSERT INTO settings (key, value) VALUES (?,?)", (k, json.dumps(v)))
             c.commit()
@@ -201,15 +211,80 @@ def restore_user_data(backup):
 
 
 # ---- settings ----
+# Every setting is checked before it's stored, whether it comes from the page or a backup, so a bad value can neither
+# break the pages that use it nor carry markup into them
+FACTOR_KEYS = ("value", "quality", "growth", "momentum", "risk")
+TARGET_KEYS = ("Stocks", "ETFs", "Crypto", "Other")
+_SYMBOL = re.compile(r"[A-Z0-9^=.\-]{1,24}")
+_CURRENCY = re.compile(r"[A-Z]{3}")
+
+
+def _num(v, lo, hi, what):
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi:
+        raise ValueError(f"{what} must be a number from {lo:g} to {hi:g}.")
+    return float(v)
+
+
+def _shares(v, keys, hi, what):
+    if not isinstance(v, dict) or not v or any(k not in keys for k in v):
+        raise ValueError(f"{what} must be given for {', '.join(keys)} only.")
+    out = {k: _num(n, 0, hi, f"Each of the {what.lower()}") for k, n in v.items()}
+    if not sum(out.values()) > 0:
+        raise ValueError(f"At least one of the {what.lower()} must be above zero.")
+    return out
+
+
+def _symbols(v, what):
+    if not isinstance(v, list) or not all(isinstance(t, str) and _SYMBOL.fullmatch(t) for t in v):
+        raise ValueError(f"{what} must be a list of symbols.")
+    return list(dict.fromkeys(v))
+
+
+def _custom_tiles(v):
+    if not isinstance(v, list) or not all(isinstance(c, dict) and isinstance(c.get("ticker"), str) and _SYMBOL.fullmatch(c["ticker"])
+                                          and isinstance(c.get("name"), str) and len(c["name"]) <= 100 for c in v):
+        raise ValueError("Custom tiles must each have a symbol and a name.")
+    return [{"ticker": c["ticker"], "name": c["name"]} for c in v]
+
+
+def _text(pattern, what):
+    def check(v):
+        if not isinstance(v, str) or not pattern.fullmatch(v):
+            raise ValueError(what)
+        return v
+    return check
+
+
+SETTING_CHECKS = {
+    "base_currency": _text(_CURRENCY, "The base currency must be a three-letter code such as USD."),
+    "risk_free_rate": lambda v: _num(v, -0.05, 0.3, "The risk-free rate"),
+    "weights": lambda v: _shares(v, FACTOR_KEYS, 1, "Factor weights"),
+    "targets": lambda v: _shares(v, TARGET_KEYS, 100, "Allocation targets"),
+    "benchmark": _text(_SYMBOL, "The benchmark must be a symbol such as SPY."),
+    "dashboard_tiles": lambda v: _symbols(v, "Dashboard tiles"),
+    "custom_tiles": _custom_tiles,
+    "core_target": lambda v: _num(v, 0, 100, "The core share"),
+}
+
+
+def check_settings(values):
+    """The known settings in `values`, checked and tidied; unknown keys are dropped. Raises ValueError on a bad value."""
+    if not isinstance(values, dict):
+        raise ValueError("Settings must be an object.")
+    return {k: SETTING_CHECKS[k](v) for k, v in values.items() if k in SETTING_CHECKS}
+
+
 def get_settings():
     out = json.loads(json.dumps(DEFAULT_SETTINGS))
     for r in q("SELECT key, value FROM settings"):
-        out[r["key"]] = json.loads(r["value"])
+        try:  # a value stored before these checks existed falls back to the default instead of breaking a page
+            out.update(check_settings({r["key"]: json.loads(r["value"])}))
+        except ValueError as e:
+            log.warning("ignoring stored setting %s: %s", r["key"], e)
     return out
 
 
 def set_settings(values: dict):
-    for k, v in values.items():
-        if k in DEFAULT_SETTINGS:
-            x("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (k, json.dumps(v)))
+    for k, v in check_settings(values).items():
+        x("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (k, json.dumps(v)))
     return get_settings()

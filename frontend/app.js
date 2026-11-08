@@ -36,10 +36,10 @@ function money(v, cur = "USD", d = 2) {
   if (!cur) return num(v, d);
   if (cur === "GBp") return `${num(v, d)} GBp`;
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, minimumFractionDigits: d, maximumFractionDigits: d }).format(v); }
-  catch { return `${num(v, d)} ${cur}`; }
+  catch { return `${num(v, d)} ${esc(cur)}`; }
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const badge = (st) => `<span class="badge b-${(st || "Insufficient").split(" ")[0]}">${esc(st || "n/a")}</span>`;
+const badge = (st) => `<span class="badge b-${esc((st || "Insufficient").split(" ")[0])}">${esc(st || "n/a")}</span>`;
 const scoreColor = (s) => (!isNum(s) ? C("--muted") : s >= 70 ? C("--up") : s >= 58 ? C("--accent2") : s >= 45 ? C("--neutral") : s >= 35 ? C("--accent") : C("--down"));
 const bar = (s) => `<div class="bar"><i style="width:${isNum(s) ? s : 0}%;background:${scoreColor(s)}"></i></div>`;
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), ms); }
@@ -477,7 +477,7 @@ async function loadNews() {
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)) + briefFooter(r); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)) + briefFooter(r); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
 // Who wrote the brief, and whether every figure in it could be found in the data it was given
@@ -621,10 +621,10 @@ async function loadPortfolio() {
   table(t, [
     { k: "ticker", label: "Ticker", fmt: symCell }, { k: "shares", label: "Shares", num: 1, fmt: (v) => num(v, v < 1 ? 4 : 2) },
     { k: "avgCost", label: "Avg cost", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) },
-    { k: "dayPct", label: "1D", num: 1, fmt: (v) => cpct(v, 2) }, { k: "value", label: `Value (${b})`, num: 1, fmt: (v) => money(v, b, 0) },
+    { k: "dayPct", label: "1D", num: 1, fmt: (v) => cpct(v, 2) }, { k: "value", label: `Value (${esc(b)})`, num: 1, fmt: (v) => money(v, b, 0) },
     { k: "pnl", label: "P&L", num: 1, fmt: (v) => `<span class="${cls(v)}">${money(v, b, 0)}</span>` }, { k: "pnlPct", label: "P&L %", num: 1, fmt: (v) => cpct(v) },
     { k: "weight", label: "Weight", num: 1, fmt: (v) => pct(v, 1, false) },
-    { k: "bucket", label: "Bucket", fmt: (v, r) => `<button class="btn ghost bucket ${v}" data-bucket="${esc(r.ticker)}" title="${v === r.bucketDefault ? "The default for this holding." : "Chosen by you."} Click to make it ${v === "core" ? "satellite" : "core"}.">${v === "core" ? "Core" : "Satellite"}</button>` },
+    { k: "bucket", label: "Bucket", fmt: (v, r) => `<button class="btn ghost bucket ${v === "core" ? "core" : "satellite"}" data-bucket="${esc(r.ticker)}" title="${v === r.bucketDefault ? "The default for this holding." : "Chosen by you."} Click to make it ${v === "core" ? "satellite" : "core"}.">${v === "core" ? "Core" : "Satellite"}</button>` },
     { k: "ticker", label: "", fmt: (v) => `<button class="btn danger" data-lots="${esc(v)}">Lots</button>` },
   ], p.positions, { stock: (r) => r.ticker, empty: "No holdings yet — add one above." })
   .afterDraw(() => {
@@ -673,7 +673,7 @@ async function loadPortfolio() {
   table($("#pfRebal"), [
     { k: "assetClass", label: "Asset class" }, { k: "target", label: "Target", num: 1, fmt: (v) => pct(v, 1, false) }, { k: "actual", label: "Actual", num: 1, fmt: (v) => pct(v, 1, false) },
     { k: "drift", label: "Drift", num: 1, fmt: (v) => cpct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
-    { k: "trade", label: `Amount (${b})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
+    { k: "trade", label: `Amount (${esc(b)})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
 }
 function renderCoreSatellite(p) {
@@ -823,10 +823,10 @@ $("#btnNotify").onclick = async () => {
 /* ---------------------------------------------------------------- settings */
 function loadSettings() {
   const s = state.meta.settings;
-  $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${k} ${factorInfo(k)}</label><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-w="${k}"><span>${Math.round(v * 100)}%</span></div>`).join("");
+  $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${esc(k)} ${factorInfo(k)}</label><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-w="${esc(k)}"><span>${Math.round(v * 100)}%</span></div>`).join("");
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
-  $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${k}<input type="number" data-tgt="${k}" value="${v}"></label>`).join("");
+  $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)}<input type="number" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
   $("#sCore").value = s.core_target;
   renderTileChoices(new Set(s.dashboard_tiles));
 }
