@@ -50,6 +50,7 @@ MACRO = {
     "QAT": "Qatar (QAT ETF)", "^VIX": "VIX", "^TNX": "US 10Y yield", "GC=F": "Gold", "SI=F": "Silver",
     "CL=F": "WTI Oil", "BZ=F": "Brent Oil", "NG=F": "Natural Gas", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum",
     "EURUSD=X": "EUR/USD", "GBPUSD=X": "GBP/USD", "USDJPY=X": "USD/JPY", "DX-Y.NYB": "US Dollar Index",
+    "VWCE.DE": "FTSE All-World (VWCE)", "ACWI": "MSCI ACWI (USD)",
 }
 DEFAULT_TILES = ["^GSPC", "^IXIC", "^STOXX50E", "KSA", "QAT", "^VIX", "^TNX", "GC=F", "CL=F", "BTC-USD", "EURUSD=X", "DX-Y.NYB"]
 

@@ -72,8 +72,19 @@ label.block { margin: 8px 0; }
 .btn.bucket { padding: 2px 8px; font-size: 11px; }
 .btn.bucket.core { color: var(--accent2); border-color: color-mix(in srgb, var(--accent2) 50%, transparent); }
 .btn.bucket.satellite { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.info { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted);
+  font: 600 9px/1 var(--sans); font-style: normal; text-transform: none; letter-spacing: 0; vertical-align: 1px; margin-left: 2px; cursor: help; user-select: none; }
+.info:hover, .info:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+#tooltip { position: fixed; z-index: 100; max-width: 300px; padding: 8px 10px; border-radius: 6px; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); box-shadow: 0 6px 20px #0006; font: 12px/1.45 var(--sans); text-transform: none; letter-spacing: 0; pointer-events: none; }
+.settings-grid { align-items: start; }
+.settings-col > .card:last-child { margin-bottom: 0; }
+.savebar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; padding: 12px 16px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 -6px 18px color-mix(in srgb, var(--bg) 70%, transparent); }
 .tile-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 2px 12px; font-size: 13px; margin: 4px 0 8px; }
 .tile-choices label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.tile-choices .rm { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }
+.tile-choices .rm:hover { color: var(--down); }
 .chart-ctl { display: flex; gap: 8px; flex-wrap: wrap; }
 #chartNote:not(:empty) { margin: -4px 0 8px; }
 .toggles { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
@@ -89,6 +100,8 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .grid2 > .card, .grid4 > .card { margin-bottom: 0; }
 .grid2, .grid4 { margin-bottom: 16px; }
+/* Compare's metrics table needs about 700px, so its pair stacks well before the other two-column grids */
+@media (max-width: 1700px) { .cmp-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1100px) { .grid2, .grid4 { grid-template-columns: 1fr; } .side { width: 64px; } .brand span:not(.logo), nav a { font-size: 0; } nav a::first-letter { font-size: 14px; } }
 .empty { padding: 80px 0; text-align: center; color: var(--muted); }
 

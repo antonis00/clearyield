@@ -196,7 +196,7 @@
       </div>
     </div>
     <div class="card"><div class="card-h"><h3>Growth of 100</h3></div><canvas id="cmpChart" height="110"></canvas></div>
-    <div class="grid2">
+    <div class="grid2 cmp-grid">
       <div class="card"><div class="card-h"><h3>Metrics</h3></div><div id="cmpTable" class="tablewrap"></div></div>
       <div class="card"><div class="card-h"><h3>Correlation of weekly returns</h3></div><div id="cmpCorr" class="tablewrap"></div></div>
     </div>
@@ -336,33 +336,54 @@
 
   <!-- SETTINGS -->
   <section id="view-settings" class="view hidden">
-    <div class="grid2">
-      <div class="card">
-        <div class="card-h"><h3>Factor weights</h3><span class="muted sm">Balanced = 20% each</span></div>
-        <div id="weightSliders"></div>
-        <button class="btn ghost sm" id="btnBalanced">Reset to balanced</button>
-      </div>
-      <div class="card">
-        <div class="card-h"><h3>General</h3></div>
-        <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
-          <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
+    <div class="grid2 settings-grid">
+      <div class="settings-col">
+        <div class="card">
+          <div class="card-h"><h3>General</h3></div>
+          <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
+            <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
+          </div>
+          <div class="form-row">
+            <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
+            <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
+            <label>Benchmark<input id="sBench"></label>
+          </div>
         </div>
-        <div class="form-row">
-          <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
-          <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
-          <label>Benchmark<input id="sBench"></label>
+        <div class="card">
+          <div class="card-h"><h3>Factor weights</h3><span class="muted sm">Balanced = 20% each</span></div>
+          <div id="weightSliders"></div>
+          <button class="btn ghost sm" id="btnBalanced">Reset to balanced</button>
         </div>
-        <h4>Target allocation (%)</h4>
-        <div class="form-row" id="targetInputs"></div>
-        <div class="form-row"><label>Core share of the portfolio %<input type="number" id="sCore" min="0" max="100" step="5"></label></div>
-        <h4>Dashboard tiles</h4>
-        <div id="tileChoices" class="tile-choices"></div>
-        <div class="form-row"><button class="btn" id="btnSaveSettings">Save settings</button><button class="btn ghost" id="btnClearCache">Refresh all data</button></div>
-        <div id="settingsMsg" class="muted sm"></div>
-        <h4>Backup</h4>
-        <p class="muted sm">Your holdings, journal, alerts, watchlist and settings exist only in this app's database file. Download a copy now and then. Restoring replaces everything currently in the app.</p>
-        <div class="form-row"><a class="btn ghost" id="btnBackup" href="/api/backup" download>Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
+        <div class="card">
+          <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
+          <h4>Asset classes (%)</h4>
+          <div class="form-row" id="targetInputs"></div>
+          <div class="form-row"><label>Core share of the portfolio %<input type="number" id="sCore" min="0" max="100" step="5"></label></div>
+        </div>
       </div>
+      <div class="settings-col">
+        <div class="card">
+          <div class="card-h"><h3>Dashboard tiles</h3><span class="muted sm">Tick the ones to show</span></div>
+          <div id="tileChoices" class="tile-choices"></div>
+          <div class="form-row">
+            <label>Custom tile: Yahoo symbol<input id="ctTicker" placeholder="e.g. ^AEX or IWDA.AS"></label>
+            <label class="grow">Name on the tile<input id="ctName" placeholder="optional, Yahoo's name if empty" maxlength="40"></label>
+            <button class="btn ghost" id="btnAddTile">Add tile</button>
+          </div>
+          <div id="ctMsg" class="muted sm"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Data</h3></div>
+          <p class="muted sm">Your holdings, journal, alerts, watchlist and settings exist only in this app's database file. Download a copy now and then. Restoring replaces everything currently in the app.</p>
+          <div class="form-row"><a class="btn ghost" id="btnBackup" href="/api/backup" download>Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
+          <p class="muted sm">Market data is kept for a while to stay fast. Refreshing makes every price and figure download again on its next use.</p>
+          <div class="form-row"><button class="btn ghost" id="btnClearCache">Refresh all data</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="savebar">
+      <button class="btn" id="btnSaveSettings">Save settings</button>
+      <span id="settingsMsg" class="muted sm">Theme, custom tiles and backups take effect straight away. Everything else is kept when you save.</span>
     </div>
   </section>
 </main>

@@ -44,6 +44,7 @@ DEFAULT_SETTINGS = {
     "targets": {"Stocks": 65, "ETFs": 30, "Crypto": 5},
     "benchmark": "SPY",
     "dashboard_tiles": DEFAULT_TILES,
+    "custom_tiles": [],  # [{"ticker", "name"}], each checked for price history when added
     "core_target": 80,
 }
 

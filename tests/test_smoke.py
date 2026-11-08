@@ -2088,6 +2088,64 @@ def test_buckets_are_in_backups():
     _reset()
 
 
+def test_custom_and_preset_tiles():
+    import pandas as pd
+
+    from backend.universe import DEFAULT_TILES
+    _reset()
+    one_day = pd.Series([100.0], index=pd.DatetimeIndex(["2026-06-01"]))
+    market = {"^AEX": _steps([0.001] * 300), "IWDA.AS": _steps([0.002] * 300), "^TASI.SR": one_day, "NOPE": None}
+    with TestClient(app) as c, _FakeMarket(market):
+        tiles = {t["ticker"]: t for t in c.get("/api/meta").json()["tiles"]}
+        # The two presets are offered, unticked, and named
+        assert tiles["VWCE.DE"]["name"] == "FTSE All-World (VWCE)" and tiles["ACWI"]["name"] == "MSCI ACWI (USD)"
+        assert not tiles["ACWI"]["custom"] and "ACWI" not in DEFAULT_TILES and "VWCE.DE" not in DEFAULT_TILES
+
+        # A custom tile is saved only after Yahoo returns a price history for it, and goes straight onto the dashboard
+        r = c.post("/api/tiles", json={"ticker": " ^aex ", "name": "  Amsterdam AEX  "})
+        assert r.status_code == 200, r.text
+        saved = r.json()["settings"]
+        assert saved["custom_tiles"] == [{"ticker": "^AEX", "name": "Amsterdam AEX"}] and saved["dashboard_tiles"][-1] == "^AEX"
+        assert {"ticker": "^AEX", "name": "Amsterdam AEX", "custom": True} in r.json()["tiles"]
+        macro = {m["ticker"]: m for m in c.get("/api/macro").json()}
+        assert macro["^AEX"]["name"] == "Amsterdam AEX" and len(macro["^AEX"]["spark"]) == 60
+        # With no name given, Yahoo's name is used
+        assert c.post("/api/tiles", json={"ticker": "IWDA.AS"}).json()["settings"]["custom_tiles"][1] == {"ticker": "IWDA.AS", "name": "IWDA.AS"}
+
+        # Refused: no history, a single day (the Gulf index case), a preset, a duplicate, junk
+        for body, why in (({"ticker": "NOPE"}, "no price history"), ({"ticker": "^TASI.SR"}, "only returns 1 day"),
+                          ({"ticker": "ACWI"}, "already in the list"), ({"ticker": "^aex"}, "already have"),
+                          ({"ticker": ""}, "Enter a ticker"), ({"ticker": "A, B"}, "single Yahoo symbol")):
+            r = c.post("/api/tiles", json=body)
+            assert r.status_code == 400 and why in r.json()["detail"], (body, r.text)
+        assert len(c.get("/api/settings").json()["custom_tiles"]) == 2, "nothing refused was stored"
+
+        # Ticking and unticking works for custom tiles like any other; settings can't add unchecked ones
+        assert c.post("/api/settings", json={"dashboard_tiles": ["^AEX", "ACWI", "GONE"]}).json()["dashboard_tiles"] == ["ACWI", "^AEX"]
+        c.post("/api/settings", json={"custom_tiles": [{"ticker": "SNEAKY", "name": "x"}]})
+        assert [t["ticker"] for t in c.get("/api/settings").json()["custom_tiles"]] == ["^AEX", "IWDA.AS"]
+
+        # Kept in backups, with the rest of the settings
+        backup = c.get("/api/backup").json()
+        assert backup["settings"]["custom_tiles"][0]["ticker"] == "^AEX"
+
+        # Removing one takes it off the dashboard too
+        r = c.delete("/api/tiles/%5EAEX")
+        assert r.status_code == 200 and [t["ticker"] for t in r.json()["settings"]["custom_tiles"]] == ["IWDA.AS"]
+        assert "^AEX" not in r.json()["settings"]["dashboard_tiles"] and "^AEX" not in {m["ticker"] for m in c.get("/api/macro").json()}
+        assert c.delete("/api/tiles/%5EAEX").status_code == 404 and c.delete("/api/tiles/ACWI").status_code == 404, "presets can't be removed"
+
+        assert c.post("/api/backup/restore", json=backup).status_code == 200
+        assert [t["ticker"] for t in c.get("/api/settings").json()["custom_tiles"]] == ["^AEX", "IWDA.AS"]
+
+        # There's a limit, so the dashboard can't be flooded
+        for i in range(10):
+            market[f"T{i}"] = market["^AEX"]
+            assert c.post("/api/tiles", json={"ticker": f"T{i}"}).status_code == 200
+        assert "up to 12" in c.post("/api/tiles", json={"ticker": "IWDA.AS2"}).json()["detail"]
+    _reset()
+
+
 def test_minor_unit_currencies():
     """Kuwaiti prices are in fils, 1/1000 of a dinar. 870 fils is 0.87 KWD."""
     from backend import data

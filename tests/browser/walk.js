@@ -15,7 +15,8 @@ const SLOW = 150000;
   const errs = [], http = [], expected404 = /NOSUCHTICKER|stock\/VWCE\?/;
   p.on("pageerror", (e) => errs.push(e.message));
   p.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) errs.push("console: " + m.text()); });
-  p.on("response", (r) => { const u = r.url(); if (u.startsWith(BASE) && r.status() >= 400 && !u.endsWith("favicon.ico") && !expected404.test(u)) http.push(`${r.status()} ${u.replace(BASE, "/")}`); });
+  let refusalExpected = null; // a step that provokes an error on purpose names the request here
+  p.on("response", (r) => { const u = r.url(); if (u.startsWith(BASE) && r.status() >= 400 && !u.endsWith("favicon.ico") && !expected404.test(u) && !(refusalExpected && refusalExpected.test(u))) http.push(`${r.status()} ${u.replace(BASE, "/")}`); });
   let dialogAnswer = null;
   p.on("dialog", (d) => (d.type() === "prompt" ? d.accept(dialogAnswer ?? "") : d.accept()));
   const nav = async (v) => { await p.click(`[data-view="${v}"]`); await p.waitForTimeout(350); };
@@ -81,6 +82,11 @@ const SLOW = 150000;
   expect("research: 1D shows candles within the day, without the daily indicators", intra.n > 0 && intra.panes && (await p.locator("#priceChart canvas").count()) > 0, JSON.stringify(intra));
   await p.locator("#periodSeg button[data-p='1y']").click(); await p.waitForFunction(() => document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
   for (const id of ["#tSma", "#tBb", "#tVol"]) { await p.click(id); await p.waitForTimeout(120); }
+  // Each factor explains itself on hover, and the icon doesn't open the drill-down
+  await p.locator("#factorList .info").nth(3).hover(); await p.waitForTimeout(150);
+  const factorTip = await p.evaluate(() => ({ n: document.querySelectorAll("#factorList .info").length, tip: document.querySelector("#tooltip:not(.hidden)")?.textContent || "", open: document.querySelectorAll(".factor.open").length }));
+  expect("research: factor info on hover", factorTip.n === 5 && /^Momentum: .*200-day/.test(factorTip.tip) && factorTip.open === 0, factorTip.tip.slice(0, 60));
+  await p.mouse.move(0, 0);
   await p.locator(".factor .fh").first().click(); await p.waitForTimeout(100);
   expect("research: factor drill-down shows thresholds", /0 at 40, 100 at 10/.test(await txt(".factor.open .parts")), (await txt(".factor.open .parts"))?.slice(0, 90));
   expect("research: radar drawn", await canvasDrawn("#radar"));
@@ -107,6 +113,11 @@ const SLOW = 150000;
   await p.waitForFunction(() => !document.querySelector("#btnCompare").disabled, null, { timeout: SLOW }); await p.waitForTimeout(500);
   expect("compare: table and correlation", (await p.locator("#cmpTable tbody tr").count()) === 4 && (await p.locator("#cmpCorr table tr").count()) === 5);
   expect("compare: chart drawn", await canvasDrawn("#cmpChart"));
+  const cmpLayout = await p.evaluate(() => {
+    const t = document.querySelector("#cmpTable"), a = t.closest(".card").getBoundingClientRect(), b = document.querySelector("#cmpCorr").closest(".card").getBoundingClientRect();
+    return { stacked: b.top >= a.bottom - 1, fullWidth: Math.abs(a.width - b.width) < 1, scroll: t.scrollWidth - t.clientWidth };
+  });
+  expect("compare: metrics and correlation stack, full width, no sideways scroll", cmpLayout.stacked && cmpLayout.fullWidth && cmpLayout.scroll <= 0, JSON.stringify(cmpLayout));
   await shot("compare");
 
   // ---- Screener
@@ -124,7 +135,9 @@ const SLOW = 150000;
   const width = await p.evaluate(() => { const t = document.querySelector("#scrTable"); return [t.clientWidth, t.scrollWidth]; });
   expect("screener: Score and Stance on screen at 1440px", width[1] <= width[0], width.join("/"));
   await shot("screener");
-  await p.fill("#scrQuery", "cheap profitable dividend stocks in the gulf"); await p.click("#btnScrQuery");
+  await p.fill("#scrQuery", ""); await p.locator("#scrQuery").pressSequentially("cheap profitable dividend stocks in the gulf");
+  expect("screener: you can type in the question box", (await p.inputValue("#scrQuery")) === "cheap profitable dividend stocks in the gulf", await p.inputValue("#scrQuery"));
+  await p.press("#scrQuery", "Enter");
   await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: SLOW }); await p.waitForTimeout(400);
   expect("screener: plain-language query", /Gulf/.test(await txt("#scrInfo")), await txt("#scrInfo"));
   if (await p.locator("#scrTable tbody tr").count()) { await p.locator("#scrTable tbody tr").first().click(); await p.waitForTimeout(700); expect("screener: row opens Research", (await p.evaluate(() => location.hash)).startsWith("#research")); }
@@ -233,6 +246,23 @@ const SLOW = 150000;
   await nav("settings");
   await p.evaluate((d) => $$("[data-tile]").forEach((i) => { i.checked = d.includes(i.dataset.tile); }), defaults);
   await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  await p.locator("#ctTicker").pressSequentially("^AEX"); await p.locator("#ctName").pressSequentially("Amsterdam");
+  await p.press("#ctName", "Enter");
+  await p.waitForFunction(() => /Added|Yahoo/.test(document.querySelector("#ctMsg").textContent) && !document.querySelector("#btnAddTile").disabled, null, { timeout: SLOW });
+  const aex = await p.evaluate(() => ({ msg: document.querySelector("#ctMsg").textContent, ticked: document.querySelector('[data-tile="^AEX"]')?.checked, rm: !!document.querySelector('[data-rmtile="^AEX"]') }));
+  expect("settings: custom tile added after the history check", /Added "Amsterdam"/.test(aex.msg) && aex.ticked && aex.rm, JSON.stringify(aex));
+  await nav("dashboard"); await p.waitForFunction(() => document.querySelector('#macroStrip [data-stock="^AEX"]'), null, { timeout: SLOW });
+  expect("dashboard: custom tile shown", /Amsterdam/.test(await txt('#macroStrip [data-stock="^AEX"]')), await txt('#macroStrip [data-stock="^AEX"]'));
+  await nav("settings");
+  if (MODE === "live") { // demo mode invents prices for any symbol, so only live data can refuse one
+    refusalExpected = /\/api\/tiles$/;
+    await p.locator("#ctTicker").pressSequentially("NOSUCHTICKER"); await p.click("#btnAddTile");
+    await p.waitForFunction(() => !document.querySelector("#btnAddTile").disabled && !/Checking/.test(document.querySelector("#ctMsg").textContent), null, { timeout: SLOW });
+    expect("settings: a symbol without history is refused", /no price history/.test(await txt("#ctMsg")), await txt("#ctMsg"));
+    refusalExpected = null; await p.fill("#ctTicker", "");
+  }
+  await p.click('[data-rmtile="^AEX"]'); await p.waitForFunction(() => !document.querySelector('[data-tile="^AEX"]'), null, { timeout: SLOW });
+  expect("settings: custom tile removed", !(await p.evaluate(() => state.meta.settings.dashboard_tiles.includes("^AEX") || state.meta.settings.custom_tiles.length)));
   expect("settings: tiles restored", (await p.evaluate(() => state.meta.settings.dashboard_tiles.length)) === defaults.length && defaults.length >= 10, defaults.length);
   // Light theme: chosen in Settings, followed by the open Research charts, kept after a reload
   const bg = () => p.evaluate(() => getComputedStyle(document.body).backgroundColor);

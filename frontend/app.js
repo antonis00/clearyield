@@ -45,6 +45,16 @@ const bar = (s) => `<div class="bar"><i style="width:${isNum(s) ? s : 0}%;backgr
 function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.classList.remove("hidden"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), ms); }
 const missingNote = (p) => `<b>Incomplete:</b> no current data for ${esc(p.missing.join(", "))}, so these totals leave ${p.missing.length > 1 ? "them" : "it"} out and weights and rebalancing are withheld. Check the symbol, or try again later.`;
 const loading = (el, msg = "Loading…") => { el.innerHTML = `<div class="muted"><span class="spinner"></span>${msg}</div>`; };
+const FACTOR_INFO = {
+  value: "Value: is the price cheap for what the company earns and owns? From P/E, forward P/E, price/book, EV/EBITDA and free-cash-flow yield. A higher score means cheaper. Stocks only.",
+  quality: "Quality: how profitable and financially sound the business is. From return on equity, operating and net margins, debt/equity and the current ratio. A higher score means a stronger business. Stocks only.",
+  growth: "Growth: how fast the business is growing. From revenue and earnings growth over the past year, and forecast against trailing earnings per share. A higher score means faster growth. Stocks only.",
+  momentum: "Momentum: how the price has been trending. From the 12-month return leaving out the last month, the price against its 200-day average, and the 3-month return. A higher score means a stronger trend. All assets.",
+  risk: "Risk: how bumpy the ride has been. From 1-year volatility and the largest fall from a peak in the past year, plus beta for stocks. A higher score means lower risk. All assets; crypto is judged on a looser scale.",
+};
+// A small "i" that explains something on hover or keyboard focus; the text is shown by the floating tooltip below
+const infoIcon = (text) => `<span class="info" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
+const factorInfo = (name) => infoIcon(FACTOR_INFO[name]);
 function mkChart(id, cfg) { state.charts[id]?.destroy(); const ctx = document.getElementById(id); state.charts[id] = new Chart(ctx, cfg); return state.charts[id]; }
 
 /* Generic sortable table. cols: {k,label,fmt(v,row),num,sort} */
@@ -56,7 +66,7 @@ function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
     if (sortK) data.sort((a, b) => { const x = a[sortK], y = b[sortK]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
     el.innerHTML = `<table><thead><tr>${cols.map((c) => `<th class="${c.num ? "num" : ""}" data-k="${c.k}">${c.label}${sortK === c.k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>
       <tbody>${data.map((r, i) => `<tr class="${stock ? "click" : ""}" data-i="${rows.indexOf(r)}"${stock ? ` data-stock="${esc(stock(r))}"` : ""}>${cols.map((c) => `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-    $$("th", el).forEach((th) => th.onclick = () => { const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } draw(); });
+    $$("th", el).forEach((th) => th.onclick = (e) => { if (e.target.closest(".info")) return; const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } draw(); });
     after();
   };
   draw();
@@ -362,9 +372,9 @@ function renderFactors(s) {
     data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: tint("--accent", "33"), borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
-  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "n/a"}</span></div>${bar(f[n])}
+  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "n/a"}</span></div>${bar(f[n])}
     <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}">${isNum(p.score) ? num(p.score, 0) : "n/a"}</span></div>`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
-  $$(".factor .fh").forEach((h) => h.onclick = () => h.parentElement.classList.toggle("open"));
+  $$(".factor .fh").forEach((h) => h.onclick = (e) => { if (!e.target.closest(".info")) h.parentElement.classList.toggle("open"); });
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
 }
 function renderStats(s) {
@@ -550,9 +560,9 @@ async function runScreen(body) {
       { k: "price", label: "Price", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
       { k: "revGrowth", label: "Rev g.", num: 1, fmt: (v) => cpct(v) }, { k: "roe", label: "ROE", num: 1, fmt: (v) => pct(v, 0, false) },
-      { k: "f_value", label: "Val", num: 1, fmt: (v) => num(v, 0) }, { k: "f_quality", label: "Qual", num: 1, fmt: (v) => num(v, 0) },
-      { k: "f_growth", label: "Grow", num: 1, fmt: (v) => num(v, 0) }, { k: "f_momentum", label: "Mom", num: 1, fmt: (v) => num(v, 0) },
-      { k: "f_risk", label: "Risk", num: 1, fmt: (v) => num(v, 0) }, { k: "composite", label: "Score", num: 1, fmt: (v) => `<b>${num(v, 0)}</b>` },
+      { k: "f_value", label: `Val ${factorInfo("value")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "f_quality", label: `Qual ${factorInfo("quality")}`, num: 1, fmt: (v) => num(v, 0) },
+      { k: "f_growth", label: `Grow ${factorInfo("growth")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "f_momentum", label: `Mom ${factorInfo("momentum")}`, num: 1, fmt: (v) => num(v, 0) },
+      { k: "f_risk", label: `Risk ${factorInfo("risk")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "composite", label: "Score", num: 1, fmt: (v) => `<b>${num(v, 0)}</b>` },
       { k: "stance", label: "Stance", fmt: (v, r) => `${badge(v)}${r.scoredOn !== "All factors" ? `<span class="sub">${esc(r.scoredOn)}</span>` : ""}` },
     ], d.rows, { stock: (r) => r.ticker, empty: "No matches — loosen the filters." });
   } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; } finally { $$("#btnScr,#btnScrQuery").forEach((b) => b.disabled = false); }
@@ -560,7 +570,7 @@ async function runScreen(body) {
 const selectedMarkets = () => $$("#scrMarkets input:checked").map((i) => i.value);
 $("#btnScr").onclick = () => (selectedMarkets().length ? runScreen({ markets: selectedMarkets(), filters: screenerFilters() }) : toast("Tick at least one market."));
 $("#btnScrQuery").onclick = () => $("#scrQuery").value.trim() && runScreen({ markets: selectedMarkets(), query: $("#scrQuery").value });
-$("#scrQuery").onkeydown = (e) => e.key === "Enter" && $("#btnScrQuery").click();
+$("#scrQuery").onkeydown = (e) => { if (e.key === "Enter") $("#btnScrQuery").click(); };
 
 /* ---------------------------------------------------------------- portfolio */
 async function loadPortfolio() {
@@ -777,14 +787,44 @@ $("#btnNotify").onclick = async () => {
 /* ---------------------------------------------------------------- settings */
 function loadSettings() {
   const s = state.meta.settings;
-  $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${k}</label><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-w="${k}"><span>${Math.round(v * 100)}%</span></div>`).join("");
+  $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${k} ${factorInfo(k)}</label><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-w="${k}"><span>${Math.round(v * 100)}%</span></div>`).join("");
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${k}<input type="number" data-tgt="${k}" value="${v}"></label>`).join("");
   $("#sCore").value = s.core_target;
-  const shown = new Set(s.dashboard_tiles);
-  $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label><input type="checkbox" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}</label>`).join("");
+  renderTileChoices(new Set(s.dashboard_tiles));
 }
+// Ticks you haven't saved yet are kept when a custom tile is added or removed
+function renderTileChoices(shown) {
+  $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label title="${esc(t.ticker)}"><input type="checkbox" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}${t.custom ? ` <button class="rm" data-rmtile="${esc(t.ticker)}" title="Remove this custom tile">×</button>` : ""}</label>`).join("");
+  $$("[data-rmtile]").forEach((b) => b.onclick = async (e) => {
+    e.preventDefault(); // inside a label: don't tick the box
+    const ticked = new Set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile));
+    try { tilesChanged(await api(`/api/tiles/${encodeURIComponent(b.dataset.rmtile)}`, { method: "DELETE" }), ticked); toast("Tile removed"); }
+    catch (err) { toast(err.message); }
+  });
+}
+function tilesChanged(r, ticked) {
+  state.meta.tiles = r.tiles;
+  state.meta.settings.custom_tiles = r.settings.custom_tiles; state.meta.settings.dashboard_tiles = r.settings.dashboard_tiles;
+  const known = new Set(r.tiles.map((t) => t.ticker));
+  renderTileChoices(new Set([...ticked].filter((t) => known.has(t)))); // a removed tile drops out; a new one arrives ticked
+}
+$("#btnAddTile").onclick = async () => {
+  const ticker = $("#ctTicker").value.trim();
+  if (!ticker) return toast("Enter a Yahoo symbol.");
+  const btn = $("#btnAddTile"), ticked = new Set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile));
+  btn.disabled = true; $("#ctMsg").textContent = `Checking ${ticker.toUpperCase()} on Yahoo…`;
+  try {
+    const r = await api("/api/tiles", { method: "POST", body: { ticker, name: $("#ctName").value } });
+    const added = r.tiles.find((t) => t.custom && !state.meta.tiles.some((x) => x.ticker === t.ticker));
+    tilesChanged(r, new Set([...ticked, ...(added ? [added.ticker] : [])]));
+    $("#ctTicker").value = ""; $("#ctName").value = "";
+    $("#ctMsg").textContent = added ? `Added "${added.name}". It's on the dashboard now.` : "";
+  } catch (err) { $("#ctMsg").textContent = err.message; }
+  finally { btn.disabled = false; }
+};
+["#ctTicker", "#ctName"].forEach((id) => $(id).onkeydown = (e) => { if (e.key === "Enter") $("#btnAddTile").click(); });
 $("#btnBalanced").onclick = () => $$("[data-w]").forEach((r) => { r.value = 20; r.nextElementSibling.textContent = "20%"; });
 function renderModeBadge() {
   const m = state.meta;
@@ -819,6 +859,33 @@ $("#restoreFile").onchange = async (e) => {
   try { await api("/api/backup/restore", { method: "POST", body: backup }); toast("Backup restored"); setTimeout(() => location.reload(), 600); }
   catch (err) { toast(err.message); }
 };
+
+/* ---------------------------------------------------------------- info tooltips */
+(() => {
+  const tip = document.createElement("div");
+  tip.id = "tooltip"; tip.setAttribute("role", "tooltip"); tip.className = "hidden";
+  document.body.appendChild(tip);
+  let current = null;
+  const show = (el) => {
+    current = el; tip.textContent = el.dataset.tip; tip.classList.remove("hidden");
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
+    const below = r.bottom + 8 + h < innerHeight;
+    tip.style.left = `${left}px`; tip.style.top = `${below ? r.bottom + 8 : r.top - h - 8}px`;
+  };
+  const hide = () => { current = null; tip.classList.add("hidden"); };
+  document.addEventListener("mouseover", (e) => { const el = e.target.closest("[data-tip]"); if (el) show(el); });
+  document.addEventListener("mouseout", (e) => { if (e.target.closest("[data-tip]") && !e.relatedTarget?.closest?.("[data-tip]")) hide(); });
+  document.addEventListener("focusin", (e) => { if (e.target.matches?.("[data-tip]")) show(e.target); });
+  document.addEventListener("focusout", (e) => { if (e.target.matches?.("[data-tip]")) hide(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+  // While scrolling, the tip follows its icon, and goes once the icon is off screen or gone
+  addEventListener("scroll", () => {
+    if (!current) return;
+    const r = current.getBoundingClientRect();
+    if (!current.isConnected || r.bottom < 0 || r.top > innerHeight) hide(); else show(current);
+  }, true);
+})();
 
 /* ---------------------------------------------------------------- theme */
 // Dark, light, or whatever the computer uses. The page's colours follow at once; charts are redrawn with the new ones.
