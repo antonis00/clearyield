@@ -1,9 +1,15 @@
+/* The dark theme: near-black, from the sidebar (deepest) up to raised panels */
 :root {
   --bg: #0d1117; --panel: #141a23; --panel2: #1a2230; --line: #243042; --text: #e6edf3; --muted: #8b98a9;
   --accent: #f2b84b; --accent2: #4fb3bf; --up: #3fb68b; --down: #ef5b5b; --neutral: #9aa7b8;
-  --side: #0a0e14; --rowline: var(--rowline); --grid: #1b2433; --violet: #a78bfa; --on-accent: #1b1300;
+  --side: #0a0e14; --rowline: #1d2633; --grid: #1b2433; --violet: #a78bfa; --on-accent: #1b1300;
   color-scheme: dark;
   --mono: "IBM Plex Mono", ui-monospace, monospace; --sans: "IBM Plex Sans", system-ui, sans-serif;
+}
+/* The navy theme: the same roles in very dark blue; the accents are the dark theme's */
+:root[data-theme="navy"] {
+  --bg: #091430; --panel: #0e1b3d; --panel2: #14244b; --line: #22355f; --muted: #8fa0bd;
+  --side: #060d22; --rowline: #1a2b52; --grid: #172a52;
 }
 /* The light theme: the same roles, with darker accents so they read on white */
 :root[data-theme="light"] {
