@@ -21,6 +21,10 @@ UNIVERSE = {
         "TTE.PA": "TotalEnergies", "ULVR.L": "Unilever", "ALV.DE": "Allianz", "SAN.MC": "Banco Santander",
         "AIR.PA": "Airbus", "HSBA.L": "HSBC", "BMW.DE": "BMW", "ENEL.MI": "Enel", "RMS.PA": "Hermes",
         "IBE.MC": "Iberdrola",
+        # Banks and insurers, so a screen for European financials has more than a handful to choose from
+        "BNP.PA": "BNP Paribas", "INGA.AS": "ING", "UCG.MI": "UniCredit", "ISP.MI": "Intesa Sanpaolo", "BBVA.MC": "BBVA",
+        "DBK.DE": "Deutsche Bank", "BARC.L": "Barclays", "LLOY.L": "Lloyds", "UBSG.SW": "UBS", "NDA-FI.HE": "Nordea",
+        "CS.PA": "AXA", "ZURN.SW": "Zurich Insurance", "MUV2.DE": "Munich Re",
     },
     "Gulf": {
         "QNBK.QA": "QNB", "IQCD.QA": "Industries Qatar", "QIBK.QA": "Qatar Islamic Bank",

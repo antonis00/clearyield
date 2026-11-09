@@ -148,9 +148,11 @@ def signals(info, close):
         if tgt and n >= 3:
             up = tgt / price - 1
             add(1 if up > 0.10 else (-1 if up < -0.05 else 0), f"Analyst mean target implies {up:+.0%} ({n} analysts).")
-        if (g("freeCashflow") or 0) < 0:
+        # A bank's cash flow follows its deposits and loans, and its debt is what it lends from: neither is a warning
+        bank = "bank" in (info.get("industry") or "").lower()
+        if (g("freeCashflow") or 0) < 0 and not bank:
             add(-1, "Negative free cash flow: the business is consuming cash.")
-        if (g("debtToEquity") or 0) > 2:
+        if (g("debtToEquity") or 0) > 2 and not bank:
             add(-1, f"High leverage: debt/equity {g('debtToEquity'):.1f}x.")
         if (g("profitMargins") or 0) < 0:
             add(-1, "Currently unprofitable (negative net margin).")

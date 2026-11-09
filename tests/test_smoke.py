@@ -917,7 +917,7 @@ def test_plain_language_parser_reads_what_was_written():
         assert p(q).get("max_pe") == 15.0, q
     # Yield and growth are separate things, and dividend growth is neither
     assert p("yield above 4%") == {"min_div_yield": 0.04}
-    assert p("revenue growth above 20%") == {"min_rev_growth": 0.20}
+    assert p("revenue growth above 20%") == {"min_rev_growth": 0.20, "sort": "growth"}
     dg = p("dividend growth above 5%")
     assert "min_div_yield" not in dg and "min_rev_growth" not in dg and "dividend" in dg["ignored"] and "growth" in dg["ignored"]
     # Negation isn't silently read as the opposite
@@ -927,7 +927,7 @@ def test_plain_language_parser_reads_what_was_written():
     assert "min_roe" not in p("not profitable")
     # Sectors
     assert p("tech stocks") == {"sector": "Technology"}
-    assert p("gulf banks") == {"markets": ["Gulf"], "sector": "Financial Services"}
+    assert p("gulf banks") == {"markets": ["Gulf"], "sector": "Financial Services", "industry": "Banks"}
     # Anything else is reported rather than dropped without a word
     assert p("large cap stocks")["ignored"] == ["large", "cap"]
     assert p("low risk")["max_vol"] == 0.25
@@ -1873,6 +1873,37 @@ def test_digest_covers_portfolio_markets_and_headlines():
     assert not any("concentration" in t or "diversification is limited" in t for t in texts), texts
 
 
+def test_screening_banks():
+    from backend import ai, db, insights
+    _reset()
+    # "Banks" is the bank industry; "financials" the whole sector, insurers included
+    assert ai._parse_rules("european banks with low debt") == {"markets": ["Europe"], "sector": "Financial Services", "industry": "Banks", "max_de": 0.5}
+    assert "industry" not in ai._parse_rules("european financials") and "ignored" not in ai._parse_rules("banking stocks")
+    # A sector or banks ruled out; "no debt" still means low debt; "show us" is the pronoun, "US tech stocks" the market
+    assert ai._parse_rules("safe dividend stocks, not tech") == {"exclude_sector": "Technology", "min_div_yield": 0.025, "sort": "divYield", "max_vol": 0.25}
+    assert ai._parse_rules("european stocks excluding banks") == {"exclude_industry": "Banks", "markets": ["Europe"]}
+    assert ai._parse_rules("cheap stocks with no debt")["max_de"] == 0.5 and "markets" not in ai._parse_rules("show us cheap stocks")
+    assert ai._parse_rules("us tech stocks with strong momentum") == {"markets": ["US"], "sector": "Technology", "min_momentum": 60, "sort": "momentum"}
+    assert ai._parse_rules("revenue growth above 20%") == {"min_rev_growth": 0.2, "sort": "growth"}
+    # A bank's free cash flow and debt aren't given to the model as if they meant something
+    bank = ai.brief_data({"ticker": "B", "info": {"name": "B", "industry": "Banks - Regional", "debtToEquity": 3.0, "freeCashflow": -5e9, "returnOnEquity": 0.15},
+                          "stats": {}, "scores": {"factors": {}, "signals": []}, "financials": [{"year": "2025", "revenue": 1e9, "netIncome": 2e8, "fcf": -3e9}], "news": []})
+    assert "Note on banks" in bank and "Free cash flow" not in str(bank["Annual accounts, oldest first"]) and "Debt to equity" not in str(bank), bank
+    flat = _steps([0.001] * 300)
+    infos = {"BANK.X": {"sector": "Financial Services", "industry": "Banks - Regional", "debtToEquity": None, "trailingPE": 9.0},
+             "INSU.X": {"sector": "Financial Services", "industry": "Insurance - Diversified", "debtToEquity": 0.3, "trailingPE": 12.0},
+             "BIGD.X": {"sector": "Financial Services", "industry": "Insurance - Life", "debtToEquity": 1.2, "trailingPE": 10.0},
+             "TECH.X": {"sector": "Technology", "industry": "Software", "debtToEquity": 0.1, "trailingPE": 20.0}}
+    with _FakeMarket({t: flat for t in infos}, infos):
+        screen = lambda q: insights.screen({"filters": ai._parse_rules(q), "extra": list(infos), "markets": []}, db.get_settings())
+        banks = screen("banks with low debt")
+        fin = screen("financials with low debt")
+    # A bank has no meaningful debt/equity, so the limit is set aside for it, and the screen says so
+    assert [r["ticker"] for r in banks["rows"]] == ["BANK.X"] and "wasn't applied to 1 bank:" in banks["notes"][0], banks["notes"]
+    assert sorted(r["ticker"] for r in fin["rows"]) == ["BANK.X", "INSU.X"], [r["ticker"] for r in fin["rows"]]
+    _reset()
+
+
 def test_quote_for_the_portfolio_form():
     from fastapi.testclient import TestClient
 
@@ -2560,10 +2591,15 @@ def test_ai_providers():
         with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"):
             llm.seen.clear()
             llm.replies = [_chat('<think>gulf means Gulf</think>Here you go:\n```json\n{"markets": ["gulf"], "max_pe": "15", "min_div_yield": 3, "colour": "blue"}\n```')]
-            # The model's values win where it gave one; what only the keyword rules caught (here the dividend sort) is kept
+            # The rules' values stand (a number typed, or a word's defined meaning: "cheap" is P/E 18); the model's own
+            # stricter limits don't replace them, and it's told what the words mean here
             rules = ai._parse_rules("cheap gulf dividend payers")
-            assert ai.parse_query("cheap gulf dividend payers") == {**rules, "max_pe": 15.0, "min_div_yield": 0.03, "markets": ["Gulf"]}
-            assert len(llm.seen) == 1
+            assert ai.parse_query("cheap gulf dividend payers") == {k: v for k, v in rules.items() if k != "ignored"}
+            assert len(llm.seen) == 1 and "low volatility/low risk/safe/defensive: max_vol 0.25" in llm.seen[0][2]["messages"][1]["content"]
+            # The model fills what the rules couldn't read; a sector it only rules out narrowly stays narrow
+            llm.replies = [_chat('{"markets": ["Europe"], "max_vol": 0.1, "exclude_sector": "Financial Services"}')]
+            got = ai.parse_query("safe stocks on the continent excluding banks")
+            assert got["markets"] == ["Europe"] and got["max_vol"] == 0.25 and got["exclude_industry"] == "Banks" and "exclude_sector" not in got, got
             # Unreadable once: asked again, and the second answer is used
             llm.seen.clear()
             llm.replies = [_chat("I think you want Gulf stocks!"), _chat('{"markets": ["US"], "sort": "growth"}')]

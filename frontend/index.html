@@ -59,7 +59,7 @@
         <div id="dashExtras"></div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>Today's digest <span id="digestInfo"></span></h3><div class="form-row inline"><div class="seg" id="digestTabs"><button data-tab="mine">Mine</button><button data-tab="news">News</button></div><button class="btn ghost sm" id="refreshDigest">Refresh</button></div></div>
+        <div class="card-h"><h3>Today's digest <span id="digestInfo"></span></h3><div class="form-row inline"><div class="seg" id="digestTabs"><button data-tab="highlights">Highlights</button><button data-tab="news">News</button></div><button class="btn ghost sm" id="refreshDigest">Refresh</button></div></div>
         <ul id="digestList" class="digest"></ul>
       </div>
     </div>
@@ -146,15 +146,15 @@
 
       <div class="grid2">
         <div class="card"><div class="card-h"><h3>Key statistics</h3></div><div id="statGrid" class="statgrid"></div><div id="rEarnings"></div></div>
-        <div class="card">
+        <div class="card" id="finCard">
           <div class="card-h"><h3>Fundamentals trend</h3></div>
           <canvas id="finChart" height="220"></canvas>
-          <div id="finEmpty" class="muted sm hidden">No annual statements for this asset.</div>
+          <div id="finEmpty" class="muted sm hidden">Yahoo has no annual statements for this company.</div>
         </div>
       </div>
 
       <div class="grid2">
-        <div class="card">
+        <div class="card" id="dcfCard">
           <div class="card-h"><h3>DCF valuation</h3><span class="muted sm">Free-cash-flow model</span></div>
           <div class="form-row">
             <label>Growth %<input type="number" id="dGrowth" step="0.5"></label>

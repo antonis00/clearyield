@@ -679,7 +679,7 @@ def _demo_info(ticker):
         rev = mcap * rng.uniform(0.15, 1.5)
         margin = rng.uniform(-0.05, 0.35)
         d.update({
-            "sector": SECTORS[_seed(ticker) % len(SECTORS)], "industry": "Demo industry",
+            "sector": SECTORS[_seed(ticker) % len(SECTORS)], "industry": "Banks - Diversified" if SECTORS[_seed(ticker) % len(SECTORS)] == "Financial Services" else "Demo industry",
             "marketCap": mcap, "sharesOutstanding": shares, "totalRevenue": rev,
             "trailingPE": mcap / (rev * margin) if margin > 0.01 else None,
             "forwardPE": rng.uniform(8, 40), "priceToBook": rng.uniform(0.8, 14), "enterpriseToEbitda": rng.uniform(5, 30),

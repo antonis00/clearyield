@@ -48,7 +48,7 @@ def _quick_row(t, settings):
     c = full["Close"]
     return {
         "ticker": t, "name": inf.get("name"), "region": inf.get("region"), "assetClass": inf.get("assetClass"),
-        "sector": inf.get("sector"), "currency": inf.get("currency"), "priceUnit": inf.get("priceUnit"), "price": float(c.iloc[-1]),
+        "sector": inf.get("sector"), "industry": inf.get("industry"), "currency": inf.get("currency"), "priceUnit": inf.get("priceUnit"), "price": float(c.iloc[-1]),
         "day": ind.ret_over(c, 1), "ret1m": ind.ret_over(c, 21), "ret1y": ind.ret_over(c, 252),
         "pe": inf.get("trailingPE"), "pb": inf.get("priceToBook"), "divYield": inf.get("dividendYield"),
         "revGrowth": inf.get("revenueGrowth"), "roe": inf.get("returnOnEquity"), "de": inf.get("debtToEquity"),
@@ -71,6 +71,8 @@ def screen(body, settings):
     rows = rows_for(list(dict.fromkeys(tickers)), settings)
     ok, failed = [r for r in rows if "error" not in r], [r["ticker"] for r in rows if "error" in r]
 
+    debt_skipped = []
+
     def keep(r):
         def lt(v, lim):
             return lim is None or (v is not None and v <= lim)
@@ -79,8 +81,20 @@ def screen(body, settings):
             return lim is None or (v is not None and v >= lim)
         if f.get("sector") and r.get("sector") != f["sector"]:
             return False
+        if f.get("industry") and f["industry"].lower() not in (r.get("industry") or "").lower():
+            return False
+        if f.get("exclude_sector") and r.get("sector") == f["exclude_sector"]:
+            return False
+        if f.get("exclude_industry") and f["exclude_industry"].lower() in (r.get("industry") or "").lower():
+            return False
+        # Debt/equity says nothing about a bank, whose deposits and borrowing are its raw material (and Yahoo gives
+        # none for most), so a debt limit is set aside for banks and the screen says so
+        de_limit = f.get("max_de")
+        if de_limit is not None and "bank" in (r.get("industry") or "").lower():
+            de_limit = None
+            debt_skipped.append(r["ticker"])
         return (lt(r["pe"] if (r["pe"] or 0) > 0 else None, f.get("max_pe")) and gt(r["divYield"], f.get("min_div_yield"))
-                and gt(r["revGrowth"], f.get("min_rev_growth")) and lt(r["de"], f.get("max_de")) and gt(r["roe"], f.get("min_roe"))
+                and gt(r["revGrowth"], f.get("min_rev_growth")) and lt(r["de"], de_limit) and gt(r["roe"], f.get("min_roe"))
                 and gt(r["composite"], f.get("min_score")) and gt(r.get("f_momentum"), f.get("min_momentum"))
                 and lt(r["vol"], f.get("max_vol")))
 
@@ -91,7 +105,10 @@ def screen(body, settings):
     if key == "composite":  # ETFs and crypto have no value, quality or growth score, so each class ranks on its own
         order = ["Stocks", "ETFs", "Crypto"]
         out.sort(key=lambda r: order.index(r["assetClass"]) if r["assetClass"] in order else len(order))
-    return {"rows": out, "failed": failed, "filters": {**f, "markets": markets}, "scanned": len(rows)}
+    notes = []
+    if debt_skipped:
+        notes.append(f"The debt limit wasn't applied to {len(debt_skipped)} bank{'s' if len(debt_skipped) > 1 else ''}: debt/equity doesn't measure a bank's risk, since deposits and borrowing are what it lends from.")
+    return {"rows": out, "failed": failed, "filters": {**f, "markets": markets}, "scanned": len(rows), "notes": notes}
 
 
 def compare(tickers, period, rf=0.04):

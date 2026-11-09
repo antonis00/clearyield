@@ -118,6 +118,7 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .grid2 > .card, .grid4 > .card { margin-bottom: 0; }
+.grid2:has(> .card.hidden) { grid-template-columns: 1fr; } /* one card left: it takes the whole row */
 .grid2, .grid4 { margin-bottom: 16px; }
 /* Compare's metrics table needs about 700px, so its pair stacks well before the other two-column grids */
 @media (max-width: 1700px) { .cmp-grid { grid-template-columns: 1fr; } }
@@ -217,7 +218,9 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
   /* Room for the scroll bar is always kept, so a tab that scrolls and one that doesn't wrap their text the same way */
   scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 #digestList:hover { scrollbar-color: var(--muted) transparent; }
-#digestTabs button { min-width: 92px; } /* "Mine (12)" and "News (4)" take the same room */
+/* Both tabs take the same width whatever their counts, so nothing moves when one changes */
+#digestTabs { display: inline-grid; grid-template-columns: 1fr 1fr; }
+#digestTabs button { min-width: 112px; }
 #digestList.refreshing { opacity: .55; }
 .news li { padding: 9px 0; border-bottom: 1px solid var(--rowline); }
 .news .meta { font-size: 11px; color: var(--muted); }

@@ -209,6 +209,11 @@ SCORE_KEY = ("Scores run from 0 to 100, and higher is always better. Value: high
              "higher means calmer, so LOWER risk. Stance bands: 70+ Strong, 58+ Favorable, 45+ Neutral, 35+ Caution, below 35 Weak.")
 
 
+def is_bank(info):
+    """Yahoo files banks under industries such as "Banks - Diversified" and "Banks - Regional"."""
+    return "bank" in (info.get("industry") or "").lower()
+
+
 def brief_data(ctx):
     """The facts given to the model, grouped and labelled, each with its unit. Missing figures are left out rather
     than sent as null, so the model has nothing to guess about."""
@@ -245,7 +250,17 @@ def brief_data(ctx):
     out = {g: {k: v for k, v in rows.items() if v not in (None, "")} for g, rows in groups.items()}
     out["What the scores mean"] = SCORE_KEY
     out["Signals found by StockPilot"] = [s["text"] for s in sc.get("signals") or []]
-    fin = [{"Year": r["year"], **{k: _f_money(r.get(src), fin_cur) for k, src in (("Revenue", "revenue"), ("Net income", "netIncome"), ("Free cash flow", "fcf")) if r.get(src) is not None}}
+    # A bank's free cash flow swings with its deposits and loans, and its debt is what it lends from, so neither says
+    # much about it: they're left out, and the model is told why, instead of reading them as warning signs
+    bank = is_bank(i)
+    if bank:
+        for k in ("Debt to equity", "Current ratio", "Free cash flow, last 12 months"):
+            out.get("Profitability and balance sheet", {}).pop(k, None)
+        out["Note on banks"] = ("This is a bank. Free cash flow, debt to equity and the current ratio are left out: a bank's cash "
+                                "flow moves with its deposits and loans, and deposits and borrowing are what it lends from, so they "
+                                "don't measure its health. Judge it on profitability, valuation, growth and price behaviour.")
+    fields = (("Revenue", "revenue"), ("Net income", "netIncome")) + (() if bank else (("Free cash flow", "fcf"),))
+    fin = [{"Year": r["year"], **{k: _f_money(r.get(src), fin_cur) for k, src in fields if r.get(src) is not None}}
            for r in ctx.get("financials") or []]
     if fin:
         out["Annual accounts, oldest first"] = fin
@@ -348,7 +363,14 @@ FILTER_SPEC = {
     "min_roe": "fraction", "min_score": "0-100", "min_momentum": "0-100 momentum factor score", "max_vol": "fraction annual volatility",
     "sort": "one of composite, value, quality, growth, momentum, risk, divYield",
     "sector": "one of Technology, Financial Services, Energy, Healthcare, Utilities, Real Estate, Industrials, Communication Services, Basic Materials, Consumer Defensive, Consumer Cyclical",
+    "exclude_sector": "a sector from the same list that the request rules out, e.g. 'not tech'",
 }
+# What vague words mean in this app. The model is told, so it reads them the same way as the rules, and where the
+# rules found a value it stands: a model left to choose picks its own, often stricter, limits and empties the screen.
+MEANINGS = ("cheap/undervalued/value: max_pe 18. low debt: max_de 0.5. profitable/quality: min_roe 0.12. dividend/income: "
+            "min_div_yield 0.025. growth/growing: min_rev_growth 0.10. momentum/trending: min_momentum 60. low volatility/low "
+            "risk/safe/defensive: max_vol 0.25 (these words describe risk, not a sector). Only set a sector when the request "
+            "names an industry. Use a number the request gives in place of these.")
 
 MARKET_WORDS = {"US": ["usa", "u.s.", "u.s", "american", "america"], "Europe": ["europe", "european", "eu"],
                 "Gulf": ["gulf", "qatar", "qatari", "saudi", "uae", "gcc", "dubai", "middle east"],
@@ -359,11 +381,11 @@ SECTOR_WORDS = {"Technology": ["tech", "technology", "software", "semiconductor"
                 "Real Estate": ["reit", "reits", "property"], "Industrials": ["industrial", "industrials"],
                 "Communication Services": ["telecom", "telecoms", "media"], "Basic Materials": ["materials", "mining"]}
 # Words the rules act on, and words that don't change a screen, so neither is reported as not understood
-RULE_WORDS = {"p/e", "pe", "ratio", "yield", "yielding", "dividend", "dividends", "income", "growth", "growing", "revenue", "cheap", "undervalued", "value",
+RULE_WORDS = {"banking", "strong", "fast", "high", "p/e", "pe", "ratio", "yield", "yielding", "dividend", "dividends", "income", "growth", "growing", "revenue", "cheap", "undervalued", "value",
               "low", "debt", "no", "profitable", "quality", "momentum", "trending", "uptrend", "vol", "volatility", "risk", "safe", "defensive", "under", "below",
               "above", "over", "less", "than", "more", "at", "least", "most", "of", "us", "real", "estate", "middle", "east"}
 FILLER_WORDS = {"stock", "stocks", "share", "shares", "company", "companies", "name", "names", "equities", "market", "markets", "listed", "with", "and", "or", "in",
-                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous"}
+                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "give", "get", "tell", "list", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous"}
 
 
 FRACTIONS = ("min_div_yield", "min_rev_growth", "min_roe", "max_vol")
@@ -412,9 +434,10 @@ def _tidy_filters(raw):
             out["markets"] = list(dict.fromkeys(picked))
     if raw.get("sort") in SORTS:
         out["sort"] = raw["sort"]
-    sector = {x.lower(): x for x in SECTORS}.get(str(raw.get("sector") or "").strip().lower())
-    if sector:
-        out["sector"] = sector
+    for key in ("sector", "exclude_sector"):
+        sector = {x.lower(): x for x in SECTORS}.get(str(raw.get(key) or "").strip().lower())
+        if sector:
+            out[key] = sector
     return out
 
 
@@ -426,14 +449,22 @@ def parse_query(text):
     rules = _parse_rules(text.lower())
     if available():
         prompt = ("Convert this stock screen request into a JSON object using only these keys (omit unused ones): "
-                  + json.dumps(FILTER_SPEC) + "\nReply with the JSON object only, no explanation.\nREQUEST: " + text)
+                  + json.dumps(FILTER_SPEC) + "\nWhat words mean here: " + MEANINGS
+                  + "\nReply with the JSON object only, no explanation.\nREQUEST: " + text)
         for attempt in range(2):
             try:
                 raw = complete(prompt if attempt == 0 else prompt + "\nYour last reply couldn't be read. Reply with one JSON object and nothing else.",
                                system="You convert screening requests into strict JSON filters.", max_tokens=300)
                 filters = _tidy_filters(_first_json_object(raw))
                 if filters:
-                    return {**{k: v for k, v in rules.items() if k != "ignored"}, **filters}  # the model read the words the rules couldn't
+                    # The rules' values stand (a number you typed, or a word's defined meaning); the model fills in
+                    # what they couldn't read, such as a market or sector named in other words
+                    merged = {**filters, **{k: v for k, v in rules.items() if k != "ignored"}}
+                    if merged.get("sector") and merged.get("sector") == merged.get("exclude_sector"):
+                        merged.pop("sector")
+                    if "exclude_industry" in rules and "exclude_sector" not in rules:  # "excluding banks" rules out banks, not every financial company
+                        merged.pop("exclude_sector", None)
+                    return merged
             except Exception:
                 continue
     return rules
@@ -451,12 +482,25 @@ def _parse_rules(t):
     def set_aside(m):
         ignored.extend(m.group(0).split()[1 if m.group(0).split()[0] in ("not", "non") else 0:])
         return " "
-    t = re.sub(r"\b(?:not|non)[ -]\w+", set_aside, t)
+
+    # "not tech", "no banks", "excluding energy": a sector ruled out, which the screen can apply. Other words after
+    # "not" are set aside; after "no" they're left alone, since "no debt" means low debt.
+    def rule_out(m):
+        neg, word = m.group(1), m.group(2)
+        if word in ("bank", "banks", "banking"):  # banks, not insurers and the rest of the financial sector
+            f["exclude_industry"] = "Banks"
+            return " "
+        sector = next((s for s, ws in SECTOR_WORDS.items() if word in ws), None)
+        if sector:
+            f["exclude_sector"] = sector
+            return " "
+        return set_aside(m) if neg in ("not", "non") else m.group(0)
+    t = re.sub(r"\b(not|non|no|excluding|except|without)[ -](\w+)", rule_out, t)
     t = re.sub(r"\bdividend growth\b", set_aside, t)
 
     markets = [m for m, words in MARKET_WORDS.items() if _has(t, *words)]
     # "us" on its own is usually the pronoun, as in "show us"
-    if re.search(r"\bus[ -](?:stocks?|shares|companies|market|equities|listed)\b|\bin the us\b", t):
+    if re.search(r"(?<!show )(?<!give )(?<!find )(?<!tell )(?<!get )(?<!let )\bus[ -](?:[a-z]+ ){0,2}(?:stocks?|shares|companies|market|equities|listed|names)\b|\bin the us\b", t):
         markets.insert(0, "US")
     if markets:
         f["markets"] = list(dict.fromkeys(m for m in MARKET_WORDS if m in markets))
@@ -464,6 +508,9 @@ def _parse_rules(t):
         if _has(t, *words) or (sector == "Real Estate" and "real estate" in t):
             f["sector"] = sector
             break
+    # "Banks" means banks, not every financial company: insurers and asset managers are Financial Services too
+    if _has(t, "bank", "banks", "banking"):
+        f["industry"] = "Banks"
 
     pe = r"p/?e(?:\s+ratio)?"
     below = r"(?:under|below|<=?|less than|at most)"
@@ -476,6 +523,7 @@ def _parse_rules(t):
         f["sort"] = "divYield"
     if m := re.search(r"\bgrowth\b[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
         f["min_rev_growth"] = float(m.group(1)) / 100
+        f.setdefault("sort", "growth")
     elif _has(t, "growth", "growing"):
         f["min_rev_growth"] = 0.10
         f.setdefault("sort", "growth")
