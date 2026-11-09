@@ -296,6 +296,17 @@ const SLOW = 150000;
       { unmatched: ["40", "€35,816.51"], derived: [{ figure: "94.4%", how: "100% − 5.6%" }] });
     return { bad: [...box.querySelectorAll("mark.fig-bad")].map((m) => m.textContent), worked: [...box.querySelectorAll("mark.fig-worked")].map((m) => `${m.textContent}|${m.title}`) };
   });
+  // A quotation the sources don't have word for word is marked too
+  const quoted_ = await p.evaluate(() => { const box = document.createElement("div");
+    box.innerHTML = markFigures("<p>Zacks wrote “Novo shares jumped on strong sales” today.</p>", { unmatched: [], derived: [], quotes: ["Novo shares jumped on strong sales"] });
+    return [...box.querySelectorAll("mark.fig-bad")].map((m) => `${m.textContent}|${m.title}`); });
+  expect("ask: misquotes are marked", quoted_.join() === "Novo shares jumped on strong sales|Not in the sources word for word", JSON.stringify(quoted_));
+  // A web search step lists its pages as links that open in a new tab; a link that isn't http(s) is dropped
+  const links_ = await p.evaluate(() => { const box = document.createElement("div");
+    box.innerHTML = webLinks({ tool: "web_search", ok: true, links: [{ title: "Novo cuts its outlook", url: "https://www.reuters.com/a", site: "reuters.com", date: "2026-11-05" }, { title: "x", url: "javascript:alert(1)" }] }) +
+      webLinks({ tool: "web_search", ok: true, links: [], source: "Groq's browser search" });
+    return { hrefs: [...box.querySelectorAll("a")].map((a) => `${a.href}|${a.target}`), text: box.innerText }; });
+  expect("ask: web search steps list their pages", links_.hrefs.join() === "https://www.reuters.com/a|_blank" && /2026-11-05/.test(links_.text) && /no list of pages/.test(links_.text), JSON.stringify(links_));
   expect("ask: answer figures are marked as unsupported or worked out", JSON.stringify(marked_.bad) === JSON.stringify(["€35 816.51", "40"]) && marked_.worked.join() === "94.4%|Worked out: 100% − 5.6%", JSON.stringify(marked_));
 
   // ---- Dashboard again, now with data
