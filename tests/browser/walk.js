@@ -52,12 +52,31 @@ const SLOW = 150000;
       expect("research: a fund explains its missing factors", gaps.length === 3 && gaps.every((g) => /Doesn't apply to funds/.test(g)) && /momentum and risk/.test(why), gaps[0]);
     }
     expect(`research ${t}`, r.price && r.charts > 0 && r.stats >= 2 && !r.bad, `${r.price} | ${r.stance} | ${r.cov}${r.bad ? " | BAD TEXT" : ""}`);
+    if (["AAPL", "SPY", "BTC-USD"].includes(t)) {  // company statements and a DCF only for a company; the neighbour fills the row
+      const lay = await p.evaluate(() => ({ cls: document.querySelector("#rTags").innerText, fin: !document.querySelector("#finCard").classList.contains("hidden"), dcf: !document.querySelector("#dcfCard").classList.contains("hidden"),
+        statsWide: document.querySelector("#statGrid").closest(".card").getBoundingClientRect().width / document.querySelector("#statGrid").closest(".grid2").getBoundingClientRect().width }));
+      const company = t === "AAPL";
+      expect(`research ${t}: fundamentals and DCF ${company ? "shown" : "hidden"}`, lay.fin === company && lay.dcf === company && (company ? lay.statsWide < 0.6 : lay.statsWide > 0.99), `width ${lay.statsWide.toFixed(2)}`);
+    }
   }
   // A yield reads in percent and an index in points, not in dollars
   await research("^TNX");
   expect("research: a yield shows in percent", /^\d[\d,.]*%$/.test(await txt("#rPrice")), await txt("#rPrice"));
   await research("^GSPC");
   expect("research: an index shows in points", /^\d[\d,.]*$/.test(await txt("#rPrice")) && !/\$/.test(await txt("#statGrid")), await txt("#rPrice"));
+  // The mouse wheel scrolls the page over a chart; only Ctrl + wheel zooms it (and the RSI and MACD follow)
+  const span = () => p.evaluate(() => state.lw.map((c) => { const r = c.timeScale().getVisibleLogicalRange(); return r ? Math.round((r.to - r.from) * 100) / 100 : null; }));
+  await p.evaluate(() => window.scrollTo(0, 0));
+  const box = await p.locator("#priceChart").boundingBox();
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const before = await span();
+  await p.mouse.wheel(0, 300); await p.waitForTimeout(300);
+  const plain = { span: await span(), scrolled: await p.evaluate(() => window.scrollY) };
+  await p.evaluate(() => window.scrollTo(0, 0)); await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await p.keyboard.down("Control"); await p.mouse.wheel(0, -300); await p.keyboard.up("Control"); await p.waitForTimeout(300);
+  const ctrl = { span: await span(), scrolled: await p.evaluate(() => window.scrollY) };
+  expect("research: wheel scrolls the page, Ctrl + wheel zooms the charts", plain.span[0] === before[0] && plain.scrolled > 0
+    && ctrl.span[0] < before[0] && ctrl.span.every((s) => s === ctrl.span[0]) && ctrl.scrolled === 0, `${before[0]} bars → plain ${plain.span[0]} (page moved ${plain.scrolled}px) → Ctrl ${ctrl.span.join("/")}`);
   if (MODE === "live") {  // demo mode invents data for any symbol, so there is no unknown ticker there
     await research("NOSUCHTICKER");
     expect("research: unknown ticker explains itself", /No price data/.test(await txt("#researchEmpty")));
@@ -247,7 +266,7 @@ const SLOW = 150000;
   await p.waitForFunction(() => /Your portfolio (gained|lost)/.test(document.querySelector("#digestList").innerText), null, { timeout: SLOW });
   const dig = await p.evaluate(() => ({ text: document.querySelector("#digestList").innerText, links: [...document.querySelectorAll("#digestList a")].map((a) => a.getAttribute("href")), tip: document.querySelector("#digestInfo .info")?.dataset.tip || "" }));
   expect("dashboard: digest covers the portfolio, with its rules explained", /Your portfolio (gained|lost) .* against what you paid/.test(dig.text) && /yields 0\.15 or 0\.40 percentage points/.test(dig.tip) && dig.links.every((h) => /^https?:\/\//.test(h)), dig.text.split("\n")[0]);
-  // Two tabs: Mine has no headlines; News has only headlines, each a link; the counts add up; the choice is kept
+  // Two tabs: Highlights has no headlines; News has only headlines, each a link; the counts add up; the choice is kept
   const tabs = async () => p.evaluate(() => ({ labels: [...document.querySelectorAll("#digestTabs button")].map((b) => b.textContent), on: document.querySelector("#digestTabs .on")?.dataset.tab,
     items: [...document.querySelectorAll("#digestList li")].map((li) => ({ news: li.classList.contains("k-news"), link: li.querySelector("a")?.getAttribute("href") || null })) }));
   const mineTab = await tabs();
@@ -255,14 +274,14 @@ const SLOW = 150000;
   const newsTab = await tabs();
   const total = await p.evaluate(async () => (await (await fetch("/api/digest")).json()).items.length);
   const counts = [...mineTab.labels, ...newsTab.labels].slice(0, 2).map((l) => Number(l.match(/\((\d+)\)/)?.[1]));
-  expect("dashboard: digest split into Mine and News", mineTab.on === "mine" && mineTab.items.every((i) => !i.news) && newsTab.on === "news"
+  expect("dashboard: digest split into Highlights and News", mineTab.on === "highlights" && mineTab.items.every((i) => !i.news) && newsTab.on === "news"
     && newsTab.items.every((i) => (i.news && /^https?:\/\//.test(i.link || "https://")) || i.link === null) && counts[0] + counts[1] === total, `${newsTab.labels.join(" / ")}, ${total} in all`);
   await p.reload(); await p.waitForFunction(() => document.querySelector("#digestTabs .on")?.dataset.tab === "news" && document.querySelector("#digestList li:not(.loading)"), null, { timeout: SLOW });
   expect("dashboard: the digest tab is remembered", true);
-  await p.click('#digestTabs [data-tab="mine"]'); await p.waitForTimeout(200);
+  await p.click('#digestTabs [data-tab="highlights"]'); await p.waitForTimeout(200);
   // The same height on either tab; a refresh never empties the list (watched every frame while it runs)
   const heights = [];
-  for (const tab of ["news", "mine"]) { await p.click(`#digestTabs [data-tab="${tab}"]`); await p.waitForTimeout(150); heights.push(await p.evaluate(() => document.querySelector("#digestList").getBoundingClientRect().height)); }
+  for (const tab of ["news", "highlights"]) { await p.click(`#digestTabs [data-tab="${tab}"]`); await p.waitForTimeout(150); heights.push(await p.evaluate(() => document.querySelector("#digestList").getBoundingClientRect().height)); }
   await p.evaluate(() => { window.__emptied = false; const ul = document.querySelector("#digestList"); const look = () => { if (!ul.querySelector("li")) window.__emptied = true; if (window.__watch) requestAnimationFrame(look); }; window.__watch = true; look(); });
   await p.click("#refreshDigest");
   await p.waitForFunction(() => !document.querySelector("#refreshDigest").disabled, null, { timeout: SLOW });

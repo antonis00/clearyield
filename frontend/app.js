@@ -259,16 +259,16 @@ async function loadDashboard() {
 }
 const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts and journal reminders; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock you hold or watch.";
 $("#digestInfo").innerHTML = infoIcon(DIGEST_RULES);
-// Two tabs: Mine (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
+// Two tabs: Highlights (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
 // stocks). The choice is remembered; switching only redraws, it doesn't ask the server again.
-const digestTab = () => { try { return localStorage.getItem("digestTab") === "news" ? "news" : "mine"; } catch { return "mine"; } };
+const digestTab = () => { try { return localStorage.getItem("digestTab") === "news" ? "news" : "highlights"; } catch { return "highlights"; } };
 function renderDigest() {
   const ul = $("#digestList"), d = state.digest, tab = digestTab();
   if (!d) return;
   const news = d.items.filter((i) => i.kind === "news"), mine = d.items.filter((i) => i.kind !== "news");
   $$("#digestTabs button").forEach((b) => {
     b.classList.toggle("on", b.dataset.tab === tab);
-    b.textContent = `${b.dataset.tab === "news" ? "News" : "Mine"} (${(b.dataset.tab === "news" ? news : mine).length})`;
+    b.textContent = `${b.dataset.tab === "news" ? "News" : "Highlights"} (${(b.dataset.tab === "news" ? news : mine).length})`;
   });
   const shown = tab === "news" ? news : mine;
   // A headline links to its source; the link keeps its own job inside a row that opens the stock
@@ -320,7 +320,8 @@ async function openStock(t, period) {
     $("#ptAmountLabel").textContent = `Amount (${state.meta.settings.base_currency})`;
     $("#ptRiskLabel").textContent = `Most I'd lose (${state.meta.settings.base_currency})`;
     const g = s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
-    runDcf(); loadNews(); loadEarnings(); loadFund(s); renderHistory(s);
+    if (hasDcf(s)) runDcf();
+    loadNews(); loadEarnings(); loadFund(s); renderHistory(s);
   } catch (e) {
     if (request !== state.stockRequest) return;
     body.style.opacity = 1; body.classList.add("hidden"); $("#researchEmpty").classList.remove("hidden");
@@ -348,12 +349,31 @@ function renderHeader(s) {
   $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})${why ? ` ${infoIcon(why)}` : ""}</div>`;
   $("#btnWatch").textContent = s.watched ? "✓ Watching" : "+ Watchlist";
 }
+// The mouse wheel scrolls the page, as everywhere else; Ctrl (or Cmd) + wheel zooms the chart around the pointer.
+// Dragging still pans and a touchpad pinch still zooms.
 function lwChart(el, height) {
-  return LightweightCharts.createChart(el, {
+  const chart = LightweightCharts.createChart(el, {
     height, layout: { background: { color: "transparent" }, attributionLogo: false, textColor: C("--muted"), fontFamily: "IBM Plex Mono" },
     grid: { vertLines: { color: C("--grid") }, horzLines: { color: C("--grid") } }, rightPriceScale: { borderColor: C("--line") },
     timeScale: { borderColor: C("--line") }, crosshair: { mode: 0 }, autoSize: true,
+    handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+    handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
   });
+  el._lw = chart;
+  if (!el.dataset.ctrlZoom) {  // the element outlives its charts, so the listener is added once
+    el.dataset.ctrlZoom = "1";
+    el.addEventListener("wheel", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || !el._lw) return;  // a plain wheel scrolls the page
+      e.preventDefault();  // and Ctrl + wheel zooms this chart, not the whole page
+      const ts = el._lw.timeScale(), r = ts.getVisibleLogicalRange();
+      if (!r) return;
+      const at = ts.coordinateToLogical(e.clientX - el.getBoundingClientRect().left) ?? (r.from + r.to) / 2;
+      const f = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+      if (f < 1 && r.to - r.from < 10) return;  // close enough: a few bars across
+      ts.setVisibleLogicalRange({ from: at - (at - r.from) * f, to: at + (r.to - at) * f });
+    }, { passive: false });
+  }
+  return chart;
 }
 const series = (c, k) => c.time.map((t, i) => (isNum(c[k][i]) ? { time: t, value: c[k][i] } : null)).filter(Boolean);
 function renderPrice(s) {
@@ -477,7 +497,14 @@ function renderStats(s) {
   const shown = i.assetClass === "Stocks" ? rows : rows.filter(([, v]) => String(v).replace(/<[^>]+>/g, "") !== "—"); // funds have no fundamentals
   $("#statGrid").innerHTML = shown.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
 }
+// Company statements and a cash-flow valuation only mean something for a company: for a fund, crypto, an index or a
+// currency both cards are hidden and their neighbours take the full row
+const isCompany = (s) => s.info.assetClass === "Stocks";
+// A bank's free cash flow follows its deposits and loans, so a cash-flow valuation and FCF bars would mislead
+const isBank = (s) => /bank/i.test(s.info.industry || "");
+const hasDcf = (s) => isCompany(s) && !isBank(s);
 function renderFin(s) {
+  $("#finCard").classList.toggle("hidden", !isCompany(s)); $("#dcfCard").classList.toggle("hidden", !hasDcf(s));
   const f = s.financials || [];
   $("#finEmpty").classList.toggle("hidden", !!f.length); $("#finChart").classList.toggle("hidden", !f.length);
   if (!f.length) return;
@@ -486,7 +513,7 @@ function renderFin(s) {
     data: { labels: f.map((x) => x.year), datasets: [
       { label: "Revenue", data: f.map((x) => x.revenue), backgroundColor: tint("--accent2", "aa") },
       { label: "Net income", data: f.map((x) => x.netIncome), backgroundColor: tint("--accent", "aa") },
-      { label: "Free cash flow", data: f.map((x) => x.fcf), backgroundColor: tint("--violet", "aa") }] },
+      ...(isBank(s) ? [] : [{ label: "Free cash flow", data: f.map((x) => x.fcf), backgroundColor: tint("--violet", "aa") }])] },
     options: { plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${big(c.raw)}` } } }, scales: { y: { beginAtZero: true, ticks: { callback: (v) => big(v) } } } },
   });
 }
@@ -648,7 +675,8 @@ async function runScreen(body) {
     const d = await api("/api/screener", { method: "POST", body });
     const f = d.filters;
     if (body.query) fillFilterForm(f);
-    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${filterChips(f)}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
+    const kinds = [f.industry ? `${f.industry} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${f.exclude_sector}` : "", f.exclude_industry ? `Not ${f.exclude_industry}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
+    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
       { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: priceOf }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
