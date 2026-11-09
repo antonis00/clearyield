@@ -16,10 +16,17 @@ def lin(x, bad, good):
     return round(max(0.0, min(1.0, t)) * 100, 1)
 
 
-def _part(parts, label, value, bad, good, fmt="num", usable=True):
-    """List a metric with the values that score 0 and 100. Missing or meaningless figures are listed but not scored."""
+def _part(parts, label, value, bad, good, fmt="num", usable=True, note=None):
+    """List a metric with the values that score 0 and 100. Missing or meaningless figures are listed but not scored;
+    `note` says why one isn't scored."""
     score = lin(value, bad, good) if usable else None
-    parts.append({"label": label, "value": value, "score": score, "fmt": fmt, "bad": bad, "good": good})
+    parts.append({"label": label, "value": value, "score": score, "fmt": fmt, "bad": bad, "good": good, **({"note": note} if note else {})})
+
+
+# A bank's margins are on net interest income, so 30-50% is ordinary for a bank and exceptional for anything else;
+# its debt is what it lends from, and it has no current ratio. Scored like other companies, every bank looked high
+# quality, so for banks these are listed but not scored: quality rests on return on equity.
+BANK_NOTE = "Not scored for banks: a bank's margins, debt and liquidity don't compare with other companies'."
 
 
 def _avg(parts):
@@ -46,14 +53,21 @@ def factor_breakdown(info, close):
         # FCF is in the statement currency, market cap is not
         _part(f["value"], "FCF yield", fcf * fx / mc if fcf is not None and mc and fx else None, 0, 0.08, "pct")
         # --- quality
+        bank = "bank" in (info.get("industry") or "").lower()
+        not_bank = {"usable": not bank, "note": BANK_NOTE if bank else None}
         _part(f["quality"], "Return on equity", g("returnOnEquity"), 0, 0.30, "pct")
-        _part(f["quality"], "Operating margin", g("operatingMargins"), 0, 0.30, "pct")
-        _part(f["quality"], "Net margin", g("profitMargins"), 0, 0.25, "pct")
-        _part(f["quality"], "Debt / Equity", g("debtToEquity"), 2.0, 0.2, "x")
-        _part(f["quality"], "Current ratio", g("currentRatio"), 0.8, 2.0, "x")
+        _part(f["quality"], "Operating margin", g("operatingMargins"), 0, 0.30, "pct", **not_bank)
+        _part(f["quality"], "Net margin", g("profitMargins"), 0, 0.25, "pct", **not_bank)
+        _part(f["quality"], "Debt / Equity", g("debtToEquity"), 2.0, 0.2, "x", **not_bank)
+        _part(f["quality"], "Current ratio", g("currentRatio"), 0.8, 2.0, "x", **not_bank)
         # --- growth
-        _part(f["growth"], "Revenue growth (YoY)", g("revenueGrowth"), -0.05, 0.25, "pct")
-        _part(f["growth"], "Earnings growth (YoY)", g("earningsGrowth"), -0.10, 0.30, "pct")
+        # Several years of annual statements where there are enough; otherwise the latest quarter, labelled as such
+        for name, multi, quarter, bad, good in (("Revenue growth", "revenueGrowth3y", "revenueGrowth", -0.05, 0.25),
+                                                ("Earnings growth", "earningsGrowth3y", "earningsGrowth", -0.10, 0.30)):
+            if g(multi) is not None:
+                _part(f["growth"], f"{name} (3y, a year)", g(multi), bad, good, "pct")
+            else:
+                _part(f["growth"], f"{name} (latest quarter YoY)", g(quarter), bad, good, "pct")
         fe, te = g("forwardEps"), g("trailingEps")
         _part(f["growth"], "Forward EPS vs trailing", fe / te - 1 if fe is not None and te and te > 0 else None, -0.05, 0.25, "pct")
 
@@ -67,10 +81,10 @@ def factor_breakdown(info, close):
     _part(f["momentum"], "3-month return", ind.ret_over(close, 63), -0.15, 0.20, "pct")
 
     # --- risk (higher score = calmer)
+    # One scale for every asset, so a risk score means the same risk on a stock, a fund or a coin
     vol = ind.volatility(close)
-    crypto = info.get("assetClass") == "Crypto"
-    _part(f["risk"], "Volatility (1y, ann.)", vol, 0.9 if crypto else 0.6, 0.35 if crypto else 0.15, "pct")
-    _part(f["risk"], "Max drawdown (1y)", ind.max_drawdown(ind.window(close, 252)), -0.6 if crypto else -0.5, -0.15 if crypto else -0.08, "pct")
+    _part(f["risk"], "Volatility (1y, ann.)", vol, 0.6, 0.15, "pct")
+    _part(f["risk"], "Max drawdown (1y)", ind.max_drawdown(ind.window(close, 252)), -0.5, -0.08, "pct")
     if is_equity:
         _part(f["risk"], "Beta", g("beta"), 2.0, 0.6, "x")
     return f
@@ -99,7 +113,7 @@ def evaluate(info, close, weights=None):
     composite = round(sum(scores[k] * w for k, w in used.items()) / total_w, 1) if total_w else None
     if info.get("assetClass") == "Other":  # an index, currency or future: its trend is shown, but it isn't a holding to rate
         composite = None
-    parts = [p for v in bd.values() for p in v]
+    parts = [p for v in bd.values() for p in v if "note" not in p]  # a metric that doesn't apply isn't missing data
     scored = sum(p["score"] is not None for p in parts)
     return {
         "composite": composite, "stance": "Not scored" if info.get("assetClass") == "Other" else stance(composite), "factors": scores, "breakdown": bd,

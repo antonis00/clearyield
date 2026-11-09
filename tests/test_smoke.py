@@ -563,7 +563,10 @@ def test_displays_say_what_they_show():
         with TestClient(app) as c, _FakeMarket({"AAPL": stocks, "^GSPC": stocks}):
             day = (dt.date.today() - dt.timedelta(days=10)).isoformat()
             assert c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "date": day, "shares": 1, "price": 100}).status_code == 200
-            assert c.get("/api/portfolio").json()["xirrWhy"] == "Needs a month or more of history"
+            # Under a year: no annualised figure (the GIPS standard), but the return so far, gain over what was put in
+            p = c.get("/api/portfolio").json()
+            assert p["xirr"] is None and p["xirrWhy"].startswith("Shown after a year of history")
+            assert abs(p["returnSoFar"] - (p["totalGain"] / 100)) < 1e-9, (p["returnSoFar"], p["totalGain"])
             # Dashboard tiles say when their price is old
             tile = [x for x in c.get("/api/macro").json() if x["ticker"] == "^GSPC"]
             assert tile and tile[0]["stale"] is False and tile[0]["asOf"] == "2026-05-29", tile
@@ -1861,7 +1864,8 @@ def test_digest_covers_portfolio_markets_and_headlines():
     texts = [i["text"] for i in items]
     day = [t for t in texts if t.startswith("Your portfolio lost")]
     assert day and "(-0.30%)" in day[0] and "It's worth €" in day[0], texts
-    assert any(t.startswith("Core is 100% of your portfolio against your 80% target") for t in texts), texts
+    # All core is the lower-risk side: no daily line nudging money into single stocks
+    assert not any("satellite" in t.lower() for t in texts), texts
     assert any(t.startswith("Nasdaq fell") for t in texts), texts
     heads = [i for i in items if i.get("kind") == "news"]
     # Only the stock, only what names it, only the past three days, newest first; a link that isn't http(s) is dropped
@@ -1913,9 +1917,15 @@ def test_opportunities_follow_their_rules():
     # Top ranked: the highest overall scores, best first
     scores = [r["composite"] for r in o["top"]]
     assert len(o["top"]) == R["top"] and scores == sorted(scores, reverse=True) and scores[0] == max(r["composite"] for r in o["map"])
-    # Quality on sale: every one meets both limits, biggest fall first
+    # No more than the cap from one sector in any ranked list
+    from collections import Counter
+    for name in ("top", "fit", "onSale"):
+        assert max(Counter(r["sector"] for r in o[name]).values(), default=0) <= R["sectorCap"], (name, Counter(r["sector"] for r in o[name]))
+    # Quality on sale: every one meets the limits and its fall has paused (back above its 50-day average); best quality first
     assert all(r["f_quality"] >= R["saleQuality"] and r["fromHigh"] <= R["saleDrop"] for r in o["onSale"])
-    assert [r["fromHigh"] for r in o["onSale"]] == sorted(r["fromHigh"] for r in o["onSale"])
+    falling = {r["ticker"] for r in o["map"] if not r.get("above50", True)}
+    assert not falling & {r["ticker"] for r in o["onSale"]}
+    assert [r["f_quality"] for r in o["onSale"]] == sorted((r["f_quality"] for r in o["onSale"]), reverse=True)
     # Fits your portfolio: never what you hold; fit is the average of the score and how much it diversifies
     assert o["holdings"] == ["SAP.DE"] and o["fit"] and all(r["ticker"] != "SAP.DE" for r in o["fit"])
     assert all(abs(r["fit"] - (r["composite"] + (1 - max(r["corr"], 0)) * 100) / 2) < 1e-9 for r in o["fit"]) and o["fitWeeks"] > 26
@@ -2399,6 +2409,120 @@ def test_dashboard_tiles_are_chosen_in_settings():
     _reset()
 
 
+def test_portfolio_fit_compares_in_one_currency():
+    import pandas as pd
+
+    from backend import data, insights
+    _reset()
+    held = _steps([0.01, -0.012, 0.008, -0.004] * 75)  # a euro holding, in euros
+    rate = pd.Series([0.9 + 0.05 * ((i % 7) - 3) / 3 for i in range(len(held))], index=held.index)  # euros per dollar, wandering
+    usd_twin = held / rate  # a dollar stock that, in euros, is exactly the holding
+    real = data.fx_series
+    data.fx_series = lambda cur, base, index: rate.reindex(index).ffill() if (cur, base) == ("USD", "EUR") else real(cur, base, index)
+    infos = {"HELD": {"currency": "EUR"}, "TWIN": {"currency": "USD"}}
+    try:
+        with TestClient(app) as c, _FakeMarket({"HELD": held, "TWIN": usd_twin}, infos):
+            c.post("/api/settings", json={"base_currency": "EUR"})
+            assert c.post("/api/transactions", json={"ticker": "HELD", "kind": "buy", "date": "2025-01-06", "shares": 10, "price": 100}).status_code == 200
+            from backend import db
+            real_tickers = insights.tickers_for
+            insights.tickers_for = lambda markets: ["TWIN"]
+            try:
+                o = insights.opportunities(db.get_settings(), ["US"])
+            finally:
+                insights.tickers_for = real_tickers
+        twin = next(r for r in o["map"] if r["ticker"] == "TWIN")
+        assert twin["corr"] is not None and twin["corr"] > 0.999, twin["corr"]
+    finally:
+        data.fx_series = real
+        _reset()
+
+
+def test_dcf_default_growth_uses_several_years():
+    from backend import insights
+    inf = {"freeCashflow": 1e9, "sharesOutstanding": 1e8, "statementFx": 1.0, "revenueGrowth": 0.41}
+    # One quarter's +41% would have been capped at 15% a year; three years of shrinking revenue give 0%, the floor
+    assert insights.dcf({**inf, "revenueGrowth3y": -0.115})["growth"] == 0.0
+    assert abs(insights.dcf({**inf, "revenueGrowth3y": 0.06})["growth"] - 0.06) < 1e-12
+    assert insights.dcf(inf)["growth"] == 0.15, "without three years of statements, the latest quarter, capped"
+
+
+def test_growth_is_scored_over_several_years():
+    from backend import insights, scoring
+    fin = [{"year": "2022", "revenue": 200.0, "netIncome": 50.0}, {"year": "2023", "revenue": 150.0, "netIncome": 20.0},
+           {"year": "2024", "revenue": 140.0, "netIncome": -5.0}, {"year": "2025", "revenue": 162.0, "netIncome": 30.0}]
+    # Revenue fell from 200 to 162 over three years: about -6.8% a year, though the last year was +16%
+    assert abs(insights.multi_year_growth(fin, "revenue") - ((162 / 200) ** (1 / 3) - 1)) < 1e-12
+    assert insights.multi_year_growth(fin[:2], "revenue") is None, "fewer than three years isn't enough"
+    assert insights.multi_year_growth([{**r, "netIncome": -1.0} if r["year"] == "2025" else r for r in fin], "netIncome") is None, "no growth rate from a loss"
+    px = _steps([0.001] * 300)
+    base = {"assetClass": "Stocks", "quoteType": "EQUITY", "revenueGrowth": 0.41, "earningsGrowth": 1.2}
+    multi = {p["label"]: p for p in scoring.evaluate({**base, "revenueGrowth3y": -0.115, "earningsGrowth3y": None}, px)["breakdown"]["growth"]}
+    # The quarter's +41% is replaced by the years' -11.5%; earnings, with no three-year rate, fall back and say so
+    assert multi["Revenue growth (3y, a year)"]["score"] == 0.0 and "Revenue growth (latest quarter YoY)" not in multi
+    assert "Earnings growth (latest quarter YoY)" in multi
+
+
+def test_banks_quality_rests_on_return_on_equity():
+    from backend import scoring
+    px = _steps([0.001] * 300)
+    figures = {"assetClass": "Stocks", "quoteType": "EQUITY", "returnOnEquity": 0.15, "operatingMargins": 0.55, "profitMargins": 0.33, "debtToEquity": 3.0, "currentRatio": 0.5}
+    bank = scoring.evaluate({**figures, "industry": "Banks - Diversified"}, px)
+    other = scoring.evaluate({**figures, "industry": "Software"}, px)
+    q = {p["label"]: p for p in bank["breakdown"]["quality"]}
+    # Only return on equity counts for a bank: 15% is 50 on the 0%-30% scale; the rest is listed, not scored, and says why
+    assert bank["factors"]["quality"] == 50.0 and q["Return on equity"]["score"] == 50.0
+    assert all(q[k]["score"] is None and "banks" in q[k]["note"] for k in ("Operating margin", "Net margin", "Debt / Equity", "Current ratio"))
+    assert all(p["score"] is not None and "note" not in p for p in other["breakdown"]["quality"]), "other companies are scored on all five"
+    # Metrics that don't apply aren't counted as missing data
+    assert bank["metricsTotal"] == other["metricsTotal"] - 4
+
+
+def test_one_risk_scale_for_every_asset():
+    from backend import scoring
+    bumpy = _steps([0.03, -0.028] * 150)
+    scores = {k: scoring.factor_breakdown({"assetClass": k}, bumpy)["risk"] for k in ("Crypto", "ETFs")}
+    vol_dd = lambda parts: [(p["label"], p["score"]) for p in parts if p["label"] != "Beta"]
+    assert vol_dd(scores["Crypto"]) == vol_dd(scores["ETFs"]), "the same ride scores the same, coin or fund"
+
+
+def test_a_falling_world_fund_does_not_prompt_rethinking_it():
+    from backend import db, insights
+    _reset()
+    crash = _steps([0.0] * 240 + [-0.012] * 60)  # down about a half in three months: weak trend, high risk
+    db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('VWCE.DE', 10, 100), ('AAA', 10, 100)")
+    for day, stance, comp in (("2026-01-01", "Strong", 75), ("2026-01-02", "Weak", 30)):
+        db.x("INSERT INTO score_history (date, ticker, composite, stance, factors) VALUES (?, 'VWCE.DE', ?, ?, '{}')", (day, comp, stance))
+    infos = {"VWCE.DE": {"assetClass": "ETFs"}, "AAA": {"trailingPE": 80.0, "returnOnEquity": -0.2, "profitMargins": -0.1, "revenueGrowth": -0.3}}
+    with _FakeMarket({"VWCE.DE": crash, "AAA": crash}, infos):
+        rows = {r["ticker"]: r for r in insights.rows_for(["VWCE.DE", "AAA"], db.get_settings())}
+        texts = [i["text"] for i in insights.digest(db.get_settings())["items"]]
+    assert rows["VWCE.DE"]["stance"] in ("Weak", "Caution") and rows["AAA"]["stance"] == "Weak", {t: r["stance"] for t, r in rows.items()}
+    # The company is flagged for a rethink; the world fund isn't, and its stance change isn't reported either
+    assert any(t.startswith("AAA is a holding with a Weak composite score") for t in texts), texts
+    assert not any(t.startswith("VWCE.DE") and ("thesis" in t or "went from" in t) for t in texts), texts
+    _reset()
+
+
+def test_rebalancing_offers_new_money_before_selling():
+    _reset()
+    flat = _steps([0.0] * 300)
+    with TestClient(app) as c, _FakeMarket({"SPY": flat, "AAPL": flat, "BTC-USD": flat}, {"SPY": {"assetClass": "ETFs"}, "BTC-USD": {"assetClass": "Crypto"}}):
+        c.post("/api/settings", json={"targets": {"Stocks": 20, "ETFs": 80, "Crypto": 0}, "core_target": 80})
+        assert c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": "2025-01-06", "shares": 100, "price": 100}).status_code == 200
+        p = c.get("/api/portfolio").json()
+        rows = {r["assetClass"]: r for r in p["rebalance"]}
+        # All in funds against 80/20: €2,500 of new money into stocks reaches 80/20; nothing is to be sold
+        assert abs(p["rebalanceNewMoney"] - 2500) < 1e-6 and abs(rows["Stocks"]["newMoney"] - 2500) < 1e-6 and rows["ETFs"]["newMoney"] < 1e-6
+        assert rows["ETFs"]["action"] == "Over target" and "Trim" not in str(p["rebalance"])
+        cs = p["coreSatellite"]
+        assert cs["action"] == "Above core target" and abs(cs["newMoney"] - 2500) < 1e-6
+        # Something held with a 0% target can only be reached by selling, so there's no new-money route
+        assert c.post("/api/transactions", json={"ticker": "BTC-USD", "kind": "buy", "date": "2025-01-06", "shares": 1, "price": 100}).status_code == 200
+        assert c.get("/api/portfolio").json()["rebalanceNewMoney"] is None
+    _reset()
+
+
 def test_core_and_satellite():
     from backend import db
     _reset()
@@ -2415,8 +2539,12 @@ def test_core_and_satellite():
         cs = p["coreSatellite"]
         core = pos["SPY"]["value"] / p["total"]
         assert abs(cs["core"] - core) < 1e-9 and abs(cs["satellite"] - (1 - core)) < 1e-9 and cs["target"] == 0.8
-        assert cs["action"] == ("To core" if core < 0.78 else "To satellite" if core > 0.82 else "Hold")
+        assert cs["action"] == ("To core" if core < 0.78 else "Above core target" if core > 0.82 else "Hold")
         assert abs(cs["amount"] - abs(0.8 - core) * p["total"]) < 1e-6
+        # New money that reaches the target without selling: afterwards the core share is exactly the target
+        add = cs["newMoney"]
+        core_after = (pos["SPY"]["value"] + (add if cs["action"] == "To core" else 0)) / (p["total"] + add)
+        assert add >= 0 and abs(core_after - 0.8) < 1e-9, (cs["action"], add, core_after)
         slices = p["allocation"]["bucket"]
         assert set(slices) == {"Core", "Satellite"} and abs(slices["Core"] - pos["SPY"]["value"]) < 1e-6 and abs(slices["Satellite"] - pos["AAPL"]["value"]) < 1e-6
         # Who carries the swings: the shares add up to 1, and the jumpy satellite carries more than its share of the money

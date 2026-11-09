@@ -212,7 +212,7 @@
   <section id="view-opportunities" class="view hidden">
     <div class="card">
       <div class="card-h"><h3>Opportunities</h3><button class="btn ghost sm" id="oppRefresh">Refresh</button></div>
-      <p class="muted sm" style="margin:0 0 8px">Stocks in the app's built-in list, scored on today's data with the same transparent rules as everywhere else. Hover a point or bar for its reasons, click it to research the stock. Decision support, not financial advice: the scores rate current figures against fixed thresholds and don't predict prices.</p>
+      <p class="muted sm" style="margin:0 0 8px">Stocks in the app's built-in list, scored on today's data with the same transparent rules as everywhere else. Hover a point or bar for its reasons, click it to research the stock. Decision support, not financial advice: the scores rate current figures against fixed thresholds and don't predict prices. The list is today's large companies, so ones that shrank or failed aren't in it, which flatters how well "good scores" look in hindsight.</p>
       <div class="markets" id="oppMarkets"></div>
       <div id="oppStatus" class="muted sm"></div>
     </div>
@@ -302,6 +302,7 @@
     <div class="card">
       <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>
       <div id="pfRebal" class="tablewrap"></div>
+      <div id="pfRebalNote" class="muted sm" style="margin-top:8px"></div>
     </div>
   </section>
 

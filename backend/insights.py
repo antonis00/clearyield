@@ -1,5 +1,6 @@
 """Higher-level analysis: stock snapshot, screener, comparison, DCF, alerts and the daily digest."""
 import datetime as dt
+from collections import defaultdict
 import json
 import logging
 import time
@@ -10,14 +11,30 @@ import pandas as pd
 
 from . import data, db, ledger, scoring
 from . import indicators as ind
-from .universe import tickers_for
+from .universe import CORE_FUNDS, tickers_for
 
 log = logging.getLogger("stockpilot.insights")
+
+
+def multi_year_growth(financials, key, years=3):
+    """Average yearly growth of revenue or net income over the last `years` annual statements, or None when there
+    are fewer, or either end is a loss (a growth rate from a loss means nothing)."""
+    rows = [(int(r["year"]), r.get(key)) for r in financials or [] if r.get(key) is not None]
+    rows = rows[-(years + 1):]
+    if len(rows) < years or rows[0][1] <= 0 or rows[-1][1] <= 0:
+        return None
+    span = rows[-1][0] - rows[0][0]
+    return (rows[-1][1] / rows[0][1]) ** (1 / span) - 1 if span > 0 else None
 
 
 def evaluate_ticker(t, settings):
     full = data.history(t, "5y")
     inf = data.info(t)
+    if inf.get("assetClass") == "Stocks":
+        # Growth over several years of annual statements, not one quarter against a year before: a single quarter
+        # read an oil-price swing as +40% growth for companies whose revenue shrank each year since 2022
+        fin = data.financials(t)
+        inf = {**inf, "revenueGrowth3y": multi_year_growth(fin, "revenue"), "earningsGrowth3y": multi_year_growth(fin, "netIncome")}
     sc = scoring.evaluate(inf, full["Close"], settings.get("weights"))
     return full, inf, sc
 
@@ -51,12 +68,15 @@ def _quick_row(t, settings):
         "sector": inf.get("sector"), "industry": inf.get("industry"), "currency": inf.get("currency"), "priceUnit": inf.get("priceUnit"), "price": float(c.iloc[-1]),
         "day": ind.ret_over(c, 1), "ret1m": ind.ret_over(c, 21), "ret1y": ind.ret_over(c, 252),
         "pe": inf.get("trailingPE"), "pb": inf.get("priceToBook"), "divYield": inf.get("dividendYield"),
-        "revGrowth": inf.get("revenueGrowth"), "roe": inf.get("returnOnEquity"), "de": inf.get("debtToEquity"),
+        # Revenue growth a year over three years where there are the statements, else the latest quarter
+        "revGrowth": inf["revenueGrowth3y"] if inf.get("revenueGrowth3y") is not None else inf.get("revenueGrowth"),
+        "revGrowthBasis": "3y" if inf.get("revenueGrowth3y") is not None else "quarter", "roe": inf.get("returnOnEquity"), "de": inf.get("debtToEquity"),
         "marketCap": inf.get("marketCap"), "vol": ind.volatility(c), "rsi": float(ind.rsi(c).iloc[-1]),
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
         "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only", "events": upcoming(inf),
         "moveDay": on_which_day(c), "stale": data.is_stale(t), "asOf": c.index[-1].strftime("%Y-%m-%d"),
         "fromHigh": float(c.iloc[-1] / ind.window(c, 252).max() - 1),
+        "above50": bool(len(c) >= 50 and c.iloc[-1] > ind.sma(c, 50).iloc[-1]),
     }
 
 
@@ -71,8 +91,23 @@ OPP_ZONE = 60          # the map's "cheap and rising" corner: value and momentum
 OPP_TOP = 10           # how many the ranked list shows
 OPP_FIT = 8            # how many portfolio-fit candidates
 SALE_QUALITY = 60      # "quality on sale": a quality score at least this...
-SALE_DROP = -0.10      # ...and at least 10% below its 52-week high
+SALE_DROP = -0.10      # ...and at least 10% below its 52-week high, with the fall paused: back above its 50-day
+                       # average (a stock still falling tends to keep falling for a while, so it isn't "on sale" yet)
 REASON_AT = 65         # a factor this strong is named as a reason
+SECTOR_CAP = 3         # at most this many from one sector in a ranked list, so a list isn't one sector's bet
+FIT_PERIOD = "2y"      # how far back the portfolio fit compares weekly returns
+
+
+def _capped(rows, n):
+    """The first `n` rows in their order, with at most SECTOR_CAP from one sector."""
+    out, seen = [], defaultdict(int)
+    for r in rows:
+        if seen[r.get("sector") or "Unknown"] < SECTOR_CAP:
+            seen[r.get("sector") or "Unknown"] += 1
+            out.append(r)
+        if len(out) == n:
+            break
+    return out
 
 
 def _reasons(r):
@@ -80,7 +115,8 @@ def _reasons(r):
     say = {
         "value": lambda: f"Cheap (P/E {r['pe']:.1f})" if r.get("pe") and r["pe"] > 0 else "Cheap",
         "quality": lambda: f"High quality (ROE {r['roe']:.0%})" if r.get("roe") is not None else "High quality",
-        "growth": lambda: f"Growing (revenue {r['revGrowth']:+.0%})" if r.get("revGrowth") is not None else "Growing",
+        "growth": lambda: (f"Growing (revenue {r['revGrowth']:+.0%} a year over 3 years)" if r.get("revGrowthBasis") == "3y" else f"Growing (revenue {r['revGrowth']:+.0%}, latest quarter)")
+                          if r.get("revGrowth") is not None else "Growing",
         "momentum": lambda: f"Strong trend ({r['ret1y']:+.0%} in a year)" if r.get("ret1y") is not None else "Strong trend",
         "risk": lambda: f"Calm ({r['vol']:.0%} volatility)" if r.get("vol") is not None else "Calm",
     }
@@ -100,21 +136,35 @@ def opportunities(settings, markets):
     for r in stocks:
         r["reasons"] = _reasons(r)
 
-    # Your portfolio's value each day, to see how much each candidate would move with it
+    # What you hold now, valued each day over the past two years in your base currency, to see how much each
+    # candidate (also in your currency) would have moved with it. Both in one currency, so the exchange rate
+    # doesn't pass for the stock; two years, so the estimate rests on about a hundred weeks rather than fifty.
     p = portfolio.summary(settings)
+    base = p["base"]
     held = {r["ticker"] for r in p["positions"]}
-    total = sum(p["_series"].values()) if p["_series"] else None
+
+    def in_base(t, shares=1.0):
+        close = data.history(t, FIT_PERIOD)["Close"]
+        cur = data.info(t).get("currency")
+        rate = data.fx_series(cur, base, close.index)
+        return close * shares * (rate if rate is not None else data.fx_rate(cur, base))
+    total = None
+    try:
+        parts = [in_base(r["ticker"], r["shares"]) for r in p["positions"]]
+        total = pd.concat(parts, axis=1).ffill().dropna().sum(axis=1) if parts else None
+    except data.DataError:
+        total = None
     for r in stocks:
         r["corr"] = None
-        if total is not None and r["ticker"] not in held:
+        if total is not None and len(total) > 1 and r["ticker"] not in held:
             try:
-                r["corr"] = ind.correlation(data.history(r["ticker"], "1y")["Close"], total)
+                r["corr"] = ind.correlation(in_base(r["ticker"]), total)
             except data.DataError:
                 pass
 
     pick = lambda r: {k: r.get(k) for k in ("ticker", "name", "region", "sector", "composite", "stance", "f_value", "f_quality", "f_growth",
-                                            "f_momentum", "f_risk", "pe", "roe", "revGrowth", "ret1y", "vol", "fromHigh", "reasons", "corr", "price", "currency")}
-    top = sorted(stocks, key=lambda r: -r["composite"])[:OPP_TOP]
+                                            "f_momentum", "f_risk", "pe", "roe", "revGrowth", "revGrowthBasis", "ret1y", "vol", "fromHigh", "above50", "reasons", "corr", "price", "currency")}
+    top = _capped(sorted(stocks, key=lambda r: -r["composite"]), OPP_TOP)
     fit = []
     for r in stocks:
         if r["corr"] is None:
@@ -122,15 +172,16 @@ def opportunities(settings, markets):
         # Diversifying: 100 for a stock that moves independently of you (or against you), 0 for one that moves in step
         diversifies = (1 - max(r["corr"], 0)) * 100
         fit.append({**pick(r), "diversifies": diversifies, "fit": (r["composite"] + diversifies) / 2})
-    fit = sorted(fit, key=lambda r: -r["fit"])[:OPP_FIT]
-    sale = sorted((r for r in stocks if (r.get("f_quality") or 0) >= SALE_QUALITY and r["fromHigh"] <= SALE_DROP), key=lambda r: r["fromHigh"])[:OPP_TOP]
+    fit = _capped(sorted(fit, key=lambda r: -r["fit"]), OPP_FIT)
+    sale = _capped(sorted((r for r in stocks if (r.get("f_quality") or 0) >= SALE_QUALITY and r["fromHigh"] <= SALE_DROP and r.get("above50")),
+                          key=lambda r: -r["f_quality"]), OPP_TOP)
     cs = p.get("coreSatellite") or {}
     return {
         "markets": markets, "scanned": len(rows), "failed": failed, "map": [pick(r) for r in stocks], "top": [pick(r) for r in top],
         "fit": fit, "onSale": [pick(r) for r in sale], "holdings": sorted(held),
         "fitWeeks": int((total.index[-1] - total.index[0]).days // 7) if total is not None and len(total) > 1 else None,
         "satellite": {"amount": cs.get("amount"), "action": cs.get("action"), "target": cs.get("target"), "core": cs.get("core"), "base": p["base"]} if cs else None,
-        "rules": {"zone": OPP_ZONE, "top": OPP_TOP, "fit": OPP_FIT, "saleQuality": SALE_QUALITY, "saleDrop": SALE_DROP, "reasonAt": REASON_AT},
+        "rules": {"zone": OPP_ZONE, "top": OPP_TOP, "fit": OPP_FIT, "saleQuality": SALE_QUALITY, "saleDrop": SALE_DROP, "reasonAt": REASON_AT, "sectorCap": SECTOR_CAP},
     }
 
 
@@ -225,7 +276,9 @@ def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
     if not fcf or not shares or fcf <= 0:
         return {"error": "DCF needs positive free cash flow and share count (not available for this asset)."}
     if growth is None:
-        g = inf.get("revenueGrowth")
+        # Revenue growth a year over three years where there are the statements: one quarter against a year before
+        # turned an oil-price swing into 15% a year for five years
+        g = inf.get("revenueGrowth3y") if inf.get("revenueGrowth3y") is not None else inf.get("revenueGrowth")
         growth = float(np.clip(g if g is not None else 0.05, 0.0, 0.15))
     if discount <= terminal:
         return {"error": "Discount rate must be above terminal growth."}
@@ -491,12 +544,13 @@ def portfolio_points(settings):
         items.append({"tone": (p["dayPnl"] > 0) - (p["dayPnl"] < 0), "ticker": None, "priority": 3, "kind": "portfolio",
                       "text": f"Your portfolio {'gained' if p['dayPnl'] >= 0 else 'lost'} {money(abs(p['dayPnl']))} ({p['dayPnl'] / before:+.2%}) {when}. "
                               f"It's worth {money(p['total'])}, {money(p['pnl'])} ({p['pnlPct']:+.2%}) against what you paid."})
+    # Only satellite over its share (the riskier side) is worth a line every day; more in core than the target
+    # needs no action, and a daily reminder would only nudge buying single stocks
     cs = p.get("coreSatellite") or {}
-    if cs.get("action") and cs["action"] != "Hold":
-        to = "satellite" if cs["action"] == "To satellite" else "core"
-        items.append({"tone": 0, "ticker": None, "priority": 4, "kind": "portfolio",
-                      "text": f"Core is {cs['core']:.0%} of your portfolio against your {cs['target']:.0%} target. Reaching it means about "
-                              f"{money(cs['amount'])} more in {to}, by moving money or putting new money there."})
+    if cs.get("action") == "To core":
+        items.append({"tone": -1, "ticker": None, "priority": 4, "kind": "portfolio",
+                      "text": f"Satellite is {cs['satellite']:.0%} of your portfolio, above your {1 - cs['target']:.0%} limit. About "
+                              f"{money(cs['newMoney'])} of new money into core would bring it back, without selling."})
     for w in p["warnings"]:
         items.append({"tone": -1, "ticker": None, "priority": 4, "kind": "portfolio", "text": w})
     return items
@@ -556,10 +610,12 @@ def digest(settings, tiles=None):
             items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} reports earnings in {ev['earningsDays']} days ({ev['earnings']})."})
         if t in held and ev["exDividendDays"] is not None and ev["exDividendDays"] <= 7:
             items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} goes ex-dividend in {ev['exDividendDays']} days ({ev['exDividend']})."})
-        if r["stance"] in ("Weak",) and t in held:
+        # A thesis is about a company: for a fund or crypto the composite is only trend and calm
+        if r["stance"] in ("Weak",) and t in held and r.get("assetClass") == "Stocks":
             items.append({"tone": -1, "ticker": t, "priority": 4, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
     record_scores([r for t, r in rows.items() if t in tickers])
-    for t in tickers:
+    # A broad index fund turning "Neutral" or "Weak" in a falling market is expected, not a reason to rethink it
+    for t in [x for x in tickers if x not in CORE_FUNDS]:
         change = score_change(t)
         if change:
             items.append({"tone": 0, "ticker": t, "priority": 4, "text": change})
