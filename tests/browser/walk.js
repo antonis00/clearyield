@@ -64,6 +64,12 @@ const SLOW = 150000;
   expect("research: a yield shows in percent", /^\d[\d,.]*%$/.test(await txt("#rPrice")), await txt("#rPrice"));
   await research("^GSPC");
   expect("research: an index shows in points", /^\d[\d,.]*$/.test(await txt("#rPrice")) && !/\$/.test(await txt("#statGrid")), await txt("#rPrice"));
+  // A question typed in the top search box runs in the Screener, instead of being looked up as a symbol
+  await p.fill("#globalSearch", "gulf dividend payers yielding over 4%"); await p.waitForTimeout(700); await p.press("#globalSearch", "Enter");
+  await p.waitForFunction(() => !document.querySelector("#view-screener").classList.contains("hidden") && /matches out of/.test(document.querySelector("#scrInfo").innerText), null, { timeout: SLOW });
+  expect("search: a question runs in the Screener", (await p.inputValue("#scrQuery")) === "gulf dividend payers yielding over 4%" && /Min yield: 4(\.0)?%/.test(await txt("#scrInfo")), (await txt("#scrInfo")).slice(0, 80));
+  await p.reload(); await p.waitForTimeout(500);  // the question filled the screener's filters; later steps start clean
+  await research("^GSPC");
   // The mouse wheel scrolls the page over a chart; only Ctrl + wheel zooms it (and the RSI and MACD follow)
   const span = () => p.evaluate(() => state.lw.map((c) => { const r = c.timeScale().getVisibleLogicalRange(); return r ? Math.round((r.to - r.from) * 100) / 100 : null; }));
   await p.evaluate(() => window.scrollTo(0, 0));
@@ -79,7 +85,7 @@ const SLOW = 150000;
     && ctrl.span[0] < before[0] && ctrl.span.every((s) => s === ctrl.span[0]) && ctrl.scrolled === 0, `${before[0]} bars → plain ${plain.span[0]} (page moved ${plain.scrolled}px) → Ctrl ${ctrl.span.join("/")}`);
   if (MODE === "live") {  // demo mode invents data for any symbol, so there is no unknown ticker there
     await research("NOSUCHTICKER");
-    expect("research: unknown ticker explains itself", /No price data/.test(await txt("#researchEmpty")));
+    expect("research: unknown ticker explains itself", /No price data|didn't return prices/.test(await txt("#researchEmpty")) && !/Expecting value/.test(await txt("#researchEmpty")), await txt("#researchEmpty"));
   }
 
   if (MODE === "live") {  // a symbol outside the built-in list, the way you'd really search for it

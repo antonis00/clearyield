@@ -4,6 +4,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import time
 
 import numpy as np
@@ -60,8 +61,13 @@ def _df_from(obj):
     return pd.DataFrame(obj, index=idx).astype(float)
 
 
+_SYMBOL = re.compile(r"[A-Za-z0-9^=.\-&]{1,24}")
+
+
 def history(ticker, period="5y"):
     """Daily OHLCV. Fetches 5y once (cached) and slices shorter periods from it."""
+    if not _SYMBOL.fullmatch(ticker or ""):  # a sentence or stray text: never sent to Yahoo as a symbol
+        raise DataError(f"'{ticker[:60]}' isn't a ticker symbol. Search by company name, or ask the Screener a question.")
     fetch_period = "max" if period in ("max", "10y") else "5y"
     key = f"hist:{ticker}:{fetch_period}"
     cached = db.cache_get(key, TTL["history"])
@@ -85,8 +91,9 @@ def history(ticker, period="5y"):
 def _fetch_history(ticker, period):
     try:
         df = _yf().Ticker(ticker).history(period=period, interval="1d", auto_adjust=True)
-    except Exception as e:  # network / parsing errors
-        raise DataError(f"Could not download prices for {ticker}: {e}")
+    except Exception as e:  # network or parsing errors: the detail goes to the log, a plain sentence to the page
+        log.warning("prices failed for %s: %s", ticker, e)
+        raise DataError(f"Yahoo didn't return prices for {ticker}. Check the symbol, or try again in a minute.")
     if df is None or df.empty:
         raise DataError(f"No price data for '{ticker}'. Check the Yahoo Finance symbol (e.g. QNBK.QA, SAP.DE, BTC-USD).")
     df = df[["Open", "High", "Low", "Close", "Volume"]].copy()

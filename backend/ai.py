@@ -500,7 +500,9 @@ def _parse_rules(t):
 
     markets = [m for m, words in MARKET_WORDS.items() if _has(t, *words)]
     # "us" on its own is usually the pronoun, as in "show us"
-    if re.search(r"(?<!show )(?<!give )(?<!find )(?<!tell )(?<!get )(?<!let )\bus[ -](?:[a-z]+ ){0,2}(?:stocks?|shares|companies|market|equities|listed|names)\b|\bin the us\b", t):
+    # ...but before "stocks" or a sector ("US banks", "US tech") it's the country
+    nouns = "|".join(["stocks?", "shares", "companies", "market", "equities", "listed", "names"] + [re.escape(w) for ws in SECTOR_WORDS.values() for w in ws])
+    if re.search(rf"(?<!show )(?<!give )(?<!find )(?<!tell )(?<!get )(?<!let )\bus[ -](?:[a-z]+ ){{0,2}}(?:{nouns})\b|\bin the us\b", t):
         markets.insert(0, "US")
     if markets:
         f["markets"] = list(dict.fromkeys(m for m in MARKET_WORDS if m in markets))
