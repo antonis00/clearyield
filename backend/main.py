@@ -385,7 +385,8 @@ def stock_brief(ticker: str):
 def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: float = 0.09, terminal: float = 0.025):
     t = T(ticker)
     full = _hist_or_404(t, "1y")
-    inf = data.info(t)
+    fin = data.financials(t)
+    inf = {**data.info(t), "revenueGrowth3y": insights.multi_year_growth(fin, "revenue")}  # the default growth's basis
     res = insights.dcf(inf, growth, years, discount, terminal)
     if "fairValue" in res:
         price = float(full["Close"].iloc[-1])

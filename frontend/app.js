@@ -59,9 +59,9 @@ const loading = (el, msg = "Loading…") => { el.innerHTML = `<div class="muted"
 const FACTOR_INFO = {
   value: "Value: is the price cheap for what the company earns and owns? From P/E, forward P/E, price/book, EV/EBITDA and free-cash-flow yield. A higher score means cheaper. Stocks only.",
   quality: "Quality: how profitable and financially sound the business is. From return on equity, operating and net margins, debt/equity and the current ratio. A higher score means a stronger business. Stocks only.",
-  growth: "Growth: how fast the business is growing. From revenue and earnings growth over the past year, and forecast against trailing earnings per share. A higher score means faster growth. Stocks only.",
+  growth: "Growth: how fast the business is growing. From revenue and net income growth a year over the last three annual statements (the latest quarter against a year before, where there aren't three years or a loss at either end), and forecast against trailing earnings per share. A higher score means faster growth. Stocks only.",
   momentum: "Momentum: how the price has been trending. From the 12-month return leaving out the last month, the price against its 200-day average, and the 3-month return. A higher score means a stronger trend. All assets.",
-  risk: "Risk: how bumpy the ride has been. From 1-year volatility and the largest fall from a peak in the past year, plus beta for stocks. A higher score means lower risk. All assets; crypto is judged on a looser scale.",
+  risk: "Risk: how bumpy the ride has been. From 1-year volatility and the largest fall from a peak in the past year, plus beta for stocks. A higher score means lower risk. One scale for every asset, crypto included.",
 };
 // A small "i" that explains something on hover or keyboard focus; the text is shown by the floating tooltip below
 const infoIcon = (text) => `<span class="info" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
@@ -326,7 +326,8 @@ async function openStock(t, period) {
     $("#ptEntry").value = s.stats.price.toFixed(2);
     $("#ptAmountLabel").textContent = `Amount (${state.meta.settings.base_currency})`;
     $("#ptRiskLabel").textContent = `Most I'd lose (${state.meta.settings.base_currency})`;
-    const g = s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
+    // The default growth: revenue a year over three years where there are the statements, else the latest quarter
+    const g = isNum(s.info.revenueGrowth3y) ? s.info.revenueGrowth3y : s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
     if (hasDcf(s)) runDcf();
     loadNews(); loadEarnings(); loadFund(s); renderHistory(s);
   } catch (e) {
@@ -484,7 +485,7 @@ function renderFactors(s) {
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
   $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}
-    <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}">${isNum(p.score) ? num(p.score, 0) : "n/a"}</span></div>`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
+    <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}"${p.note ? ` title="${esc(p.note)}"` : ""}>${isNum(p.score) ? num(p.score, 0) : p.note ? "not used" : "n/a"}</span></div>${p.note && p === (s.scores.breakdown[n] || []).find((x) => x.note) ? `<div class="part-note">${esc(p.note)}</div>` : ""}`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
   $$(".factor .fh").forEach((h) => h.onclick = (e) => { if (!e.target.closest(".info")) h.parentElement.classList.toggle("open"); });
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
 }
@@ -532,9 +533,12 @@ async function runDcf() {
     if (ticker !== state.ticker) return;
     if (d.error) { out.innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
     const cur = state.stock.info.currency;
-    out.innerHTML = `<div class="dcf-big"><div>${money(d.fairValue, cur)}<small>Fair value / share</small></div><div>${money(d.price, cur)}<small>Price</small></div><div class="${cls(d.marginOfSafety)}">${pct(d.marginOfSafety)}<small>Upside to fair value</small></div></div>
+    // What the price assumes comes first: it needs no growth guess. The fair value follows as the central figure and
+    // the range across the grid, since a single number looks more precise than a model this sensitive can be.
+    const vals = d.grid.fairValue.flat().filter(isNum), lo = Math.min(...vals), hi = Math.max(...vals);
+    out.innerHTML = `<p class="sm dcf-lead"><b>What the price assumes:</b> ${isNum(d.impliedGrowth) ? `free cash flow growing <b>${pct(d.impliedGrowth, 1, false)} a year</b> for ${d.years} years, at this discount and terminal rate. Compare it with the growth you think is realistic.` : "no growth rate from -50% to +100% a year reaches today's price with these rates."}</p>
+      <div class="dcf-big"><div>${money(d.fairValue, cur)}<small>Fair value at ${pct(d.growth, 1, false)} growth</small></div><div>${vals.length ? `${money(lo, cur, 0)}–${money(hi, cur, 0)}` : "—"}<small>Range across the grid</small></div><div>${money(d.price, cur)}<small>Price</small></div><div class="${cls(d.marginOfSafety)}">${pct(d.marginOfSafety)}<small>Upside at the central figure</small></div></div>
       <div class="muted sm">Starting FCF ${big(d.startFcf)} ${esc(d.statementCurrency || "")} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)} ${esc(d.statementCurrency || "")}.${d.statementCurrency && !cur.startsWith(d.statementCurrency.slice(0, 2)) ? ` Fair value is converted from ${esc(d.statementCurrency)} at today's rate.` : ""}</div>
-      <p class="sm"><b>What the price assumes:</b> ${isNum(d.impliedGrowth) ? `free cash flow growing ${pct(d.impliedGrowth, 1, false)} a year for ${d.years} years, at this discount and terminal rate.` : "no growth rate from -50% to +100% a year reaches today's price with these rates."}</p>
       <div class="tablewrap"><table class="grid"><tr><th>Growth ↓ · Discount →</th>${d.grid.discount.map((x) => `<th class="num">${pct(x, 1, false)}</th>`).join("")}</tr>${d.grid.fairValue.map((row, r) => `<tr><th>${pct(d.grid.growth[r], 1, false)}</th>${row.map((v) => `<td class="num ${isNum(v) ? cls(v - d.price) : ""}">${money(v, cur, 0)}</td>`).join("")}</tr>`).join("")}</table></div>
       <p class="muted sm">Fair value at each pair of rates. Green is above today's price, red below.</p>`;
   } catch (e) { out.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
@@ -802,15 +806,15 @@ async function loadOpportunities(force) {
   $("#oppMapNote").textContent = `${inZone.length} in the shaded corner`;
   $("#oppMapHelp").textContent = `Each dot is a stock. Further right is cheaper (value score), higher has a stronger price trend (momentum score), a bigger dot is better quality, and the colour is its overall score. The shaded corner is ${R.zone} or more on both: cheap and rising.`;
   oppBars("oppTop", d.top, (r) => r.composite, { label: (r) => r.ticker, tip: (r) => oppTip(r).slice(1), color: (r) => scoreColor(r.composite), max: 100 });
-  $("#oppTopHelp").textContent = `The ${R.top} highest overall scores: the five factors, weighted as in Settings. Hover a bar for the strongest reasons (factors at ${R.reasonAt} or more).`;
+  $("#oppTopHelp").textContent = `The ${R.top} highest overall scores (the five factors, weighted as in Settings), with at most ${R.sectorCap} from one sector so the list isn't one sector's bet. Hover a bar for the strongest reasons (factors at ${R.reasonAt} or more).`;
   const sat = d.satellite;
-  $("#oppFitNote").textContent = sat?.action === "To satellite" && sat.amount ? `About ${money(sat.amount, base, 0)} is meant for satellite` : "";
+  $("#oppFitNote").textContent = sat && isNum(sat.core) ? `Satellite is ${pct(1 - sat.core, 0, false)} of your portfolio (your limit: ${pct(1 - sat.target, 0, false)})` : "";
   oppEmpty("#oppFitWrap", "oppFit", !d.holdings.length ? "Add your holdings on the Portfolio page to see which stocks would fit them." : !d.fit.length ? "Not enough shared price history with your portfolio yet: it needs about two months." : "");
   if (d.fit.length) oppBars("oppFit", d.fit, (r) => r.fit, { label: (r) => r.ticker, tip: (r) => [`Fit ${num(r.fit, 0)}: score ${num(r.composite, 0)}, diversifies ${num(r.diversifies, 0)}`, `Moves ${pct(r.corr, 0, false)} in step with your portfolio`, ...(r.reasons || [])], color: () => C("--accent2"), max: 100 });
-  $("#oppFitHelp").textContent = d.holdings.length ? `Ranked by the average of a stock's overall score and how little it has moved with what you hold now (100 = independently or against it, 0 = in step), over the past ${d.fitWeeks} weeks.${d.fitWeeks < 26 ? " That's a short period, so treat the diversification part as a rough guide." : ""} Stocks you already hold are left out.` : "";
-  oppEmpty("#oppSaleWrap", "oppSale", d.onSale.length ? "" : `No stock with a quality score of ${R.saleQuality}+ is ${Math.abs(R.saleDrop * 100)}% or more below its 52-week high right now.`);
+  $("#oppFitHelp").textContent = d.holdings.length ? `Ranked by the average of a stock's overall score and how little it has moved with what you hold now (100 = independently or against it, 0 = in step), with both in your base currency, over the past ${d.fitWeeks} weeks.${d.fitWeeks < 26 ? " That's a short period, so treat the diversification part as a rough guide." : ""} Stocks you already hold are left out.` : "";
+  oppEmpty("#oppSaleWrap", "oppSale", d.onSale.length ? "" : `No stock with a quality score of ${R.saleQuality}+ is ${Math.abs(R.saleDrop * 100)}% or more below its 52-week high with its fall paused right now.`);
   if (d.onSale.length) oppBars("oppSale", d.onSale, (r) => -r.fromHigh * 100, { label: (r) => r.ticker, tip: (r) => [`${pct(r.fromHigh, 0)} from its 52-week high`, `Quality score ${num(r.f_quality, 0)}`, ...(r.reasons || [])], color: () => C("--accent"), fmt: (v) => (v ? `-${v}%` : "0%") });
-  $("#oppSaleHelp").textContent = `Quality score ${R.saleQuality} or more and at least ${Math.abs(R.saleDrop * 100)}% below the highest price of the past year, biggest fall first. A fall can be a bargain or a warning, so check why it fell.`;
+  $("#oppSaleHelp").textContent = `Quality score ${R.saleQuality} or more, at least ${Math.abs(R.saleDrop * 100)}% below the highest price of the past year, and back above its 50-day average, so the fall has paused (a stock still falling tends to keep falling for a while). Best quality first; the bar is how far it fell. A fall can be a bargain or a warning, so check why it fell.`;
 }
 $("#oppRefresh").onclick = () => loadOpportunities(true);
 // The dashboard's card: the map in small, and the top of the "cheap and rising" corner. Loaded after the rest.
@@ -836,7 +840,10 @@ async function loadPortfolio() {
   $("#pfKpis").innerHTML = [
     ["Total value", money(p.total, b, 0)], ["Invested", money(p.cost, b, 0)], ["Unrealised P&L", `<span class="${cls(p.pnl)}">${money(p.pnl, b, 0)}</span>`, pct(p.pnlPct)],
     [dayChange(p)[0], `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`, esc(dayChange(p)[1])], ["Realised P&L", `<span class="${cls(p.realised)}">${money(p.realised, b, 0)}</span>`], ["Dividends received", money(p.dividends, b, 0)],
-    ["Annual return", isNum(p.xirr) ? cpct(p.xirr) : "—", isNum(p.xirr) ? "Your money's return, with timing" : esc(p.xirrWhy || "")],
+    // Under a year, the return so far (not annualised); from a year, the annual return with timing
+    isNum(p.xirr) ? ["Annual return", cpct(p.xirr), "Your money's return a year, with timing"]
+      : /^Shown after a year/.test(p.xirrWhy || "") && isNum(p.returnSoFar) ? ["Return so far", cpct(p.returnSoFar), "Not annualised: that starts after a year of history"]
+      : ["Annual return", "—", esc(p.xirrWhy || "")],
     ["Est. dividend income / yr", money(p.annualIncome, b, 0), "What your holdings paid per share in the past year"], ["Positions", p.positions.length],
   ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
   // Nothing bought or sold yet: no row of zeros that looks like a result
@@ -910,9 +917,14 @@ async function loadPortfolio() {
   table($("#pfRebal"), [
     { k: "assetClass", label: "Asset class" }, { k: "target", label: "Target", num: 1, fmt: (v) => pct(v, 1, false) }, { k: "actual", label: "Actual", num: 1, fmt: (v) => pct(v, 1, false) },
     // Plain, not green and red: over target isn't a gain and under it isn't a loss (the suggestion carries the colour)
-    { k: "drift", label: "Drift", num: 1, fmt: (v) => pct(v) }, { k: "action", label: "Suggestion", fmt: (v) => `<b class="${v === "Add" ? "up" : v === "Trim" ? "down" : "muted"}">${v}</b>` },
-    { k: "trade", label: `Amount (${esc(b)})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : money(Math.abs(v), b, 0) },
+    { k: "drift", label: "Drift", num: 1, fmt: (v) => pct(v) }, { k: "action", label: "Status", fmt: (v) => `<b class="${v === "Add" ? "up" : "muted"}">${v === "Add" ? "Under target" : v}</b>` },
+    { k: "newMoney", label: `New money (${esc(b)})`, num: 1, fmt: (v) => (isNum(v) && v >= 0.5 ? money(v, b, 0) : "—") },
+    { k: "trade", label: `Or by selling (${esc(b)})`, num: 1, fmt: (v, row) => row.action === "Hold" ? "—" : `${v > 0 ? "buy" : "sell"} ${money(Math.abs(v), b, 0)}` },
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
+  // New money first: rebalancing by what you add costs nothing; selling has fees and may be taxed
+  const nm = p.rebalanceNewMoney;
+  $("#pfRebalNote").textContent = !p.rebalance.length ? "" : nm === null ? "Something you hold has a 0% target, so only selling would reach the targets. Selling has costs and may be taxed."
+    : nm < 0.5 ? "On target: nothing to do." : `Without selling anything: about ${money(nm, b, 0)} of new money, split as in the New money column, reaches every target. Selling instead has costs and may be taxed.`;
 }
 function renderCoreSatellite(p) {
   const cs = p.coreSatellite, b = p.base;
@@ -922,7 +934,8 @@ function renderCoreSatellite(p) {
   const target = `${Math.round(cs.target * 100)}/${Math.round((1 - cs.target) * 100)}`;
   const advice = cs.action === undefined ? "No suggestion until every holding has data."
     : cs.action === "Hold" ? `Within 2 points of your ${target} target.`
-    : `Move about ${money(cs.amount, b, 0)} ${cs.action === "To core" ? "from satellite to core" : "from core to satellite"} to reach ${target}, or put new money into ${cs.action === "To core" ? "core" : "satellite"} until it gets there.`;
+    : cs.action === "Above core target" ? `More in core than your ${target} target: the lower-risk side, so nothing needs selling. If you want satellite holdings, about ${money(cs.newMoney, b, 0)} of new money there would reach ${target}.`
+    : `Satellite is above its share: the riskier side. About ${money(cs.newMoney, b, 0)} of new money into core would bring it back to ${target} without selling, or moving about ${money(cs.amount, b, 0)} from satellite to core (selling has costs and may be taxed).`;
   const r = cs.riskShare, share = (v) => pct(Math.abs(v ?? 0) < 0.005 ? 0 : v, 0, false); // no "-0%"
   const risk = !r ? "Risk shares need two or more holdings with a few weeks of prices."
     : `Satellite is ${pct(cs.satellite, 0, false)} of the money and ${share(r.satellite)} of the portfolio's day-to-day swings; core ${pct(cs.core, 0, false)} and ${share(r.core)}. (Past year, today's holdings.)`;

@@ -246,10 +246,15 @@ def summary(settings, extra=None):
         annual_why = "Needs a dated purchase"
     else:
         dated = flows + ([(dt.date.today(), total)] if total else [])
-        annual = ledger.xirr(dated)
-        if annual is None:
-            span = (max(d for d, _ in dated) - min(d for d, _ in dated)).days
-            annual_why = "Needs a month or more of history" if span < 30 else "Can't be worked out from these cash flows"
+        span = (max(d for d, _ in dated) - min(d for d, _ in dated)).days
+        # Not annualised under a year (the GIPS reporting standard): stretching a few months into a yearly rate
+        # magnifies both gains and losses. Until then the page shows the return so far, not annualised.
+        if span < 365:
+            annual_why = "Shown after a year of history: annualising a shorter period magnifies gains and losses"
+        else:
+            annual = ledger.xirr(dated)
+            if annual is None:
+                annual_why = "Can't be worked out from these cash flows"
     for r in rows:
         r["weight"] = r["value"] / total if total else 0
 
@@ -361,17 +366,23 @@ def summary(settings, extra=None):
     if risk.get("maxDrawdown") is not None and risk["maxDrawdown"] < -0.25:
         warnings.append(f"Portfolio fell {abs(risk['maxDrawdown']):.0%} from peak in the past year (current holdings).")
 
+    # Rebalancing. The first way offered is new money: how much more, put into what's under target, brings every
+    # class to its target without selling anything (no fees or tax on sales). Selling is the alternative, not the
+    # advice. Nothing reaches a target of 0% without selling, so then there's no new-money route.
     targets = settings.get("targets", {})
-    rebalance = []
+    rebalance, new_money = [], None
     if total and targets and not incomplete:
         tsum = sum(targets.values()) or 1
-        classes = set(targets) | set(allocation["assetClass"])
-        for c in sorted(classes):
-            tgt = targets.get(c, 0) / tsum
-            act = allocation["assetClass"].get(c, 0) / total
-            diff = tgt - act
-            rebalance.append({"assetClass": c, "target": tgt, "actual": act, "drift": act - tgt,
-                              "trade": diff * total, "action": "Add" if diff > 0.02 else ("Trim" if diff < -0.02 else "Hold")})
+        classes = sorted(set(targets) | set(allocation["assetClass"]))
+        tgt = {c: targets.get(c, 0) / tsum for c in classes}
+        val = {c: allocation["assetClass"].get(c, 0) for c in classes}
+        if not any(val[c] > 0 and tgt[c] == 0 for c in classes):
+            new_money = max(0.0, max(val[c] / tgt[c] - total for c in classes if tgt[c] > 0 and val[c] > 0)) if any(val[c] > 0 for c in classes) else 0.0
+        for c in classes:
+            diff = tgt[c] - val[c] / total
+            rebalance.append({"assetClass": c, "target": tgt[c], "actual": val[c] / total, "drift": -diff, "trade": diff * total,
+                              "newMoney": max(0.0, tgt[c] * (total + new_money) - val[c]) if new_money is not None else None,
+                              "action": "Add" if diff > 0.02 else ("Over target" if diff < -0.02 else "Hold")})
 
     # Core and satellite: the split against your target, who carries the risk, and whether the picks are paying off
     core_satellite = None
@@ -381,9 +392,14 @@ def summary(settings, extra=None):
         core_satellite = {"target": target, "core": core, "satellite": 1 - core, "drift": core - target,
                           "riskShare": _risk_shares(series, bucket_of) if len(series) > 1 else None}
         if not incomplete:  # the same rule as rebalancing: no amounts while a holding is missing from the total
+            # More in core than the target is the lower-risk side: nothing needs selling, and new money could go to
+            # satellite if you want any. Satellite over its share is the riskier side: then core is suggested.
             gap = target - core
-            core_satellite["action"] = "Hold" if abs(gap) <= 0.02 else ("To core" if gap > 0 else "To satellite")
-            core_satellite["amount"] = abs(gap) * total
+            core_value = core * total
+            core_satellite["action"] = "Hold" if abs(gap) <= 0.02 else ("To core" if gap > 0 else "Above core target")
+            core_satellite["amount"] = abs(gap) * total  # what moving money would take
+            core_satellite["newMoney"] = (core_value / target - total if gap < 0 and target > 0 else
+                                          (total - core_value) / (1 - target) - total if gap > 0 and target < 1 else 0.0)
         if perf and not extra:
             core_satellite["performance"] = _bucket_performance(db.q("SELECT * FROM transactions"), base, bucket_of)
 
@@ -394,10 +410,12 @@ def summary(settings, extra=None):
         # The latest day of each holding, which on a weekend is Friday for stocks but Sunday for crypto
         "dayPnl": sum(r["dayPnl"] for r in rows), "dayFrom": min((r["asOf"] for r in rows), default=None),
         "dayTo": max((r["asOf"] for r in rows), default=None), "allocation": allocation, "performance": perf, "risk": risk,
-        "warnings": warnings, "rebalance": rebalance, "coreSatellite": core_satellite, "annualIncome": income, "errors": errors,
+        "warnings": warnings, "rebalance": rebalance, "rebalanceNewMoney": new_money, "coreSatellite": core_satellite, "annualIncome": income, "errors": errors,
         "incomplete": incomplete, "missing": missing, "_series": series,
         "realised": realised_total, "dividends": dividends_total, "totalGain": total - total_cost + realised_total + dividends_total,
         "xirr": annual, "xirrWhy": annual_why, "closed": closed,
+        # What you've gained against what you put in (every purchase, at its date's rate), not annualised
+        "returnSoFar": (total - total_cost + realised_total + dividends_total) / invested if (invested := -sum(a for _, a in flows if a < 0)) else None,
         "note": "The chart follows what you actually held each day, at each day's FX rate, with dividends included in the prices. Trades themselves aren't gains. Lots with no date count as held from the start.",
     }
 

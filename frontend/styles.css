@@ -269,3 +269,6 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .opp-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
 .opp-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) { .opp-dash { grid-template-columns: 1fr; } }
+
+/* Why some metrics aren't scored, under the first of them */
+.part-note { font-size: 11px; color: var(--muted); padding: 2px 0 6px; grid-column: 1 / -1; }
