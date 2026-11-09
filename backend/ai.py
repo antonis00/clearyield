@@ -288,8 +288,11 @@ BRIEF_RULES = (
 _NUM = re.compile(r"(?<![\w.])([-+−]?)(?:[$€£]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s?(%|x\b|×|times\b|bn\b|[TBMk]\b|trillion\b|billion\b|million\b|thousand\b)?", re.I)
 _SCALE = {"t": 1e12, "trillion": 1e12, "b": 1e9, "bn": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6, "k": 1e3, "thousand": 1e3}
 # Numbers that are names or periods, not figures: "S&P 500", "50-day", "12-1 month", dates, list markers
-_NOT_FIGURES = re.compile(r"\b(?:S&P|Nasdaq|Russell|FTSE|Stoxx|Euro Stoxx|DAX|Dow|Nikkei|MSCI ACWI|ACWI)[ -]?\d+\b|\b\d{4}-\d{2}-\d{2}\b|"
-                          r"\b\d+(?:-\d+)?[ -](?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b|\bQ[1-4]\b|^\s*\d+\.\s", re.I | re.M)
+# An index's name with its number ("S&P 500", "Nikkei 225"), but not a level written after the name ("Nasdaq 24,579.43")
+_NOT_FIGURES = re.compile(r"\b(?:S&P|Nasdaq|Russell|FTSE|Stoxx|Euro Stoxx|DAX|Dow|Nikkei|MSCI ACWI|ACWI)[ -]?\d+\b(?![.,]\d)|\b\d{4}-\d{2}-\d{2}\b|"
+                          r"\b\d+(?:-\d+)?[ -](?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b|\bQ[1-4]\b|^\s*\d+\.\s|"
+                          # dates written with the month's name: "Oct 14", "14 October", "Jan 3, 2022"
+                          r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b(?![.,]\d)|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\b", re.I | re.M)
 
 
 # Typographic dashes, minus signs and narrow spaces, which some models use ("50‑day", "‑1.0 %"), read as plain ones
@@ -299,6 +302,8 @@ _PLAIN = str.maketrans({**{c: "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2212
 def _figures(text):
     """(value, unit, decimals, as written) for each figure in a text, with % / x / money scale as its unit."""
     out = []
+    # A narrow or no-break space between digit groups is a thousands separator ("24 579.43", as some models write it)
+    text = re.sub(r"(?<=\d)[    ](?=\d{3}(?!\d))", ",", text)
     for m in _NUM.finditer(_NOT_FIGURES.sub(" ", text.translate(_PLAIN))):
         sign, whole, frac, unit = m.groups()
         value = float(whole.replace(",", "") + ("." + frac if frac else "")) * (-1 if sign in ("-", "−") else 1)
@@ -314,11 +319,11 @@ def check_figures(text, facts):
     """Which figures in the brief can be found in the data, allowing for rounding. A figure must match one with the same
     unit (a ROE of 142.1% doesn't make "1.42" right); a bare number may match any. Years and small counts are skipped."""
     known = _figures(facts)
-    checked, unmatched = 0, []
+    checked, unmatched, verified = 0, [], []
     for value, unit, dec, written in _figures(text):
-        if not unit and (1900 <= value <= 2100 and dec == 0 or (abs(value) <= 12 and dec == 0)):
-            continue  # a year, or a count like "3 risks"
-        checked += 1
+        skip = not unit and (1900 <= value <= 2100 and dec == 0 or (abs(value) <= 12 and dec == 0))  # a year, or a count like "3 risks"
+        if not skip:
+            checked += 1
         scale = 1e12 if abs(value) >= 1e12 else 1e9 if abs(value) >= 1e9 else 1e6 if abs(value) >= 1e6 else 1e3 if abs(value) >= 1e3 and unit == "money" else 1
 
         def same(k):
@@ -329,9 +334,49 @@ def check_figures(text, facts):
                 return False
             tol = 0.5 * 10 ** -min(dec, kdec) * (scale if unit == "money" else 1) + 1e-9
             return abs(abs(value) - abs(kv)) <= tol
-        if not any(same(k) for k in known):
-            unmatched.append(written)
-    return {"checked": checked, "unmatched": list(dict.fromkeys(unmatched))}
+        found = any(same(k) for k in known)
+        if found:
+            verified.append((value, unit, dec, written))  # a part a worked-out figure may use, even one not checked ("2,000")
+        elif not skip:
+            unmatched.append((value, unit, dec, written))
+    # A figure not in the data may still be right: worked out from figures the answer itself states and that are in the
+    # data ("35,816.51 = 33,816.51 + 2,000", "94% = 100% - 6%"). Only those count as the parts, so a coincidence among
+    # all the data's numbers can't pass off a slip like "7 + 31 = 40" as worked out.
+    derived, still = [], []
+    for fig in unmatched:
+        how = _worked_out(fig, verified)
+        (derived if how else still).append((fig[3], how))
+    return {"checked": checked, "unmatched": list(dict.fromkeys(w for w, _ in still)),
+            "derived": [{"figure": w, "how": h} for w, h in dict(derived).items()]}
+
+
+def _worked_out(fig, parts):
+    """How `fig` follows from two of `parts` (or one and 100), within its rounding, or None."""
+    value, unit, dec, _ = fig
+    target = abs(value)
+    scale = 1e12 if target >= 1e12 else 1e9 if target >= 1e9 else 1e6 if target >= 1e6 else 1e3 if target >= 1e3 and unit == "money" else 1
+    tol = 0.5 * 10 ** -dec * scale + 1e-9
+    near = lambda x: abs(abs(x) - target) <= max(tol, target * 1e-4)
+    vals = list({(abs(p[0]), p[3]) for p in parts if p[0]})[:40]
+    for i, (a, wa) in enumerate(vals):
+        if unit == "%" and near(100 - a):
+            return f"100% − {wa}"
+        for b, wb in vals[i + 1:] + vals[:i]:
+            if near(a + b):
+                return f"{wa} + {wb}"
+            if near(a - b):
+                return f"{wa} − {wb}" if a >= b else f"{wb} − {wa}"
+            if b and unit == "%" and near(a / b * 100):
+                return f"{wa} as a share of {wb}"
+            if b and unit == "%" and near((a / b - 1) * 100):
+                return f"change from {wb} to {wa}"
+            if near(a * b / 100):
+                return f"{wa} of {wb}"
+            if b and unit != "%" and near(a / b):
+                return f"{wa} ÷ {wb}"
+            if unit != "%" and near(a * b):
+                return f"{wa} × {wb}"
+    return None
 
 
 def check_brief(text, facts):
@@ -341,7 +386,7 @@ def check_brief(text, facts):
     m = re.search(r"what would change the view", text, re.I)
     claims, triggers = (text[:m.start()], text[m.start():]) if m else (text, "")
     a, b = check_figures(claims, facts), check_figures(triggers, facts)
-    return {"checked": a["checked"] + b["checked"], "unmatched": a["unmatched"], "suggested": b["unmatched"]}
+    return {"checked": a["checked"] + b["checked"], "unmatched": a["unmatched"], "suggested": b["unmatched"], "derived": a["derived"] + b["derived"]}
 
 
 def brief(ctx):

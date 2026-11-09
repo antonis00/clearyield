@@ -405,6 +405,18 @@ def dividends_past_year(ticker):
     gives no yield for. Yahoo's dividends are split-adjusted, like its prices."""
     if DEMO:
         return None
+    paid = dividend_payments(ticker)
+    if paid is None:
+        return None
+    since = (pd.Timestamp.today().normalize() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
+    return sum(v for d, v in paid if d > since)
+
+
+def dividend_payments(ticker):
+    """Every dividend per share Yahoo lists, [(date, amount)] oldest first, in the quote currency and split-adjusted,
+    or None if Yahoo didn't answer. Cached a day."""
+    if DEMO:
+        return _demo_dividends(ticker)
     key = f"divs:{ticker}"
     cached = db.cache_get(key, 24 * 3600)
     if cached is None:
@@ -420,8 +432,32 @@ def dividends_past_year(ticker):
                 return None  # not cached, so it's asked again next time
         else:
             db.cache_set(key, cached)
-    since = (pd.Timestamp.today().normalize() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
-    return sum(v for d, v in cached if d > since)
+    return [(d, v) for d, v in cached]
+
+
+def analysts(ticker):
+    """What analysts say, as Yahoo reports it: price targets (low, mean, median, high) and how many rate the stock
+    strong buy, buy, hold, sell or strong sell, now and a month ago. None when Yahoo has none (funds, coins, small
+    companies). Cached a day."""
+    if DEMO:
+        return _demo_analysts(ticker)
+    key = f"analysts:{ticker}"
+    cached = db.cache_get(key, 24 * 3600)
+    if cached is not None:
+        return cached or None
+    try:
+        t = _yf().Ticker(ticker)
+        targets = {k: _num(v) for k, v in (t.analyst_price_targets or {}).items() if k in ("low", "mean", "median", "high")}
+        summary = t.recommendations_summary
+        rows = summary.to_dict("records") if summary is not None and not summary.empty else []
+        counts = lambda period: next(({k: int(r.get(k) or 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")} for r in rows if r.get("period") == period), None)
+        out = {"targets": {k: v for k, v in targets.items() if v is not None}, "ratings": counts("0m"), "ratingsMonthAgo": counts("-1m")}
+    except Exception as e:
+        log.warning("analysts failed for %s: %s", ticker, e)
+        return db.cache_get_stale(key) or None
+    out = out if (out["targets"] or out["ratings"]) else {}
+    db.cache_set(key, out, ts=None if out else time.time() - 24 * 3600 + 3600)  # nothing is kept an hour, in case it was a rate limit
+    return out or None
 
 
 def dividend_factor(ticker):
@@ -734,6 +770,31 @@ def _demo_earnings(ticker):
         act = est * float(rng.uniform(0.85, 1.2))
         out.append({"quarter": (end - pd.DateOffset(months=3 * i)).strftime("%Y-%m-%d"), "actual": round(act, 2), "estimate": round(est, 2), "surprise": act / est - 1})
     return out
+
+
+def _demo_dividends(ticker):
+    """Quarterly payments over five years at the demo yield, growing a little each year; none for funds that pay none."""
+    yld = _demo_info(ticker).get("dividendYield") or 0
+    if not yld or ticker.endswith("-USD") or ticker in MACRO:
+        return []
+    price = float(_demo_history(ticker)["Close"].iloc[-1])
+    today = pd.Timestamp.today().normalize()
+    out = []
+    for q in range(20, 0, -1):
+        day = today - pd.DateOffset(months=3 * q - 1)
+        out.append((day.strftime("%Y-%m-%d"), round(price * yld / 4 * (1.04 ** (-(q // 4))), 4)))
+    return out
+
+
+def _demo_analysts(ticker):
+    if ticker.endswith("-USD") or ticker in _etfs() or ticker in MACRO:
+        return None
+    rng = np.random.default_rng(_seed(ticker) + 5)
+    price = float(_demo_history(ticker)["Close"].iloc[-1])
+    mean = price * float(rng.uniform(0.9, 1.3))
+    ratings = {k: int(rng.integers(0, n)) for k, n in (("strongBuy", 8), ("buy", 15), ("hold", 12), ("sell", 4), ("strongSell", 2))}
+    return {"targets": {"low": round(mean * 0.75, 2), "mean": round(mean, 2), "median": round(mean * 1.01, 2), "high": round(mean * 1.3, 2)},
+            "ratings": ratings, "ratingsMonthAgo": {**ratings, "buy": max(0, ratings["buy"] - 1)}}
 
 
 def _demo_fund(ticker):

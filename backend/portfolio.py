@@ -479,5 +479,8 @@ def pretrade(settings, ticker, amount=None, entry=None, stop=None, risk=None):
         "sizedShares": sized, "sector": inf.get("sector") or inf.get("assetClass"), "region": inf.get("region"),
         "before": None if incomplete else weights(before), "after": None if incomplete else weights(after),
         "newWarnings": [w for w in after["warnings"] if _without_figures(w) not in {_without_figures(b) for b in before["warnings"]}],
-        "correlations": correlations[:8], "incomplete": incomplete, "missing": sorted(set(before["missing"]) | set(after["missing"])),
+        "correlations": correlations[:8], "incomplete": incomplete,
+        # The whole sector mix counting what funds hold, so "how would my mix change" has its answer in the data
+        "sectorMixBefore": None if incomplete or not before["total"] else {k: v / before["total"] for k, v in before["allocation"]["sectorLookThrough"].items()},
+        "sectorMixAfter": None if incomplete or not after["total"] else {k: v / after["total"] for k, v in after["allocation"]["sectorLookThrough"].items()}, "missing": sorted(set(before["missing"]) | set(after["missing"])),
     }
