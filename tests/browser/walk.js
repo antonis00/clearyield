@@ -236,7 +236,44 @@ const SLOW = 150000;
   await p.waitForTimeout(4000);
   const gain = await p.evaluate(async () => { const pf = await (await fetch("/api/portfolio")).json(); const k = [...document.querySelectorAll("#dashPortfolio .kpi")].find((x) => /Total gain/i.test(x.innerText)); return { pf: { total: pf.totalGain, parts: pf.pnl + pf.realised + pf.dividends }, text: k?.innerText.replace(/\s+/g, " ") }; });
   expect("dashboard: total gain includes sales and dividends", Math.abs(gain.pf.total - gain.pf.parts) < 1e-6 && /open · .* sold · .* dividends/.test(gain.text || ""), gain.text);
-  expect("dashboard: portfolio snapshot and digest", !/undefined|NaN|\[object/.test(await txt("#view-dashboard")), (await txt("#dashPortfolio")).slice(0, 90));
+  // The snapshot's core/satellite bar matches the portfolio's own figures; the four figures sit on one row
+  const snap = await p.evaluate(async () => {
+    const pf = await (await fetch("/api/portfolio")).json(), bar = document.querySelector("#dashExtras .cs-bar");
+    const tops = [...document.querySelectorAll("#dashPortfolio .kpi")].map((k) => Math.round(k.getBoundingClientRect().top));
+    return { core: pf.coreSatellite.core, width: bar && parseFloat(bar.querySelector(".core").style.width), mark: bar && parseFloat(bar.querySelector("b").style.left), target: pf.coreSatellite.target, oneRow: new Set(tops).size === 1, text: document.querySelector("#dashExtras").innerText };
+  });
+  expect("dashboard: core/satellite bar in the snapshot, figures on one row", Math.abs(snap.width - snap.core * 100) < 1e-6 && Math.abs(snap.mark - snap.target * 100) < 1e-6 && snap.oneRow, snap.text.replace(/\s+/g, " "));
+  await p.click("#refreshDigest");
+  await p.waitForFunction(() => /Your portfolio (gained|lost)/.test(document.querySelector("#digestList").innerText), null, { timeout: SLOW });
+  const dig = await p.evaluate(() => ({ text: document.querySelector("#digestList").innerText, links: [...document.querySelectorAll("#digestList a")].map((a) => a.getAttribute("href")), tip: document.querySelector("#digestInfo .info")?.dataset.tip || "" }));
+  expect("dashboard: digest covers the portfolio, with its rules explained", /Your portfolio (gained|lost) .* against what you paid/.test(dig.text) && /yields 0\.15 or 0\.40 percentage points/.test(dig.tip) && dig.links.every((h) => /^https?:\/\//.test(h)), dig.text.split("\n")[0]);
+  // Two tabs: Mine has no headlines; News has only headlines, each a link; the counts add up; the choice is kept
+  const tabs = async () => p.evaluate(() => ({ labels: [...document.querySelectorAll("#digestTabs button")].map((b) => b.textContent), on: document.querySelector("#digestTabs .on")?.dataset.tab,
+    items: [...document.querySelectorAll("#digestList li")].map((li) => ({ news: li.classList.contains("k-news"), link: li.querySelector("a")?.getAttribute("href") || null })) }));
+  const mineTab = await tabs();
+  await p.click('#digestTabs [data-tab="news"]'); await p.waitForTimeout(200);
+  const newsTab = await tabs();
+  const total = await p.evaluate(async () => (await (await fetch("/api/digest")).json()).items.length);
+  const counts = [...mineTab.labels, ...newsTab.labels].slice(0, 2).map((l) => Number(l.match(/\((\d+)\)/)?.[1]));
+  expect("dashboard: digest split into Mine and News", mineTab.on === "mine" && mineTab.items.every((i) => !i.news) && newsTab.on === "news"
+    && newsTab.items.every((i) => (i.news && /^https?:\/\//.test(i.link || "https://")) || i.link === null) && counts[0] + counts[1] === total, `${newsTab.labels.join(" / ")}, ${total} in all`);
+  await p.reload(); await p.waitForFunction(() => document.querySelector("#digestTabs .on")?.dataset.tab === "news" && document.querySelector("#digestList li:not(.loading)"), null, { timeout: SLOW });
+  expect("dashboard: the digest tab is remembered", true);
+  await p.click('#digestTabs [data-tab="mine"]'); await p.waitForTimeout(200);
+  // The same height on either tab; a refresh never empties the list (watched every frame while it runs)
+  const heights = [];
+  for (const tab of ["news", "mine"]) { await p.click(`#digestTabs [data-tab="${tab}"]`); await p.waitForTimeout(150); heights.push(await p.evaluate(() => document.querySelector("#digestList").getBoundingClientRect().height)); }
+  await p.evaluate(() => { window.__emptied = false; const ul = document.querySelector("#digestList"); const look = () => { if (!ul.querySelector("li")) window.__emptied = true; if (window.__watch) requestAnimationFrame(look); }; window.__watch = true; look(); });
+  await p.click("#refreshDigest");
+  await p.waitForFunction(() => !document.querySelector("#refreshDigest").disabled, null, { timeout: SLOW });
+  const emptied = await p.evaluate(() => { window.__watch = false; return window.__emptied; });
+  const gutter = await p.evaluate(() => getComputedStyle(document.querySelector("#digestList")).scrollbarGutter);
+  expect("dashboard: the digest keeps one height and doesn't flicker on refresh", heights[0] === heights[1] && heights[0] === 196 && !emptied && gutter === "stable", `${heights.join(" / ")}px, emptied: ${emptied}, gutter: ${gutter}`);
+  await p.locator("#digestList li", { hasText: "Your portfolio" }).first().click();
+  await p.waitForFunction(() => !document.querySelector("#view-portfolio").classList.contains("hidden"), null, { timeout: SLOW });
+  expect("dashboard: a portfolio line in the digest opens the portfolio", true);
+  await nav("dashboard"); await p.waitForTimeout(1500);
+  expect("dashboard: portfolio snapshot and digest",!/undefined|NaN|\[object/.test(await txt("#view-dashboard")), (await txt("#dashPortfolio")).slice(0, 90));
   await shot("dashboard");
   const wlBtn = p.locator("#watchTable [data-rm]").first();
   if (await wlBtn.count()) { await p.click("#watchTable thead th:nth-child(2)"); await p.waitForTimeout(150); await p.locator("#watchTable [data-rm]").first().click(); await p.waitForTimeout(1500); expect("dashboard: remove from watchlist after sorting", (await p.locator("#watchTable [data-rm]").count()) === 0); }

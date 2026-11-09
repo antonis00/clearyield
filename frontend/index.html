@@ -56,9 +56,10 @@
         <div class="card-h"><h3>Portfolio snapshot</h3><a class="link" data-goto="portfolio">Open →</a></div>
         <div id="dashIncomplete" class="alertbar hidden"></div>
         <div id="dashPortfolio" class="kpis"></div>
+        <div id="dashExtras"></div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>Today's digest</h3><button class="btn ghost sm" id="refreshDigest">Refresh</button></div>
+        <div class="card-h"><h3>Today's digest <span id="digestInfo"></span></h3><div class="form-row inline"><div class="seg" id="digestTabs"><button data-tab="mine">Mine</button><button data-tab="news">News</button></div><button class="btn ghost sm" id="refreshDigest">Refresh</button></div></div>
         <ul id="digestList" class="digest"></ul>
       </div>
     </div>

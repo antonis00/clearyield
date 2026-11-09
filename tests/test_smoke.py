@@ -1809,8 +1809,68 @@ def test_digest_puts_urgent_items_first():
         d = insights.digest(db.get_settings())
     texts = [i["text"] for i in d["items"]]
     assert [t.split()[0] for t in texts[:2]] == ["Alert:", "AAA"] and "hit your thesis stop" in texts[1]
-    assert "review due" in texts[2] and "overbought" in texts[-1], texts
+    own = [i["text"] for i in d["items"] if i.get("kind") != "news"]  # headlines come after everything else
+    assert "review due" in texts[2] and "overbought" in own[-1], texts
     assert "rows" not in d
+
+
+def test_digest_covers_portfolio_markets_and_headlines():
+    import pandas as pd
+
+    from backend import data, db, insights
+    _reset()
+    flat = _steps([0.0] * 300)
+    month_drop = _steps([0.0] * 279 + [-0.005] * 20 + [-0.003])  # -9.8% over the month (compounded), -0.3% on the day
+    vix = _steps([0.0] * 279 + [0.012] * 21)  # +28% over the month: ordinary for the VIX, which needs 30%
+    tnx = pd.Series([4.0] * 280 + [4.0 + 0.5 * i / 21 for i in range(1, 22)], index=flat.index)  # +0.5 points in a month
+    btc = _steps([0.0] * 299 + [0.04])  # +4% in a day: ordinary for bitcoin, which needs 5%
+    tiles = {"^IXIC": "Nasdaq", "^VIX": "VIX", "^TNX": "US 10Y yield", "BTC-USD": "Bitcoin", "^GSPC": "S&P 500"}
+    moves = insights.market_moves({}) or []
+    assert moves == []
+    with _FakeMarket({"^IXIC": month_drop, "^VIX": vix, "^TNX": tnx, "BTC-USD": btc, "^GSPC": flat}):
+        moves = {m["ticker"]: m["text"] for m in insights.market_moves(tiles)}
+    assert set(moves) == {"^IXIC", "^TNX"}, moves
+    assert moves["^IXIC"].startswith("Nasdaq fell 9.8% over the past month") and "over the past month" in moves["^IXIC"] and "on " not in moves["^IXIC"], moves
+    from backend import indicators as ind
+    month_ago = tnx.iloc[-1] / (1 + ind.ret_over(tnx, 21))  # the dashboard tile's own starting value
+    assert moves["^TNX"] == f"US 10Y yield rose {tnx.iloc[-1] - month_ago:.2f} percentage points over the past month.", moves
+    assert tnx.iloc[-1] - month_ago >= 0.40
+    # The colour says good or bad: a rising VIX is red, a moving yield neutral, a falling index red
+    with _FakeMarket({"^VIX": _steps([0.0] * 279 + [0.02] * 21), "^TNX": tnx, "^IXIC": month_drop}):
+        tones = {m["ticker"]: m["tone"] for m in insights.market_moves({"^VIX": "VIX", "^TNX": "US 10Y yield", "^IXIC": "Nasdaq"})}
+    assert tones == {"^VIX": -1, "^TNX": 0, "^IXIC": -1}, tones
+
+    # Your portfolio: the latest day in money and percent, and the core share against the target
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('VWCE.DE', 'buy', '2026-01-05', 100, 100)")
+    real_news = data.news
+    now = pd.Timestamp.now(tz="UTC")
+    news = {"AAPL": [{"title": "Apple unveils a new chip", "url": "https://example.com/a", "publisher": "Wire", "time": (now - pd.Timedelta(hours=5)).isoformat()},
+                     {"title": "Apple sales slip", "url": "javascript:alert(1)", "publisher": "Wire", "time": (now - pd.Timedelta(hours=9)).isoformat()},
+                     {"title": "Apple's old story", "url": "https://example.com/old", "time": (now - pd.Timedelta(days=5)).isoformat()},
+                     {"title": "Markets wrap: stocks rise", "url": "https://example.com/m", "time": now.isoformat()}],
+            "VWCE.DE": [{"title": "Vanguard cuts fees", "url": "https://example.com/v", "time": now.isoformat()}]}
+    data.news = lambda t, limit=12: news.get(t, [])
+    db.x("INSERT INTO watchlist (ticker, added) VALUES ('AAPL', 1)")
+    try:
+        with _FakeMarket({"VWCE.DE": month_drop, "AAPL": flat, "^IXIC": month_drop}, {"VWCE.DE": {"assetClass": "ETFs", "currency": "EUR", "name": "Vanguard FTSE All-World"}, "AAPL": {"name": "Apple Inc."}}):
+            db.set_settings({"base_currency": "EUR"})
+            items = insights.digest(db.get_settings(), {"^IXIC": "Nasdaq"})["items"]
+    finally:
+        data.news = real_news
+        _reset()
+    texts = [i["text"] for i in items]
+    day = [t for t in texts if t.startswith("Your portfolio lost")]
+    assert day and "(-0.30%)" in day[0] and "It's worth €" in day[0], texts
+    assert any(t.startswith("Core is 100% of your portfolio against your 80% target") for t in texts), texts
+    assert any(t.startswith("Nasdaq fell") for t in texts), texts
+    heads = [i for i in items if i.get("kind") == "news"]
+    # Only the stock, only what names it, only the past three days, newest first; a link that isn't http(s) is dropped
+    assert [h["text"] for h in heads] == ["AAPL: Apple unveils a new chip (Wire)", "AAPL: Apple sales slip (Wire)"], heads
+    assert heads[0]["url"] == "https://example.com/a" and heads[1]["url"] is None
+    order = [i["priority"] for i in items]
+    assert order == sorted(order), "most urgent first, headlines last"
+    # A broad world fund held alone isn't a concentrated single position, nor short of diversification
+    assert not any("concentration" in t or "diversification is limited" in t for t in texts), texts
 
 
 def test_quote_for_the_portfolio_form():

@@ -1,6 +1,7 @@
 """Higher-level analysis: stock snapshot, screener, comparison, DCF, alerts and the daily digest."""
 import datetime as dt
 import json
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,6 +11,8 @@ import pandas as pd
 from . import data, db, ledger, scoring
 from . import indicators as ind
 from .universe import tickers_for
+
+log = logging.getLogger("stockpilot.insights")
 
 
 def evaluate_ticker(t, settings):
@@ -331,7 +334,119 @@ def score_change(ticker):
     return text + "."
 
 
-def digest(settings):
+# What counts as a notable market move, by kind of tile: (one day, one month). A 2% day is big for the S&P 500 but
+# ordinary for bitcoin or the VIX. Yields are measured in percentage points, since "-8%" of a 4.9% yield misleads.
+MOVE_LIMITS = {"index": (0.02, 0.08), "volatility": (0.15, 0.30), "crypto": (0.05, 0.15), "fx": (0.01, 0.03), "yield": (0.15, 0.40)}
+
+
+def _tile_kind(ticker):
+    if data.price_unit(ticker, None) == "%":
+        return "yield"
+    if ticker in ("^VIX", "^VXN", "^V2TX"):
+        return "volatility"
+    if ticker.endswith("-USD"):
+        return "crypto"
+    if ticker.endswith("=X"):
+        return "fx"
+    return "index"
+
+
+def market_moves(tiles):
+    """Dashboard tiles that moved more than usual for their kind, over the latest day or the past month, each with
+    its figures and dates. `tiles` is {ticker: name} for the tiles you show."""
+    items = []
+    for t, name in tiles.items():
+        try:
+            c = data.history(t, "1y")["Close"].dropna()
+        except data.DataError:
+            continue
+        if len(c) < 23:
+            continue
+        kind = _tile_kind(t)
+        day_limit, month_limit = MOVE_LIMITS[kind]
+        # The same day and month as the dashboard tiles (a month is calendar time, as everywhere in the app)
+        day, month = ind.ret_over(c, 1), ind.ret_over(c, 21)
+        if kind == "yield":  # in percentage points, from the same starting values
+            last = float(c.iloc[-1])
+            day, month = (None if r is None else last - last / (1 + r) for r in (day, month))
+            say = lambda v: f"{'rose' if v > 0 else 'fell'} {abs(v):.2f} percentage points"
+        else:
+            say = lambda v: f"{'rose' if v > 0 else 'fell'} {abs(v):.1%}"
+        parts = []
+        if day is not None and abs(day) >= day_limit:
+            parts.append(f"{say(day)} {on_which_day(c)}")
+        if month is not None and abs(month) >= month_limit:
+            parts.append(f"{say(month)} over the past month")
+        if parts:
+            main = month if month is not None and abs(month) >= month_limit else day
+            # Green for good news, red for bad: a rising VIX is fear, so it's red; a yield or a currency moving isn't
+            # good or bad in itself, so it's neutral
+            tone = {"volatility": -1, "yield": 0, "fx": 0}.get(kind, 1) * (1 if main > 0 else -1)
+            items.append({"tone": tone, "ticker": t, "priority": 6.5, "kind": "market",
+                          "text": f"{name} {' and '.join(parts)}."})
+    return items
+
+
+def portfolio_points(settings):
+    """Your portfolio as a whole: its latest-day change, the core share against your target, and the warnings the
+    Portfolio page shows (concentration, old prices, missing rates)."""
+    from . import portfolio  # here, since the portfolio module is heavy and only the digest needs it from this one
+    p = portfolio.summary(settings)
+    if not p["positions"]:
+        return []
+    base, items = p["base"], []
+    symbol = {"EUR": "€", "USD": "$", "GBP": "£", "CHF": "CHF ", "JPY": "¥"}.get(base, f"{base} ")
+    money = lambda v: f"{'-' if v < 0 else ''}{symbol}{abs(v):,.0f}"
+    before = p["total"] - p["dayPnl"]
+    if before and not p["incomplete"]:
+        when = "today" if p["dayFrom"] == p["dayTo"] == dt.date.today().isoformat() else (
+            f"on {p['dayTo']}" if p["dayFrom"] == p["dayTo"] else f"over each holding's latest day ({p['dayFrom']} to {p['dayTo']})")
+        items.append({"tone": (p["dayPnl"] > 0) - (p["dayPnl"] < 0), "ticker": None, "priority": 3, "kind": "portfolio",
+                      "text": f"Your portfolio {'gained' if p['dayPnl'] >= 0 else 'lost'} {money(abs(p['dayPnl']))} ({p['dayPnl'] / before:+.2%}) {when}. "
+                              f"It's worth {money(p['total'])}, {money(p['pnl'])} ({p['pnlPct']:+.2%}) against what you paid."})
+    cs = p.get("coreSatellite") or {}
+    if cs.get("action") and cs["action"] != "Hold":
+        to = "satellite" if cs["action"] == "To satellite" else "core"
+        items.append({"tone": 0, "ticker": None, "priority": 4, "kind": "portfolio",
+                      "text": f"Core is {cs['core']:.0%} of your portfolio against your {cs['target']:.0%} target. Reaching it means about "
+                              f"{money(cs['amount'])} more in {to}, by moving money or putting new money there."})
+    for w in p["warnings"]:
+        items.append({"tone": -1, "ticker": None, "priority": 4, "kind": "portfolio", "text": w})
+    return items
+
+
+HEADLINE_DAYS = 3
+
+
+def recent_headlines(rows, tickers, per_ticker=2):
+    """The latest headlines that name a stock you hold or watch, from the past few days, with links. Funds are left
+    out: their feed is general market news, and matching "Vanguard" would bring in any story about the firm."""
+    from .ai import relevant_headlines
+    since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=HEADLINE_DAYS)
+    items = []
+    for t in tickers:
+        r = rows.get(t)
+        if not r or r.get("assetClass") != "Stocks":
+            continue
+        fresh = []
+        for n in relevant_headlines(data.news(t), t, r.get("name")):
+            try:
+                when = pd.Timestamp(n.get("time"))
+                when = when.tz_localize("UTC") if when.tzinfo is None else when
+            except (TypeError, ValueError):
+                continue
+            if when >= since:
+                fresh.append((when, n))
+        for when, n in sorted(fresh, key=lambda x: x[0], reverse=True)[:per_ticker]:
+            url = n.get("url") or ""
+            items.append({"tone": 0, "ticker": t, "priority": 7, "kind": "news", "text": f"{t}: {n['title']}" + (f" ({n['publisher']})" if n.get("publisher") else ""),
+                          "url": url if url.startswith(("https://", "http://")) else None, "time": when.isoformat()})
+    return items
+
+
+def digest(settings, tiles=None):
+    """What's worth knowing today: alerts and journal reminders first, then your portfolio, your holdings and
+    watchlist, the market's notable moves, and headlines naming your stocks. Every item is a rule with its figures."""
     held = ledger.held_tickers()
     watched = [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
     tickers = list(dict.fromkeys(held + watched))
@@ -374,7 +489,12 @@ def digest(settings):
     check_alerts(settings)
     fired = db.q("SELECT * FROM alerts WHERE triggered IS NOT NULL AND dismissed = 0 ORDER BY triggered DESC")
     items = [{"tone": 0, "ticker": a["ticker"], "priority": 0, "text": "Alert: " + a["message"], "alertId": a["id"]} for a in fired] + items
+    for extra in (lambda: portfolio_points(settings), lambda: market_moves(tiles or {}), lambda: recent_headlines(rows, tickers)):
+        try:  # one part failing (Yahoo, say) mustn't lose the rest of the digest
+            items += extra()
+        except Exception as e:
+            log.warning("digest part failed: %s", e)
     items.sort(key=lambda i: i["priority"])  # what needs a decision first, then what's coming, then what's just of note
     if not tickers:
-        items.append({"tone": 0, "ticker": None, "text": "Add stocks to your watchlist or portfolio to get a personalised digest."})
+        items.append({"tone": 0, "ticker": None, "priority": 9, "text": "Add stocks to your watchlist or portfolio to get a personalised digest."})
     return {"items": items}

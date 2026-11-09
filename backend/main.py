@@ -624,7 +624,9 @@ def alert_check():
 
 @app.get("/api/digest")
 def digest():
-    return ok(insights.digest(db.get_settings()))
+    settings = db.get_settings()
+    shown = set(settings.get("dashboard_tiles") or [])
+    return ok(insights.digest(settings, {t: name for t, name in _tiles(settings).items() if t in shown}))
 
 
 # ---------------------------------------------------------------- settings

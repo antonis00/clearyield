@@ -7,7 +7,7 @@ import pandas as pd
 
 from . import data, db, ledger
 from . import indicators as ind
-from .universe import default_bucket
+from .universe import CORE_FUNDS, default_bucket
 
 
 def positions(extra=None):
@@ -327,9 +327,11 @@ def summary(settings, extra=None):
             warnings.append(f"{r['ticker']} has a lot with no purchase date or no exchange rate for that date. Its cost uses today's rate, so its P&L leaves out currency moves on that lot.")
     # Weights are meaningless while a holding is missing from the total, so nothing is advised on them
     incomplete = bool(missing)
+    # A broad index fund (VWCE, IWDA, an S&P 500 fund) is thousands of companies, so being most of the portfolio
+    # isn't a single-position risk, and holding one isn't a lack of diversification. Sector funds and stocks are.
     for r in rows:
         with_funds = (r["value"] + r.get("throughFunds", 0.0)) / total if total else 0
-        if with_funds > 0.20 and not incomplete:
+        if with_funds > 0.20 and not incomplete and r["ticker"] not in CORE_FUNDS:
             detail = f", counting {r['throughFunds'] / total:.0%} through funds" if r.get("throughFunds") else ""
             warnings.append(f"{r['ticker']} is {with_funds:.0%} of the portfolio{detail} - single-position concentration above 20%.")
     for name, v in allocation["sectorLookThrough"].items():
@@ -342,7 +344,7 @@ def summary(settings, extra=None):
                 continue
             if total and v / total > (0.40 if k == "sector" else 0.80) and len(rows) > 2 and not incomplete:
                 warnings.append(f"{v / total:.0%} of value is in one {label} ({name}).")
-    if 0 < len(rows) < 5 and not incomplete:
+    if 0 < len(rows) < 5 and not incomplete and not any(r["ticker"] in CORE_FUNDS for r in rows):
         warnings.append(f"Only {len(rows)} position{'' if len(rows) == 1 else 's'} - diversification is limited.")
     if risk.get("maxDrawdown") is not None and risk["maxDrawdown"] < -0.25:
         warnings.append(f"Portfolio fell {abs(risk['maxDrawdown']):.0%} from peak in the past year (current holdings).")

@@ -140,6 +140,20 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 .kpi .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
 .kpi .v { font: 600 20px var(--mono); margin-top: 2px; }
 .kpi .s { font: 12px var(--mono); }
+/* The dashboard snapshot's four figures stay on one row, so the card doesn't grow on a narrower window */
+#dashPortfolio { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+#dashPortfolio .kpi { padding: 10px 12px; }
+@media (max-width: 640px) { #dashPortfolio { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* The dashboard snapshot's core/satellite bar, under its figures */
+.snap-block { margin-top: 12px; padding: 10px 14px 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.snap-block:hover { border-color: var(--muted); }
+.snap-h { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
+.snap-h span:last-child { font: 600 13px var(--mono); }
+.cs-bar { position: relative; display: flex; height: 10px; margin-top: 10px; border-radius: 5px; background: var(--line); }
+.cs-bar i { display: block; height: 100%; }
+.cs-bar i:first-child { border-radius: 5px 0 0 5px; } .cs-bar i:last-child { border-radius: 0 5px 5px 0; }
+.cs-bar i.core { background: var(--accent2); } .cs-bar i.sat { background: var(--accent); }
+.cs-bar b { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; }
 
 /* tables */
 .tablewrap { overflow-x: auto; }
@@ -198,6 +212,13 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 .signals li::before, .digest li::before { content: "●"; position: absolute; left: 4px; font-size: 10px; top: 10px; color: var(--neutral); }
 li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--down) !important; }
 .digest li { cursor: pointer; }
+/* The digest keeps one height whichever tab is shown and however many items it has; a longer list scrolls inside */
+#digestList { height: 196px; overflow-y: auto; padding-right: 4px; transition: opacity .15s;
+  /* Room for the scroll bar is always kept, so a tab that scrolls and one that doesn't wrap their text the same way */
+  scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#digestList:hover { scrollbar-color: var(--muted) transparent; }
+#digestTabs button { min-width: 92px; } /* "Mine (12)" and "News (4)" take the same room */
+#digestList.refreshing { opacity: .55; }
 .news li { padding: 9px 0; border-bottom: 1px solid var(--rowline); }
 .news .meta { font-size: 11px; color: var(--muted); }
 .brief { line-height: 1.6; } .brief p { margin: 0 0 10px; } .brief ul { padding-left: 18px; margin: 0 0 10px; }
