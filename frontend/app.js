@@ -174,7 +174,13 @@ document.addEventListener("click", (e) => {
   inp.onkeydown = (e) => {
     if (e.key === "ArrowDown") { sel = Math.min(sel + 1, hits.length - 1); render(); e.preventDefault(); }
     else if (e.key === "ArrowUp") { sel = Math.max(sel - 1, 0); render(); e.preventDefault(); }
-    else if (e.key === "Enter") pick(hits[sel] || { ticker: inp.value.trim().toUpperCase() });
+    else if (e.key === "Enter") {
+      const text = inp.value.trim();
+      if (hits[sel] || !/\s/.test(text)) { pick(hits[sel] || { ticker: text.toUpperCase() }); return; }
+      // A sentence that matches no stock is a screener question: run it there instead of asking Yahoo for a symbol
+      inp.value = ""; hits = []; render();
+      show("screener"); $("#scrQuery").value = text; $("#btnScrQuery").click();
+    }
     else if (e.key === "Escape") { hits = []; render(); }
   };
   inp.onblur = () => setTimeout(() => { hits = []; render(); }, 150);

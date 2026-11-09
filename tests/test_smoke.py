@@ -1873,6 +1873,29 @@ def test_digest_covers_portfolio_markets_and_headlines():
     assert not any("concentration" in t or "diversification is limited" in t for t in texts), texts
 
 
+def test_a_sentence_is_not_a_symbol():
+    from backend import data
+    asked = []
+
+    class YF:
+        @staticmethod
+        def Ticker(t):
+            asked.append(t)
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    real_yf, real_demo = data._yf, data.DEMO
+    data._yf, data.DEMO = (lambda: YF), False
+    try:
+        with TestClient(app) as c:
+            r = c.get("/api/stock/GULF DIVIDEND PAYERS YIELDING OVER 4%")
+            assert r.status_code == 404 and "isn't a ticker symbol" in r.json()["detail"] and not asked, (r.text, asked)
+            # Yahoo's own failure comes back as a plain sentence, not its parser's error
+            r = c.get("/api/stock/NOPE.XX")
+            assert r.status_code == 404 and r.json()["detail"] == "Yahoo didn't return prices for NOPE.XX. Check the symbol, or try again in a minute.", r.text
+    finally:
+        data._yf, data.DEMO = real_yf, real_demo
+
+
 def test_screening_banks():
     from backend import ai, db, insights
     _reset()
@@ -1884,6 +1907,7 @@ def test_screening_banks():
     assert ai._parse_rules("european stocks excluding banks") == {"exclude_industry": "Banks", "markets": ["Europe"]}
     assert ai._parse_rules("cheap stocks with no debt")["max_de"] == 0.5 and "markets" not in ai._parse_rules("show us cheap stocks")
     assert ai._parse_rules("us tech stocks with strong momentum") == {"markets": ["US"], "sector": "Technology", "min_momentum": 60, "sort": "momentum"}
+    assert ai._parse_rules("us banks")["markets"] == ["US"] and "markets" not in ai._parse_rules("show us banks")
     assert ai._parse_rules("revenue growth above 20%") == {"min_rev_growth": 0.2, "sort": "growth"}
     # A bank's free cash flow and debt aren't given to the model as if they meant something
     bank = ai.brief_data({"ticker": "B", "info": {"name": "B", "industry": "Banks - Regional", "debtToEquity": 3.0, "freeCashflow": -5e9, "returnOnEquity": 0.15},
