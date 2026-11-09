@@ -456,11 +456,15 @@ def pretrade(settings, ticker, amount=None, entry=None, stop=None, risk=None):
 
     def weights(s):
         if s["incomplete"] or not s["total"]:
-            return {"position": 0.0, "sector": 0.0, "region": 0.0, "currencyWeight": 0.0, "beta": s["risk"].get("beta")}
+            return {"position": 0.0, "sector": 0.0, "region": 0.0, "currencyWeight": 0.0, "sectorLookThrough": 0.0, "currencyLookThrough": 0.0, "beta": s["risk"].get("beta")}
         share = lambda group, key: s["allocation"][group].get(key, 0.0) / s["total"]
+        # Direct shares count a fund as one item ("ETFs", the currency it trades in); the look-through ones count
+        # what funds hold, so a world fund's technology and dollar exposure are there before the trade too
         return {"position": next((r["weight"] for r in s["positions"] if r["ticker"] == ticker), 0.0),
                 "sector": share("sector", inf.get("sector") or inf.get("assetClass")), "region": share("region", inf.get("region")),
-                "currencyWeight": share("currency", inf.get("currency")), "beta": s["risk"].get("beta")}
+                "currencyWeight": share("currency", inf.get("currency")), "beta": s["risk"].get("beta"),
+                "sectorLookThrough": share("sectorLookThrough", inf.get("sector") or inf.get("assetClass")),
+                "currencyLookThrough": share("currencyLookThrough", data.main_unit(inf.get("currency")))}
 
     incomplete = before["incomplete"] or after["incomplete"]
     correlations = []

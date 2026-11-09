@@ -3135,6 +3135,76 @@ def test_backtest_uses_history_before_the_window():
     assert cold["strategy"]["exposure"] < 0.25
 
 
+def _tool_call(*calls):
+    """A reply asking for tools, OpenAI style: calls are (name, args)."""
+    import json
+    return (200, {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+        {"id": f"c{i}", "type": "function", "function": {"name": n, "arguments": json.dumps(a)}} for i, (n, a) in enumerate(calls)]}}]}, 0)
+
+
+def test_figure_check_reads_scaled_amounts():
+    from backend import ai
+    facts = "Free cash flow 13.98B EUR; new money 8,454.00 EUR; P/E 9.2x"
+    ok = lambda t: ai.check_figures(t, facts)["unmatched"] == []
+    # Rounded forms of figures in the data match; a different figure doesn't
+    assert ok("FCF €13.98 bn") and ok("about €8.5k") and ok("€8,454") and ok("P/E 9.2×")
+    assert not ok("about €9.5k") and not ok("a 37.5% rise") and not ok("€2.5 bn")
+
+
+def test_ask_uses_the_tools_and_checks_its_figures():
+    import json
+
+    from backend import agent, db
+    _reset()
+    db.x("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('VWCE.DE', 'buy', '2025-01-06', 10, 100)")
+    before = db.q("SELECT * FROM transactions")
+    llm = _FakeLLM([])
+    try:
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"), TestClient(app) as c:
+            # Round 1 asks for two tools at once; round 2 answers, quoting a figure from a result and one it made up
+            stock = json.loads(agent.run_tool("get_stock", {"ticker": "AAPL"})[0])
+            score = stock["StockPilot scores"]["Composite"].split()[0]  # "30.2 out of 100"
+            llm.replies = [_tool_call(("get_portfolio", {}), ("get_stock", {"ticker": "AAPL"})),
+                           _chat(f"Apple scores {score}. It could rise 37.5% next year.")]
+            r = c.post("/api/ask", json={"question": "Should I add Apple?"})
+            assert r.status_code == 200, r.text
+            out = r.json()
+            assert [s["tool"] for s in out["steps"]] == ["get_portfolio", "get_stock"] and all(s["ok"] for s in out["steps"]) and out["calls"] == 2
+            # What the model was sent: the tools on offer, then both results back under their call ids
+            first, second = llm.seen[0][2], llm.seen[1][2]
+            assert {t["function"]["name"] for t in first["tools"]} == set(agent.TOOLS) and first["tool_choice"] == "auto"
+            back = [m for m in second["messages"] if m["role"] == "tool"]
+            assert [m["tool_call_id"] for m in back] == ["c0", "c1"] and "VWCE.DE" in back[0]["content"]
+            # The figure check: the score is in the data, the forecast isn't
+            assert out["check"]["unmatched"] == ["37.5%"] and out["check"]["checked"] >= 2, out["check"]
+            # A tool that fails says why, and the model is told; the round limit then forces an answer
+            llm.seen.clear()
+            llm.replies = [_tool_call(("get_stock", {"ticker": "NOPE IS NOT A SYMBOL"}))] * agent.MAX_ROUNDS + [_chat("I couldn't find that symbol.")]
+            out = c.post("/api/ask", json={"question": "Tell me about nope"}).json()
+            assert len(out["steps"]) == agent.MAX_ROUNDS and not out["steps"][0]["ok"] and "isn't a ticker symbol" in out["steps"][0]["error"]
+            assert out["calls"] == agent.MAX_ROUNDS + 1 and llm.seen[-1][2]["tool_choice"] == "none" and out["answer"] == "I couldn't find that symbol."
+            # Nothing the tools did changed your data; another website can't make your browser ask
+            assert db.q("SELECT * FROM transactions") == before
+            assert c.post("/api/ask", json={"question": "x"}, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+            assert c.post("/api/ask", json={"question": "   "}).status_code == 400
+        # The Anthropic format: tool_use blocks out, tool_result blocks back
+        llm.seen.clear()
+        llm.replies = [(200, {"content": [{"type": "tool_use", "id": "t1", "name": "get_portfolio", "input": {}}]}, 0),
+                       (200, {"content": [{"type": "text", "text": "You hold VWCE.DE."}]}, 0)]
+        with _with_env(AI_PROVIDER="anthropic", AI_BASE_URL=llm.url, AI_API_KEY="k", AI_MODEL="claude-x"):
+            out = agent.ask("What do I hold?")
+        assert out["answer"] == "You hold VWCE.DE." and out["steps"][0]["tool"] == "get_portfolio"
+        sent = llm.seen[1][2]["messages"]
+        assert sent[-1]["content"][0]["type"] == "tool_result" and sent[-1]["content"][0]["tool_use_id"] == "t1" and llm.seen[0][2]["tools"][0]["input_schema"]
+        # With no AI set up, it says so instead of guessing
+        with _with_env(AI_PROVIDER="none"), TestClient(app) as c:
+            r = c.post("/api/ask", json={"question": "Anything?"})
+            assert r.status_code == 503 and "AI" in r.json()["detail"]
+    finally:
+        llm.close()
+        _reset()
+
+
 if __name__ == "__main__":
     import logging
     import time

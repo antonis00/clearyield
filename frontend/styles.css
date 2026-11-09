@@ -96,6 +96,7 @@ label.block { margin: 8px 0; }
 .st.on { color: var(--up); }
 .st.off { opacity: .55; }
 .st.txt { font: 600 11px var(--mono); letter-spacing: .3px; }
+.st.ai, .st.yahoo { cursor: pointer; } /* open Ask AI, and Yahoo Finance in a new tab */
 .st.cur { font: 500 13px var(--mono); color: var(--up); cursor: pointer; } /* a base currency is always in use; it opens the converter */
 /* The currency converter */
 .conv { align-items: flex-end; }
@@ -272,3 +273,16 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 
 /* Why some metrics aren't scored, under the first of them */
 .part-note { font-size: 11px; color: var(--muted); padding: 2px 0 6px; grid-column: 1 / -1; }
+
+/* Ask StockPilot */
+.ask-row { align-items: flex-end; }
+.ask-row label.grow { flex: 1; }
+.ask-row label.grow input { width: 100%; }
+.ask-examples { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+.ask-ex { cursor: pointer; background: transparent; color: var(--muted); border: 1px solid var(--line); font: 12px var(--sans); }
+.ask-ex:hover { color: var(--text); border-color: var(--accent2); }
+.ask-q { font-weight: 600; margin-bottom: 8px; }
+.ask-steps { margin: 10px 0 4px; font-size: 12px; color: var(--muted); }
+.ask-steps summary { cursor: pointer; }
+.ask-steps ol { margin: 6px 0 0 18px; padding: 0; }
+.ask-steps li.warn { color: var(--accent); }

@@ -122,7 +122,7 @@ function show(view, push = true) {
     const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false) }[view] || (() => {}))();
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup }[view] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
 
@@ -705,6 +705,42 @@ $("#btnScr").onclick = () => (selectedMarkets().length ? runScreen({ markets: se
 $("#btnScrQuery").onclick = () => $("#scrQuery").value.trim() && runScreen({ markets: selectedMarkets(), query: $("#scrQuery").value });
 $("#scrQuery").onkeydown = (e) => { if (e.key === "Enter") $("#btnScrQuery").click(); };
 
+/* ---------------------------------------------------------------- ask */
+// A question goes to the AI, which uses the app's read-only tools in a loop and answers. Each answer shows how it was
+// worked out (every tool it used) and the check of its figures. Answers stay on the page for this visit only.
+const ASK_EXAMPLES = ["How is my portfolio doing, and is anything off-plan?", "Which European stock would add the most diversification to my portfolio without much risk?",
+  "Compare TotalEnergies and Shell for a long-term holder", "What would buying 2,000 of SAP.DE do to my portfolio?", "Find cheap, profitable US stocks with low debt and explain the best two"];
+const ASK_STEP = {
+  get_portfolio: () => "Read your portfolio", get_stock: (a) => `Looked up ${a.ticker}`,
+  screen: (a) => `Ran the screener${a.question ? `: "${a.question}"` : a.filters ? ` with ${Object.keys(a.filters).join(", ")}` : ""}`,
+  get_opportunities: (a) => `Opened Opportunities${a.markets ? ` (${a.markets.join(", ")})` : ""}`, compare: (a) => `Compared ${(a.tickers || []).join(", ")}`,
+  pretrade: (a) => `Pre-trade check: ${a.amount} of ${a.ticker}`, search: (a) => `Searched for "${a.text}"`, get_news: (a) => `Read headlines about ${a.ticker}`,
+};
+function renderAskSetup() {
+  const a = state.meta?.aiInfo;
+  $("#askModel").textContent = a?.on ? `${a.model} via ${a.server}` : "";
+  $("#askExamples").innerHTML = ASK_EXAMPLES.map((q) => `<button class="pill ask-ex">${esc(q)}</button>`).join("");
+  $$("#askExamples .ask-ex").forEach((b) => b.onclick = () => { $("#askInput").value = b.textContent; runAsk(); });
+  if (!a?.on) $("#askStatus").textContent = a?.problem ? `AI isn't set up: ${a.problem}` : "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example), then restart the app.";
+}
+async function runAsk() {
+  const q = $("#askInput").value.trim(), btn = $("#askGo"), status = $("#askStatus");
+  if (!q) return toast("Type a question first.");
+  if (!state.meta?.aiInfo?.on) return renderAskSetup();
+  btn.disabled = true; status.innerHTML = `<span class="spinner"></span>Investigating… the AI looks things up first, which can take up to a minute.`;
+  try {
+    const r = await api("/api/ask", { method: "POST", body: { question: q } });
+    const steps = r.steps.map((s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}</li>`).join("");
+    const card = document.createElement("div"); card.className = "card ask-answer";
+    card.innerHTML = `<div class="ask-q">${esc(q)}</div><div class="brief">${DOMPurify.sanitize(marked.parse(r.answer))}</div>
+      <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}</summary><ol>${steps || "<li>Answered without looking anything up.</li>"}</ol></details>
+      ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
+    $("#askAnswers").prepend(card); status.textContent = ""; $("#askInput").value = "";
+  } catch (e) { status.textContent = e.message; } finally { btn.disabled = false; }
+}
+$("#askGo").onclick = runAsk;
+$("#askInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); runAsk(); } };
+
 /* ---------------------------------------------------------------- opportunities */
 // One scoring of the stocks feeds the page and the dashboard card. It's kept for five minutes, so moving between
 // them doesn't recalculate; Refresh asks again. The first load of the day downloads every stock, about half a minute.
@@ -1123,18 +1159,28 @@ const currencySymbol = (code) => {
 function aiStatus(a) {
   const tip = a?.on ? `AI: ${a.model} via ${a.server}${a.thinking === "off" ? ", thinking off" : a.thinking === "on" ? ", thinking on" : ["low", "medium", "high"].includes(a.thinking) ? `, thinking ${a.thinking}` : ""}. Writes research briefs and reads screener questions.`
     : a?.problem ? `AI isn't set up: ${a.problem}` : "AI is off. Set AI_PROVIDER in .env (see .env.example) for AI-written briefs.";
-  return `<span class="st txt ${a?.on ? "on" : "off"}" role="img" aria-label="${esc(tip)}" data-tip="${esc(tip)}" data-icon="AI">AI</span>`;
+  // A click opens Ask AI, where the model answers questions with the app's tools
+  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask AI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
 }
 function renderModeBadge() {
   const m = state.meta, cur = m.settings.base_currency;
   $("#modeBadge").innerHTML = `<div class="status">
-    ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance.")}
+    ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", `${m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance."} Click to open Yahoo Finance (the stock's page when you're on one).`).replace('class="st ', 'class="st yahoo ').replace('role="img"', 'role="link" tabindex="0"')}
     ${aiStatus(m.aiInfo)}
     <span class="st cur" role="button" tabindex="0" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}. Opens the currency converter." data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings. Click to convert between currencies.">${esc(currencySymbol(cur))}</span>
   </div>`;
   const icon = $("#modeBadge .st.cur");
   icon.onclick = openConverter;
   icon.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openConverter(); } };
+  $("#modeBadge .st.ai").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show("ask"); } };
+  // The Yahoo mark opens Yahoo Finance in a new tab: the open stock's page when on Research, else the front page
+  const yahoo = $("#modeBadge .st.yahoo");
+  const openYahoo = () => {
+    const onStock = !$("#view-research").classList.contains("hidden") && state.ticker;
+    window.open(onStock ? `https://finance.yahoo.com/quote/${encodeURIComponent(state.ticker)}/` : "https://finance.yahoo.com/", "_blank", "noopener,noreferrer");
+  };
+  yahoo.onclick = openYahoo;
+  yahoo.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openYahoo(); } };
 }
 // The converter: today's rate between two currencies, from the same rates the portfolio uses. It starts from your
 // base currency to the dollar, and remembers the last pair.
