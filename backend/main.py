@@ -28,6 +28,35 @@ _load_env()
 SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
 
 
+def _cert_names(der):
+    """A certificate's (subject, issuer), read by Python's own parser."""
+    import ssl
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False, encoding="ascii") as f:
+        f.write(ssl.DER_cert_to_PEM_cert(der))
+    try:
+        d = ssl._ssl._test_decode_cert(f.name)
+        return d.get("subject"), d.get("issuer")
+    finally:
+        os.unlink(f.name)
+
+
+def _chained_intermediates(roots, store):
+    """The certificates in `store` whose chain leads up to one of `roots`, through any number of intermediates."""
+    trusted = {_cert_names(der)[0] for der in roots}
+    # Only those Windows allows for websites, as with the roots: a code-signing intermediate isn't wanted here
+    candidates = [(der, *_cert_names(der)) for der, enc, trust in store if enc == "x509_asn" and der not in roots and (trust is True or SERVER_AUTH in trust)]
+    out, added = [], True
+    while added:  # an intermediate can be issued by another intermediate that's already trusted
+        added = False
+        for der, subject, issuer in candidates:
+            if der not in out and subject != issuer and issuer in trusted:
+                out.append(der)
+                trusted.add(subject)
+                added = True
+    return out
+
+
 def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
     """On Windows, trust the certificates Windows trusts, as the browser does. Antivirus HTTPS scanning (Kaspersky, for
     one) and company proxies re-sign secure connections with their own certificate, which Windows has but Python's
@@ -40,10 +69,14 @@ def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
 
         import certifi
         pems = [Path(certifi.where()).read_text(encoding="ascii")]
-        # Only root certificates Windows trusts for websites (server authentication), not intermediates or ones meant
-        # for code signing or email, so nothing is trusted here that Windows itself wouldn't trust for a website
-        pems += [ssl.DER_cert_to_PEM_cert(der) for der, enc, trust in ssl.enum_certificates("ROOT")
-                 if enc == "x509_asn" and (trust is True or SERVER_AUTH in trust)]
+        # Root certificates Windows trusts for websites (server authentication), not ones meant only for code signing
+        # or email, so nothing is trusted here that Windows itself wouldn't trust for a website
+        roots = [der for der, enc, trust in ssl.enum_certificates("ROOT") if enc == "x509_asn" and (trust is True or SERVER_AUTH in trust)]
+        pems += [ssl.DER_cert_to_PEM_cert(der) for der in roots]
+        # Plus the intermediates in Windows' CA store that chain up to one of those roots. Windows finds a missing
+        # intermediate by itself; Python doesn't, so a network that inspects HTTPS through an intermediate (issued by a
+        # root it installed) fails without it. One that doesn't chain to a trusted root is left out.
+        pems += [ssl.DER_cert_to_PEM_cert(der) for der in _chained_intermediates(roots, ssl.enum_certificates("CA"))]
         bundle.parent.mkdir(parents=True, exist_ok=True)
         bundle.write_text("\n".join(pems), encoding="ascii")
         os.environ["SSL_CERT_FILE"] = str(bundle)

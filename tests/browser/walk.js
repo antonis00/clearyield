@@ -288,6 +288,15 @@ const SLOW = 150000;
   const askInfo = await p.evaluate(() => ({ examples: document.querySelectorAll("#askExamples .ask-ex").length, status: document.querySelector("#askStatus").innerText }));
   await p.fill("#askInput", "How is my portfolio doing?"); await p.press("#askInput", "Enter"); await p.waitForTimeout(300);
   expect("ask: page shows examples and explains when AI is off", askInfo.examples >= 4 && /AI_PROVIDER|isn't set up/.test(await txt("#askStatus")) && !(await p.locator("#askAnswers .ask-answer").count()), await txt("#askStatus"));
+  // Figures in an answer are marked: unsupported ones highlighted wherever they appear (however the thousands are
+  // separated), worked-out ones underlined with how, and never inside a longer number
+  const marked_ = await p.evaluate(() => {
+    const box = document.createElement("div");
+    box.innerHTML = markFigures("<p>Core is 94.4%, you hold €35 816.51, it could rise 40% (not 1,400 or 40.5).</p><p><code>40</code></p>",
+      { unmatched: ["40", "€35,816.51"], derived: [{ figure: "94.4%", how: "100% − 5.6%" }] });
+    return { bad: [...box.querySelectorAll("mark.fig-bad")].map((m) => m.textContent), worked: [...box.querySelectorAll("mark.fig-worked")].map((m) => `${m.textContent}|${m.title}`) };
+  });
+  expect("ask: answer figures are marked as unsupported or worked out", JSON.stringify(marked_.bad) === JSON.stringify(["€35 816.51", "40"]) && marked_.worked.join() === "94.4%|Worked out: 100% − 5.6%", JSON.stringify(marked_));
 
   // ---- Dashboard again, now with data
   await nav("dashboard"); await p.waitForTimeout(1000);

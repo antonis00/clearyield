@@ -2762,7 +2762,7 @@ def test_ai_providers():
     try:
         with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url + "/v1", AI_MODEL="llama3.2:3b"):
             b = ai.brief(ctx)
-            assert (b["source"], b["text"], b["by"]) == ("ai", "**Snapshot** Apple is fine.", "llama3.2:3b via 127.0.0.1") and b["check"] == {"checked": 0, "unmatched": [], "suggested": []}, b
+            assert (b["source"], b["text"], b["by"]) == ("ai", "**Snapshot** Apple is fine.", "llama3.2:3b via 127.0.0.1") and _core(b["check"]) == {"checked": 0, "unmatched": [], "suggested": []}, b
             path, headers, body = llm.seen[0]
             assert path == "/v1/chat/completions" and "authorization" not in headers
             assert body["model"] == "llama3.2:3b" and [m["role"] for m in body["messages"]] == ["system", "user"] and "AAPL" in body["messages"][1]["content"]
@@ -2868,24 +2868,24 @@ def test_brief_accuracy():
     facts = json.dumps(data, ensure_ascii=False)
     good = ("ROE is 142.1%, P/E about 38x, a $4.98 trillion company, revenue of $391 billion. It fell 13.8% from its peak; "
             "volatility 24.84%. Risk score 76.5 out of 100. The S&P 500 and the 200-day average, 3 risks, in 2025.")
-    assert ai.check_figures(good, facts) == {"checked": 8, "unmatched": []}, ai.check_figures(good, facts)
+    assert _core(ai.check_figures(good, facts)) == {"checked": 8, "unmatched": []}, ai.check_figures(good, facts)
     # Written with a non-breaking hyphen and narrow spaces, as some models do
     fancy = "The 50\u2011day average is above the 200\u2011day; the target implies \u20111.0\u202f% and ROE is 142.1\u202f%."
-    assert ai.check_figures(fancy, facts) == {"checked": 2, "unmatched": []}, ai.check_figures(fancy, facts)
+    assert _core(ai.check_figures(fancy, facts)) == {"checked": 2, "unmatched": []}, ai.check_figures(fancy, facts)
     bad = "ROE of 1.42, P/E of 3.8x, margins of 27.6%, and growth well above its 5-year average of 8%."
     assert ai.check_figures(bad, facts)["unmatched"] == ["1.42", "3.8x", "27.6%", "8%"]
 
     # 3. The rules travel with the prompt, and the result reaches the page
     # Trigger levels are the model's own suggestions, kept apart from figures claimed to be data
     trig = "ROE is 142.1%.\n\n**What would change the view**\n- Revenue growth falling below 10%.\n- ROE dropping from 142.1%."
-    assert ai.check_brief(trig, facts) == {"checked": 3, "unmatched": [], "suggested": ["10%"]}
+    assert _core(ai.check_brief(trig, facts)) == {"checked": 3, "unmatched": [], "suggested": ["10%"]}
     llm = _FakeLLM([_chat("**Snapshot** ROE is 142.1% but the P/E of 45x is high.")])
     try:
         with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"):
             b = ai.brief(ctx)
         prompt = llm.seen[0][2]["messages"][1]["content"]
         assert "never convert units or calculate new figures" in prompt and '"Return on equity": "142.1%"' in prompt
-        assert b["check"] == {"checked": 2, "unmatched": ["45x"], "suggested": []}
+        assert _core(b["check"]) == {"checked": 2, "unmatched": ["45x"], "suggested": []}
     finally:
         llm.close()
 
@@ -2928,10 +2928,11 @@ def test_thinking_and_cloud_setup():
             import certifi
             roots = [der for der, enc, trust in ssl.enum_certificates("ROOT") if enc == "x509_asn" and (trust is True or main.SERVER_AUTH in trust)]
             own = Path(certifi.where()).read_text(encoding="ascii").count("BEGIN CERTIFICATE")
-            assert text.count("BEGIN CERTIFICATE") == own + len(roots), "certifi's list plus the Windows roots trusted for websites"
-            # Nothing from the intermediate store, and no root Windows trusts only for something else (code signing, email)
+            mids = main._chained_intermediates(roots, ssl.enum_certificates("CA"))
+            assert text.count("BEGIN CERTIFICATE") == own + len(roots) + len(mids), "certifi's list, the Windows roots for websites, and intermediates chaining to them"
+            # No root Windows trusts only for something else (code signing, email), and no intermediate without a trusted root
             others = [der for der, enc, trust in ssl.enum_certificates("ROOT") if enc == "x509_asn" and trust is not True and main.SERVER_AUTH not in trust]
-            others += [der for der, enc, _ in ssl.enum_certificates("CA") if enc == "x509_asn" and der not in roots]
+            others += [der for der, enc, _ in ssl.enum_certificates("CA") if enc == "x509_asn" and der not in roots and der not in mids]
             assert not any(ssl.DER_cert_to_PEM_cert(der) in text for der in others if ssl.DER_cert_to_PEM_cert(der) not in Path(certifi.where()).read_text(encoding="ascii"))
             os.environ["SSL_CERT_FILE"] = "C:/mine.pem"
             assert main._trust_windows_certificates(bundle) is None and os.environ["SSL_CERT_FILE"] == "C:/mine.pem"
@@ -3142,6 +3143,72 @@ def _tool_call(*calls):
         {"id": f"c{i}", "type": "function", "function": {"name": n, "arguments": json.dumps(a)}} for i, (n, a) in enumerate(calls)]}}]}, 0)
 
 
+def test_ask_reaches_more_yahoo_data():
+    import json
+
+    from backend import agent, data
+    run = lambda name, **a: (lambda r: (json.loads(r[0]), r[1]))(agent.run_tool(name, a))
+    # Analysts: targets and ratings for a company; none for a fund
+    a, ok = run("get_analysts", ticker="AAPL")
+    assert ok and set(a["price_targets"]) == {"low", "mean", "median", "high"} and sum(a["ratings_now"].values()) > 0 and a["mean_target_vs_price"].endswith("%")
+    assert "no analyst ratings" in run("get_analysts", ticker="SPY")[0]["analysts"]
+    # Earnings: past quarters with the surprise worked out from reported and expected
+    e, _ = run("get_earnings", ticker="AAPL")
+    q = e["past_quarters_reported_vs_expected"][0]
+    assert abs(float(q["eps_reported"]) / float(q["eps_expected"]) - 1 - float(q["surprise"].rstrip("%")) / 100) < 0.01
+    # Dividends: the years add up to every payment, and the past 12 months match the income estimate's figure
+    from backend.universe import UNIVERSE
+    payer = next(t for t in UNIVERSE["US"] if data.dividend_payments(t))
+    pays = data.dividend_payments(payer)
+    d, _ = run("get_dividends", ticker=payer)
+    years = {y: sum(v for day, v in pays if day.startswith(y)) for y in {p[0][:4] for p in pays}}
+    assert d["total_per_year"] and all(abs(float(v.split()[0].replace(",", "")) - years[y]) < 1e-3 for y, v in d["total_per_year"].items())
+    # Price history: the return is end over start, inside the dates asked for; dates before the history say so
+    h, _ = run("get_price_history", ticker="AAPL", start="2024-01-01", end="2024-12-31")
+    c = data.history("AAPL", "max")["Close"]
+    w = c[(c.index >= "2024-01-01") & (c.index <= "2024-12-31")]
+    assert h["from"] >= "2024-01-01" and h["to"] <= "2024-12-31" and h["return"].split()[0] == f"{(w.iloc[-1] / w.iloc[0] - 1) * 100:.1f}%" and h["return"].endswith("(a rise)" if w.iloc[-1] >= w.iloc[0] else "(a fall)")
+    assert "starts on" in run("get_price_history", ticker="AAPL", start="1900-01-01", end="1900-12-31")[0]["error"]
+    # A fund's contents; a stock isn't a fund; the markets give each index's day, month and year
+    f, _ = run("get_fund", ticker="SPY")
+    assert f["sectors"] and f["top_holdings"] and "isn't a fund" in run("get_fund", ticker="AAPL")[0]["error"]
+    m, _ = run("get_market")
+    assert len(m["markets"]) >= 10 and all({"level", "day", "month", "as_of"} <= set(v) and "year" not in v for v in m["markets"].values())
+    assert "not year to date" in m["note"], "the past 12 months, said plainly, so it isn't read as year to date"
+    # A symbol Yahoo doesn't know comes back with what a search finds, so the model can try the right one
+    with _FakeMarket({"AAPL": _steps([0.001] * 300)}):
+        real_search = agent.search
+        agent.search = lambda text: {"results": [{"ticker": "IWDA.AS", "name": "iShares Core MSCI World", "market": "ETF · AMS"}]}
+        try:
+            miss, _ = run("get_fund", ticker="IWDA.DE")
+            assert "IWDA.DE" in miss["error"] and miss["did_you_mean"][0].startswith("IWDA.AS"), miss
+            assert agent.run_tool("get_fund", {"ticker": "IWDA.DE"})[1] is False, "shown as a failed look-up"
+            assert "did_you_mean" in run("get_stock", ticker="IWDA.DE")[0]
+        finally:
+            agent.search = real_search
+    # Every tool is offered to the model, all of them reading only
+    assert {"get_analysts", "get_earnings", "get_dividends", "get_price_history", "get_fund", "get_market"} <= set(agent.TOOLS)
+
+
+def test_intermediates_must_chain_to_a_trusted_root():
+    from backend import main
+    names = {b"root": ("Root", "Root"), b"sub": ("Sub", "Root"), b"issuing": ("Issuing", "Sub"), b"stray": ("Stray", "Unknown"), b"self": ("Self", "Self")}
+    real = main._cert_names
+    main._cert_names = lambda der: names[der]
+    try:
+        store = [(d, "x509_asn", True) for d in (b"issuing", b"stray", b"sub", b"self")]
+        # Found through two levels, in any order; a stray one, or a self-signed one in the intermediate store, is left out
+        assert sorted(main._chained_intermediates([b"root"], store)) == [b"issuing", b"sub"]
+        assert main._chained_intermediates([b"root"], [(b"sub", "x509_asn", {"1.3.6.1.5.5.7.3.3"})]) == [], "a code-signing-only intermediate isn't kept"
+    finally:
+        main._cert_names = real
+
+
+def _core(check):
+    """A figure check without its list of worked-out figures, which has its own test."""
+    return {k: v for k, v in check.items() if k != "derived"}
+
+
 def test_figure_check_reads_scaled_amounts():
     from backend import ai
     facts = "Free cash flow 13.98B EUR; new money 8,454.00 EUR; P/E 9.2x"
@@ -3149,6 +3216,14 @@ def test_figure_check_reads_scaled_amounts():
     # Rounded forms of figures in the data match; a different figure doesn't
     assert ok("FCF €13.98 bn") and ok("about €8.5k") and ok("€8,454") and ok("P/E 9.2×")
     assert not ok("about €9.5k") and not ok("a 37.5% rise") and not ok("€2.5 bn")
+    # An index's level after its name is a figure ("Nasdaq 24,579.43"); its name's number isn't ("S&P 500");
+    # a narrow or no-break space between digit groups is a thousands separator, as some models write it
+    levels = "Nasdaq 24,579.43; DAX 26,089.93"
+    assert _core(ai.check_figures("Nasdaq 24,579.43, the S&P 500 and the Nikkei 225", levels)) == {"checked": 1, "unmatched": []}
+    assert ai.check_figures("DAX 26 089.93 and 26 089.93", levels)["unmatched"] == []
+    # A date written with the month's name isn't a figure; the same number as a quantity is
+    assert _core(ai.check_figures("Lowest $11.19 (Oct 14), from $29.99 (Jan 3, 2022), on 14 October", "11.19 on 2022-10-14; 29.99")) == {"checked": 2, "unmatched": []}
+    assert ai.check_figures("it fell 14 points", "11.19")["unmatched"] == ["14"]
 
 
 def test_ask_uses_the_tools_and_checks_its_figures():
@@ -3165,24 +3240,66 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             stock = json.loads(agent.run_tool("get_stock", {"ticker": "AAPL"})[0])
             score = stock["StockPilot scores"]["Composite"].split()[0]  # "30.2 out of 100"
             llm.replies = [_tool_call(("get_portfolio", {}), ("get_stock", {"ticker": "AAPL"})),
-                           _chat(f"Apple scores {score}. It could rise 37.5% next year.")]
+                           _chat(f"Apple scores {score}. It could rise 37.5% next year."),
+                           _chat(f"Apple scores {score}. It could rise 37.5% or 50% next year.")]  # a revision that's no better
             r = c.post("/api/ask", json={"question": "Should I add Apple?"})
             assert r.status_code == 200, r.text
             out = r.json()
-            assert [s["tool"] for s in out["steps"]] == ["get_portfolio", "get_stock"] and all(s["ok"] for s in out["steps"]) and out["calls"] == 2
+            assert [s["tool"] for s in out["steps"]] == ["get_portfolio", "get_stock"] and all(s["ok"] for s in out["steps"]) and out["calls"] == 3
+            # The unsupported figure went back to the model once, in a fresh conversation with the findings; a revision
+            # with as many unsupported figures or more is thrown away
+            fix = llm.seen[2][2]
+            assert "tools" not in fix and "37.5%" in fix["messages"][1]["content"] and "What the look-ups found" in fix["messages"][1]["content"]
+            assert out["answer"].endswith("rise 37.5% next year.") and out["revised"] is None
             # What the model was sent: the tools on offer, then both results back under their call ids
             first, second = llm.seen[0][2], llm.seen[1][2]
+            # The model is told today's date, which it can't know otherwise
+            import datetime as dt
+            assert first["messages"][1]["content"].startswith(f"(Today is {dt.date.today():%A %d %B %Y}.)") and first["messages"][1]["content"].endswith("Should I add Apple?")
             assert {t["function"]["name"] for t in first["tools"]} == set(agent.TOOLS) and first["tool_choice"] == "auto"
             back = [m for m in second["messages"] if m["role"] == "tool"]
             assert [m["tool_call_id"] for m in back] == ["c0", "c1"] and "VWCE.DE" in back[0]["content"]
             # The figure check: the score is in the data, the forecast isn't
             assert out["check"]["unmatched"] == ["37.5%"] and out["check"]["checked"] >= 2, out["check"]
+            # A revision that corrects it is kept, and says how many it fixed
+            llm.seen.clear()
+            llm.replies = [_tool_call(("get_stock", {"ticker": "AAPL"})), _chat(f"Apple scores {score}. It could rise 37.5% next year."),
+                           _chat(f"Apple scores {score}. The data gives no forecast.")]
+            out = c.post("/api/ask", json={"question": "Should I add Apple?"}).json()
+            assert out["answer"].endswith("gives no forecast.") and out["check"]["unmatched"] == [] and out["revised"] == {"before": ["37.5%"], "fixed": 1}, out
+            # An answer whose figures all check out isn't sent back
+            llm.seen.clear()
+            llm.replies = [_chat(f"A score of {score} is below the middle.")]
+            out = c.post("/api/ask", json={"question": f"Apple scores {score}. Is that good?"}).json()
+            assert len(llm.seen) == 1 and out["revised"] is None
             # A tool that fails says why, and the model is told; the round limit then forces an answer
             llm.seen.clear()
             llm.replies = [_tool_call(("get_stock", {"ticker": "NOPE IS NOT A SYMBOL"}))] * agent.MAX_ROUNDS + [_chat("I couldn't find that symbol.")]
             out = c.post("/api/ask", json={"question": "Tell me about nope"}).json()
             assert len(out["steps"]) == agent.MAX_ROUNDS and not out["steps"][0]["ok"] and "isn't a ticker symbol" in out["steps"][0]["error"]
-            assert out["calls"] == agent.MAX_ROUNDS + 1 and llm.seen[-1][2]["tool_choice"] == "none" and out["answer"] == "I couldn't find that symbol."
+            last = llm.seen[-1][2]
+            # The answer round offers no tools at all and says to answer (told "none", a model still asked for one)
+            assert out["calls"] == agent.MAX_ROUNDS + 1 and "tools" not in last and last["messages"][-1]["content"] == agent.ANSWER_NOW and out["answer"] == "I couldn't find that symbol."
+            # A malformed tool request the provider can't read is asked again once, and the second answer is used
+            llm.seen.clear()
+            llm.replies = [(400, {"error": {"message": "Parsing failed. The model generated output that could not be parsed.", "code": "tool_use_failed"}}, 0),
+                           _chat("Second time lucky.")]
+            out = c.post("/api/ask", json={"question": "Anything?"}).json()
+            assert out["answer"] == "Second time lucky." and len(llm.seen) == 2, out
+            # A day's allowance used up is said plainly, with when it comes back; it isn't waited out
+            llm.seen.clear()
+            daily = (429, {"error": {"message": "Rate limit reached ... on tokens per day (TPD): Limit 200000, Used 199009, Requested 1783.", "code": "rate_limit_exceeded"}}, 0)
+            llm.replies = [daily]
+            r = c.post("/api/ask", json={"question": "Anything?"})
+            assert r.status_code == 503 and "Today's AI allowance is used up (200,000 tokens a day" in r.json()["detail"] and len(llm.seen) == 1, r.text
+            # Refused twice after a look-up: a fresh conversation with the question and what was found, and no tools
+            llm.seen.clear()
+            refused = (400, {"error": {"message": "Tool choice is none, but model called a tool"}}, 0)
+            llm.replies = [_tool_call(("get_portfolio", {})), refused, refused, _chat("Fresh answer.")]
+            out = c.post("/api/ask", json={"question": "What do I hold?"}).json()
+            fresh = llm.seen[-1][2]
+            assert out["answer"] == "Fresh answer." and out["steps"][0]["tool"] == "get_portfolio" and "tools" not in fresh
+            assert [m["role"] for m in fresh["messages"]] == ["system", "user"] and "What the look-ups found" in fresh["messages"][1]["content"] and "VWCE.DE" in fresh["messages"][1]["content"]
             # Nothing the tools did changed your data; another website can't make your browser ask
             assert db.q("SELECT * FROM transactions") == before
             assert c.post("/api/ask", json={"question": "x"}, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403

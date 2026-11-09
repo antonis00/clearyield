@@ -577,18 +577,48 @@ async function loadNews() {
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = DOMPurify.sanitize(marked.parse(r.text)) + briefFooter(r); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(DOMPurify.sanitize(marked.parse(r.text)), r.check) + briefFooter(r); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
-// Who wrote the brief, and whether every figure in it could be found in the data it was given
+// Who wrote the brief, and whether every figure in it could be found in the data it was given (or worked out from
+// figures that were)
 function briefFooter(r) {
   if (!r.by) return "";
   const c = r.check, by = `Written by ${esc(r.by)}.`;
   if (!c || !c.checked) return `<p class="muted sm">${by}</p>`;
   const own = c.suggested?.length ? ` The triggers use ${c.suggested.length === 1 ? "a level" : `${c.suggested.length} levels`} of the model's own, not from the data: ${c.suggested.map(esc).join(", ")}.` : "";
-  const facts = c.checked - (c.suggested?.length || 0);
-  if (!c.unmatched.length) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${own} ${by}</p>`;
-  return `<p class="brief-check warn">${c.unmatched.length} of ${facts} figures aren't in the data, so the model may have made them up or worked them out: <b>${c.unmatched.map(esc).join(", ")}</b>. Check them before relying on them.${own} ${by}</p>`;
+  const facts = c.checked - (c.suggested?.length || 0), worked = c.derived?.length || 0;
+  const how = worked ? ` ${worked === 1 ? "One is" : `${worked} are`} worked out from the others (underlined; hover to see how).` : "";
+  const fixed = r.revised?.fixed ? ` The model corrected or removed ${r.revised.fixed === 1 ? "a figure" : `${r.revised.fixed} figures`} that weren't in the data.` : "";
+  if (!c.unmatched.length) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${how}${fixed}${own} ${by}</p>`;
+  return `<p class="brief-check warn">${c.unmatched.length} of ${facts} figures aren't in the data and can't be worked out from it (marked): <b>${c.unmatched.map(esc).join(", ")}</b>. Check them before relying on them.${how}${fixed}${own} ${by}</p>`;
+}
+// Marks figures inside rendered text: unsupported ones highlighted, worked-out ones underlined with how. A figure is
+// matched however the model wrote its separators (a narrow space or a comma between thousands, a typographic minus).
+function markFigures(html, c) {
+  if (!c || (!c.unmatched?.length && !c.derived?.length)) return html;
+  const pattern = (f) => f.split("").map((ch) => /[,   ]/.test(ch) ? "[,\\u202f\\u00a0\\u2009]" : /[-−‑–]/.test(ch) ? "[-\\u2212\\u2011\\u2013]" : /\s/.test(ch) ? "\\s*" : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
+  const marks = [...(c.unmatched || []).map((f) => ({ f, cls: "fig-bad", title: "Not in the data, and can't be worked out from it" })),
+                 ...(c.derived || []).map((d) => ({ f: d.figure, cls: "fig-worked", title: `Worked out: ${d.how}` }))]
+    .filter((m) => m.f).sort((a, b) => b.f.length - a.f.length);
+  if (!marks.length) return html;
+  // Not inside a longer number: "40" mustn't light up in "1,400" or "40.5"
+  const re = new RegExp(marks.map((m) => `(?<![\\d.,])(${pattern(m.f)})(?![\\d]|[.,]\\d)`).join("|"), "g");
+  const box = document.createElement("div"); box.innerHTML = html;
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [];
+  while (walker.nextNode()) if (!walker.currentNode.parentElement.closest("code, pre, mark")) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const s = node.nodeValue; re.lastIndex = 0; if (!re.test(s)) continue;
+    const frag = document.createDocumentFragment(); let at = 0; re.lastIndex = 0;
+    for (const m of s.matchAll(re)) {
+      const m_ = marks[m.slice(1).findIndex((g) => g !== undefined)];
+      frag.append(s.slice(at, m.index));
+      const el = document.createElement("mark"); el.className = m_.cls; el.title = m_.title; el.textContent = m[0]; frag.append(el);
+      at = m.index + m[0].length;
+    }
+    frag.append(s.slice(at)); node.replaceWith(frag);
+  }
+  return box.innerHTML;
 }
 $("#btnWatch").onclick = async () => {
   if (state.stock.watched) { await api(`/api/watchlist/${encodeURIComponent(state.ticker)}`, { method: "DELETE" }); state.stock.watched = false; }
@@ -709,12 +739,15 @@ $("#scrQuery").onkeydown = (e) => { if (e.key === "Enter") $("#btnScrQuery").cli
 // A question goes to the AI, which uses the app's read-only tools in a loop and answers. Each answer shows how it was
 // worked out (every tool it used) and the check of its figures. Answers stay on the page for this visit only.
 const ASK_EXAMPLES = ["How is my portfolio doing, and is anything off-plan?", "Which European stock would add the most diversification to my portfolio without much risk?",
-  "Compare TotalEnergies and Shell for a long-term holder", "What would buying 2,000 of SAP.DE do to my portfolio?", "Find cheap, profitable US stocks with low debt and explain the best two"];
+  "Compare TotalEnergies and Shell for a long-term holder", "What would buying 2,000 of SAP.DE do to my portfolio?",
+  "What do analysts think of ASML, and when does it report next?", "How did Nvidia do in 2022, and how are markets doing today?"];
 const ASK_STEP = {
   get_portfolio: () => "Read your portfolio", get_stock: (a) => `Looked up ${a.ticker}`,
   screen: (a) => `Ran the screener${a.question ? `: "${a.question}"` : a.filters ? ` with ${Object.keys(a.filters).join(", ")}` : ""}`,
   get_opportunities: (a) => `Opened Opportunities${a.markets ? ` (${a.markets.join(", ")})` : ""}`, compare: (a) => `Compared ${(a.tickers || []).join(", ")}`,
   pretrade: (a) => `Pre-trade check: ${a.amount} of ${a.ticker}`, search: (a) => `Searched for "${a.text}"`, get_news: (a) => `Read headlines about ${a.ticker}`,
+  get_analysts: (a) => `Read analysts' views on ${a.ticker}`, get_earnings: (a) => `Checked ${a.ticker}'s earnings`, get_dividends: (a) => `Read ${a.ticker}'s dividend history`,
+  get_price_history: (a) => `Looked at ${a.ticker} from ${a.start} to ${a.end || "today"}`, get_fund: (a) => `Looked inside ${a.ticker}`, get_market: () => "Checked the markets",
 };
 function renderAskSetup() {
   const a = state.meta?.aiInfo;
@@ -732,7 +765,7 @@ async function runAsk() {
     const r = await api("/api/ask", { method: "POST", body: { question: q } });
     const steps = r.steps.map((s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}</li>`).join("");
     const card = document.createElement("div"); card.className = "card ask-answer";
-    card.innerHTML = `<div class="ask-q">${esc(q)}</div><div class="brief">${DOMPurify.sanitize(marked.parse(r.answer))}</div>
+    card.innerHTML = `<div class="ask-q">${esc(q)}</div><div class="brief">${markFigures(DOMPurify.sanitize(marked.parse(r.answer)), r.check)}</div>
       <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}</summary><ol>${steps || "<li>Answered without looking anything up.</li>"}</ol></details>
       ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
     $("#askAnswers").prepend(card); status.textContent = ""; $("#askInput").value = "";
