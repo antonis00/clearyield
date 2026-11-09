@@ -92,6 +92,20 @@ CORE_FUNDS = {
     "SPY", "VOO", "IVV", "CSPX.L", "VUSA.L", "SXR8.DE", "VTI", "VXUS", "VEA", "EFA", "VWO", "IEMG", "BND", "AGG",
 }
 
+# The currencies a broad fund's holdings are priced in, which is what moves its value for someone in another currency:
+# VWCE trades in euros but is mostly US companies. Yahoo doesn't publish this, so these are the indexes' country
+# weights, rounded (approximate, from the index factsheets; update when they drift). A fund that isn't here counts in
+# the currency it trades in.
+_ALL_WORLD = {"USD": 0.63, "EUR": 0.08, "JPY": 0.055, "GBP": 0.035, "CNY/HKD": 0.03, "CAD": 0.028, "CHF": 0.022,
+              "TWD": 0.02, "INR": 0.02, "AUD": 0.017, "Other": 0.063}  # FTSE All-World, MSCI ACWI
+_DEVELOPED = {"USD": 0.72, "EUR": 0.085, "JPY": 0.055, "GBP": 0.037, "CAD": 0.03, "CHF": 0.025, "AUD": 0.018, "Other": 0.03}  # MSCI World
+_US_ONLY = {"USD": 1.0}
+FUND_CURRENCIES = {
+    **{t: _ALL_WORLD for t in ("VWCE.DE", "VWCE.MI", "VWCE.AS", "VWRL.L", "VWRA.L", "VWRL.AS", "ACWI", "VT")},
+    **{t: _DEVELOPED for t in ("IWDA.AS", "SWDA.L", "EUNL.DE", "URTH")},
+    **{t: _US_ONLY for t in ("SPY", "VOO", "IVV", "CSPX.L", "VUSA.L", "SXR8.DE", "VTI", "BND", "AGG")},
+}
+
 
 def default_bucket(ticker):
     return "core" if ticker in CORE_FUNDS else "satellite"

@@ -56,12 +56,82 @@ def _quick_row(t, settings):
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
         "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only", "events": upcoming(inf),
         "moveDay": on_which_day(c), "stale": data.is_stale(t), "asOf": c.index[-1].strftime("%Y-%m-%d"),
+        "fromHigh": float(c.iloc[-1] / ind.window(c, 252).max() - 1),
     }
 
 
 def rows_for(tickers, settings, workers=8):
     with ThreadPoolExecutor(max_workers=workers) as ex:
         return list(ex.map(lambda t: _quick_row(t, settings), tickers))
+
+
+# ---------------------------------------------------------------- opportunities
+# Every list on the Opportunities page is a rule over the factor scores, with its limits named here and shown on the page
+OPP_ZONE = 60          # the map's "cheap and rising" corner: value and momentum both at least this
+OPP_TOP = 10           # how many the ranked list shows
+OPP_FIT = 8            # how many portfolio-fit candidates
+SALE_QUALITY = 60      # "quality on sale": a quality score at least this...
+SALE_DROP = -0.10      # ...and at least 10% below its 52-week high
+REASON_AT = 65         # a factor this strong is named as a reason
+
+
+def _reasons(r):
+    """The strongest factors in words, each with the figure behind it, strongest first."""
+    say = {
+        "value": lambda: f"Cheap (P/E {r['pe']:.1f})" if r.get("pe") and r["pe"] > 0 else "Cheap",
+        "quality": lambda: f"High quality (ROE {r['roe']:.0%})" if r.get("roe") is not None else "High quality",
+        "growth": lambda: f"Growing (revenue {r['revGrowth']:+.0%})" if r.get("revGrowth") is not None else "Growing",
+        "momentum": lambda: f"Strong trend ({r['ret1y']:+.0%} in a year)" if r.get("ret1y") is not None else "Strong trend",
+        "risk": lambda: f"Calm ({r['vol']:.0%} volatility)" if r.get("vol") is not None else "Calm",
+    }
+    ranked = sorted(((r.get(f"f_{k}"), k) for k in say if r.get(f"f_{k}") is not None), reverse=True)
+    return [say[k]() for s, k in ranked if s >= REASON_AT][:3]
+
+
+def opportunities(settings, markets):
+    """Stocks in the chosen markets, scored on current data, in four views: the value/momentum map, the top
+    ranked, the best fit for your portfolio's satellite part, and good companies well below their high.
+    Stocks only: funds and crypto are scored on trend and risk alone, so they can't be compared on value."""
+    from . import portfolio
+    markets = [m for m in (markets or ["US", "Europe", "Gulf"]) if m in ("US", "Europe", "Gulf")] or ["US", "Europe", "Gulf"]
+    rows = rows_for(tickers_for(markets), settings)
+    failed = [r["ticker"] for r in rows if "error" in r]
+    stocks = [r for r in rows if "error" not in r and r.get("assetClass") == "Stocks" and r.get("composite") is not None]
+    for r in stocks:
+        r["reasons"] = _reasons(r)
+
+    # Your portfolio's value each day, to see how much each candidate would move with it
+    p = portfolio.summary(settings)
+    held = {r["ticker"] for r in p["positions"]}
+    total = sum(p["_series"].values()) if p["_series"] else None
+    for r in stocks:
+        r["corr"] = None
+        if total is not None and r["ticker"] not in held:
+            try:
+                r["corr"] = ind.correlation(data.history(r["ticker"], "1y")["Close"], total)
+            except data.DataError:
+                pass
+
+    pick = lambda r: {k: r.get(k) for k in ("ticker", "name", "region", "sector", "composite", "stance", "f_value", "f_quality", "f_growth",
+                                            "f_momentum", "f_risk", "pe", "roe", "revGrowth", "ret1y", "vol", "fromHigh", "reasons", "corr", "price", "currency")}
+    top = sorted(stocks, key=lambda r: -r["composite"])[:OPP_TOP]
+    fit = []
+    for r in stocks:
+        if r["corr"] is None:
+            continue
+        # Diversifying: 100 for a stock that moves independently of you (or against you), 0 for one that moves in step
+        diversifies = (1 - max(r["corr"], 0)) * 100
+        fit.append({**pick(r), "diversifies": diversifies, "fit": (r["composite"] + diversifies) / 2})
+    fit = sorted(fit, key=lambda r: -r["fit"])[:OPP_FIT]
+    sale = sorted((r for r in stocks if (r.get("f_quality") or 0) >= SALE_QUALITY and r["fromHigh"] <= SALE_DROP), key=lambda r: r["fromHigh"])[:OPP_TOP]
+    cs = p.get("coreSatellite") or {}
+    return {
+        "markets": markets, "scanned": len(rows), "failed": failed, "map": [pick(r) for r in stocks], "top": [pick(r) for r in top],
+        "fit": fit, "onSale": [pick(r) for r in sale], "holdings": sorted(held),
+        "fitWeeks": int((total.index[-1] - total.index[0]).days // 7) if total is not None and len(total) > 1 else None,
+        "satellite": {"amount": cs.get("amount"), "action": cs.get("action"), "target": cs.get("target"), "core": cs.get("core"), "base": p["base"]} if cs else None,
+        "rules": {"zone": OPP_ZONE, "top": OPP_TOP, "fit": OPP_FIT, "saleQuality": SALE_QUALITY, "saleDrop": SALE_DROP, "reasonAt": REASON_AT},
+    }
 
 
 def screen(body, settings):

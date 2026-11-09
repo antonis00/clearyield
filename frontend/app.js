@@ -122,7 +122,7 @@ function show(view, push = true) {
     const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings }[view] || (() => {}))();
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false) }[view] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
 
@@ -249,6 +249,7 @@ async function loadDashboard() {
   }).catch(() => {});
 
   loadDigest();
+  setTimeout(loadDashOpp, 0);  // after the rest of the dashboard: the first scoring of the day takes a while
   const wt = $("#watchTable");
   if (!wt.innerHTML) loading(wt);
   try {
@@ -700,6 +701,130 @@ $("#btnScr").onclick = () => (selectedMarkets().length ? runScreen({ markets: se
 $("#btnScrQuery").onclick = () => $("#scrQuery").value.trim() && runScreen({ markets: selectedMarkets(), query: $("#scrQuery").value });
 $("#scrQuery").onkeydown = (e) => { if (e.key === "Enter") $("#btnScrQuery").click(); };
 
+/* ---------------------------------------------------------------- opportunities */
+// One scoring of the stocks feeds the page and the dashboard card. It's kept for five minutes, so moving between
+// them doesn't recalculate; Refresh asks again. The first load of the day downloads every stock, about half a minute.
+const OPP_MARKETS = ["US", "Europe", "Gulf"];
+const oppMarkets = () => { try { const m = JSON.parse(localStorage.getItem("oppMarkets")); return Array.isArray(m) && m.length ? m.filter((x) => OPP_MARKETS.includes(x)) : OPP_MARKETS; } catch { return OPP_MARKETS; } };
+async function getOpportunities(force) {
+  const key = oppMarkets().join(",");
+  if (!force && state.opp?.key === key && Date.now() - state.opp.at < 5 * 60e3) return state.opp.data;
+  if (!force && state.oppPending?.key === key) return state.oppPending.promise;  // the page and the card share one request
+  const promise = api(`/api/opportunities?markets=${encodeURIComponent(key)}`);
+  state.oppPending = { key, promise };
+  try { const data = await promise; state.opp = { key, data, at: Date.now() }; return data; } finally { if (state.oppPending?.promise === promise) state.oppPending = null; }
+}
+const oppName = (r) => `${r.name || r.ticker} (${r.ticker})`;
+const oppTip = (r, extra = []) => [oppName(r), `Score ${num(r.composite, 0)} · ${r.stance}`, ...extra, ...(r.reasons || [])];
+// The map: value across, momentum up, quality as size, overall score as colour; the "cheap and rising" corner shaded
+function oppMapChart(id, rows, zone, small) {
+  const shade = { id: "zone", beforeDatasetsDraw(c) {
+    const { ctx, chartArea: a, scales: { x, y } } = c, x0 = x.getPixelForValue(zone), y0 = y.getPixelForValue(zone);
+    ctx.save(); ctx.fillStyle = tint("--up", "1c"); ctx.fillRect(x0, a.top, a.right - x0, y0 - a.top);
+    ctx.restore();
+  } };
+  // The stocks in the corner are named on the map, best score first, each to the right of its dot or else to the
+  // left; a name that would overlap one already placed is left for the hover, so nothing is written over anything
+  const names = { id: "names", afterDatasetsDraw(c) {
+    const { ctx, chartArea: a, scales: { x } } = c, pts = c.getDatasetMeta(0).data, h = small ? 11 : 13, placed = [];
+    ctx.save(); ctx.textBaseline = "middle";
+    if (!small) {
+      ctx.font = "600 11px IBM Plex Sans"; ctx.fillStyle = C("--up"); ctx.textAlign = "left";
+      const tx = x.getPixelForValue(zone) + 6, ty = a.top + 10, tw = ctx.measureText("Cheap and rising").width;
+      ctx.fillText("Cheap and rising", tx, ty); placed.push({ l: tx, r: tx + tw, t: ty - h / 2, b: ty + h / 2 });
+    }
+    ctx.font = `600 ${small ? 10 : 11}px IBM Plex Sans`; ctx.fillStyle = C("--text");
+    const corner = c.data.datasets[0].data.map((d, i) => ({ d, pt: pts[i] })).filter(({ d }) => d.x >= zone && d.y >= zone).sort((p, q) => q.d.row.composite - p.d.row.composite);
+    // The dots themselves are obstacles too, so a name doesn't sit on another stock
+    corner.forEach(({ d, pt }) => placed.push({ l: pt.x - d.r, r: pt.x + d.r, t: pt.y - d.r, b: pt.y + d.r, dot: true }));
+    corner.forEach(({ d, pt }) => {
+      const t = d.row.ticker, label = /^\d/.test(t) ? t : t.replace(/\.[A-Z]+$/, ""), w = ctx.measureText(label).width;
+      const own = placed.findIndex((p) => p.dot && p.l === pt.x - d.r && p.t === pt.y - d.r);
+      const others = placed.filter((_, i) => i !== own);
+      const fits = (b) => b.l >= a.left && b.r <= a.right && b.t >= a.top && b.b <= a.bottom && !others.some((p) => b.l < p.r && b.r > p.l && b.t < p.b && b.b > p.t);
+      const right = { l: pt.x + d.r + 3, r: pt.x + d.r + 3 + w, t: pt.y - h / 2, b: pt.y + h / 2 };
+      const left = { l: pt.x - d.r - 3 - w, r: pt.x - d.r - 3, t: pt.y - h / 2, b: pt.y + h / 2 };
+      const box = fits(right) ? right : fits(left) ? left : null;
+      if (!box) return;
+      ctx.textAlign = "left"; ctx.fillText(label, box.l, pt.y); placed.push(box);
+    });
+    ctx.restore();
+  } };
+  return mkChart(id, {
+    type: "bubble", plugins: [shade, names],
+    data: { datasets: [{ data: rows.map((r) => ({ x: r.f_value, y: r.f_momentum, r: (small ? 2.5 : 4) + ((r.f_quality || 0) / 100) * (small ? 5 : 9), row: r })),
+      backgroundColor: rows.map((r) => scoreColor(r.composite) + "cc"), borderColor: rows.map((r) => scoreColor(r.composite)), borderWidth: 1 }] },
+    options: { maintainAspectRatio: false, animation: false, plugins: { legend: { display: false },
+      tooltip: { callbacks: { label: (c) => (small ? oppTip(c.raw.row).slice(0, 3) : oppTip(c.raw.row)) } } },
+      // A little room past 0 and 100, so a stock at the edge isn't cut in half
+      scales: { x: { min: -6, max: 106, title: { display: true, text: small ? "cheaper →" : "Value score — cheaper →", font: { size: small ? 10 : 12 } },
+                     ticks: { display: !small }, afterBuildTicks: (ax) => { ax.ticks = [0, 20, 40, 60, 80, 100].map((value) => ({ value })); } },
+                y: { min: -6, max: 106, title: { display: true, text: small ? "stronger trend ↑" : "Momentum score — stronger trend ↑", font: { size: small ? 10 : 12 } },
+                     ticks: { display: !small }, afterBuildTicks: (ax) => { ax.ticks = [0, 20, 40, 60, 80, 100].map((value) => ({ value })); } } },
+      onClick: small ? undefined : (e, els) => { if (els[0]) openStock(state.charts[id].data.datasets[0].data[els[0].index].row.ticker); },
+      onHover: (e, els) => { e.native.target.style.cursor = els.length || small ? "pointer" : "default"; } },
+  });
+}
+// A ranked list as horizontal bars, each opening its stock
+function oppBars(id, rows, value, { label, tip, color, max, fmt }) {
+  return mkChart(id, {
+    type: "bar",
+    data: { labels: rows.map(label), datasets: [{ data: rows.map(value), backgroundColor: rows.map(color), borderRadius: 4, row: rows }] },
+    options: { indexAxis: "y", maintainAspectRatio: false, animation: false, plugins: { legend: { display: false },
+      tooltip: { callbacks: { title: (c) => oppName(rows[c[0].dataIndex]), label: (c) => tip(rows[c.dataIndex]) } } },
+      scales: { x: { min: 0, max, ticks: { callback: fmt } }, y: { ticks: { autoSkip: false } } },
+      onClick: (e, els) => { if (els[0]) openStock(rows[els[0].index].ticker); },
+      onHover: (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; } },
+  });
+}
+// An empty list gets a sentence in place of a blank chart
+function oppEmpty(wrap, canvasId, message) {
+  const w = $(wrap); w.querySelector(".opp-empty")?.remove(); $(`#${canvasId}`).classList.toggle("hidden", !!message);
+  if (message) w.insertAdjacentHTML("beforeend", `<div class="opp-empty muted">${esc(message)}</div>`);
+}
+async function loadOpportunities(force) {
+  const status = $("#oppStatus");
+  $("#oppMarkets").innerHTML = OPP_MARKETS.map((m) => `<label><input type="checkbox" value="${m}" ${oppMarkets().includes(m) ? "checked" : ""}> ${m}</label>`).join("");
+  $$("#oppMarkets input").forEach((i) => i.onchange = () => {
+    const picked = $$("#oppMarkets input:checked").map((x) => x.value);
+    if (!picked.length) { i.checked = true; toast("Pick at least one market."); return; }
+    try { localStorage.setItem("oppMarkets", JSON.stringify(picked)); } catch { /* kept for this visit only */ }
+    loadOpportunities();
+  });
+  status.innerHTML = `<span class="spinner"></span>Scoring the stocks… the first load of the day downloads all of them and takes about half a minute.`;
+  $("#oppRefresh").disabled = true;
+  let d;
+  try { d = await getOpportunities(force); } catch (e) { status.textContent = e.message; return; } finally { $("#oppRefresh").disabled = false; }
+  const R = d.rules, base = d.satellite?.base || state.meta?.settings?.base_currency || "USD";
+  status.textContent = `${d.map.length} stocks scored in ${d.markets.join(", ")}${d.failed.length ? `; no data for ${d.failed.join(", ")}` : ""}.`;
+  const inZone = d.map.filter((r) => r.f_value >= R.zone && r.f_momentum >= R.zone);
+  oppMapChart("oppMap", d.map, R.zone, false);
+  $("#oppMapNote").textContent = `${inZone.length} in the shaded corner`;
+  $("#oppMapHelp").textContent = `Each dot is a stock. Further right is cheaper (value score), higher has a stronger price trend (momentum score), a bigger dot is better quality, and the colour is its overall score. The shaded corner is ${R.zone} or more on both: cheap and rising.`;
+  oppBars("oppTop", d.top, (r) => r.composite, { label: (r) => r.ticker, tip: (r) => oppTip(r).slice(1), color: (r) => scoreColor(r.composite), max: 100 });
+  $("#oppTopHelp").textContent = `The ${R.top} highest overall scores: the five factors, weighted as in Settings. Hover a bar for the strongest reasons (factors at ${R.reasonAt} or more).`;
+  const sat = d.satellite;
+  $("#oppFitNote").textContent = sat?.action === "To satellite" && sat.amount ? `About ${money(sat.amount, base, 0)} is meant for satellite` : "";
+  oppEmpty("#oppFitWrap", "oppFit", !d.holdings.length ? "Add your holdings on the Portfolio page to see which stocks would fit them." : !d.fit.length ? "Not enough shared price history with your portfolio yet: it needs about two months." : "");
+  if (d.fit.length) oppBars("oppFit", d.fit, (r) => r.fit, { label: (r) => r.ticker, tip: (r) => [`Fit ${num(r.fit, 0)}: score ${num(r.composite, 0)}, diversifies ${num(r.diversifies, 0)}`, `Moves ${pct(r.corr, 0, false)} in step with your portfolio`, ...(r.reasons || [])], color: () => C("--accent2"), max: 100 });
+  $("#oppFitHelp").textContent = d.holdings.length ? `Ranked by the average of a stock's overall score and how little it has moved with what you hold now (100 = independently or against it, 0 = in step), over the past ${d.fitWeeks} weeks.${d.fitWeeks < 26 ? " That's a short period, so treat the diversification part as a rough guide." : ""} Stocks you already hold are left out.` : "";
+  oppEmpty("#oppSaleWrap", "oppSale", d.onSale.length ? "" : `No stock with a quality score of ${R.saleQuality}+ is ${Math.abs(R.saleDrop * 100)}% or more below its 52-week high right now.`);
+  if (d.onSale.length) oppBars("oppSale", d.onSale, (r) => -r.fromHigh * 100, { label: (r) => r.ticker, tip: (r) => [`${pct(r.fromHigh, 0)} from its 52-week high`, `Quality score ${num(r.f_quality, 0)}`, ...(r.reasons || [])], color: () => C("--accent"), fmt: (v) => (v ? `-${v}%` : "0%") });
+  $("#oppSaleHelp").textContent = `Quality score ${R.saleQuality} or more and at least ${Math.abs(R.saleDrop * 100)}% below the highest price of the past year, biggest fall first. A fall can be a bargain or a warning, so check why it fell.`;
+}
+$("#oppRefresh").onclick = () => loadOpportunities(true);
+// The dashboard's card: the map in small, and the top of the "cheap and rising" corner. Loaded after the rest.
+async function loadDashOpp() {
+  const list = $("#dashOppList");
+  if (!state.opp) list.innerHTML = `<div class="muted sm"><span class="spinner"></span>Scoring the stocks…</div>`;
+  let d;
+  try { d = await getOpportunities(false); } catch (e) { list.innerHTML = `<div class="muted sm">${esc(e.message)}</div>`; return; }
+  oppMapChart("dashOppChart", d.map, d.rules.zone, true);
+  const zone = d.map.filter((r) => r.f_value >= d.rules.zone && r.f_momentum >= d.rules.zone).sort((a, b) => b.composite - a.composite).slice(0, 5);
+  list.innerHTML = `<div class="muted sm">Cheap and rising, best first</div>` + (zone.length ? zone.map((r) => `<div class="opp-row"><b>${esc(r.ticker)}</b><span class="muted">${esc((r.reasons || [])[0] || "")}</span><b style="color:${scoreColor(r.composite)}">${num(r.composite, 0)}</b></div>`).join("")
+    : `<div class="muted sm">No stock is in the corner today.</div>`);
+}
+
 /* ---------------------------------------------------------------- portfolio */
 async function loadPortfolio() {
   const t = $("#pfTable"); loading(t);
@@ -778,7 +903,10 @@ async function loadPortfolio() {
   $("#pfWarn").innerHTML = p.warnings.map((w) => `<li class="t-1">${esc(w)}</li>`).join("") || (p.positions.length ? `<li class="t1">No concentration warnings.</li>` : "");
   const pie = (id, obj) => mkChart(id, { type: "doughnut", data: { labels: Object.keys(obj), datasets: [{ data: Object.values(obj), backgroundColor: PALETTE, borderColor: C("--panel"), borderWidth: 2 }] },
     options: { cutout: "62%", plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } }, tooltip: { callbacks: { label: (c) => `${c.label}: ${pct(c.raw / p.total, 1, false)}` } } } } });
-  pie("aAsset", p.allocation.assetClass); pie("aRegion", p.allocation.region); pie("aSector", p.allocation.sectorLookThrough); pie("aCur", p.allocation.currency);
+  pie("aAsset", p.allocation.assetClass); pie("aRegion", p.allocation.region); pie("aSector", p.allocation.sectorLookThrough); pie("aCur", p.allocation.currencyLookThrough);
+  // Which funds were opened up, and what the chart would say by trading currency alone
+  const opened = p.allocation.currencyOpened || [];
+  $("#aCurNote").textContent = opened.length ? `${opened.join(", ")} counted by the currencies of the companies ${opened.length > 1 ? "they hold" : "it holds"} (approximate index weights). By the currency ${opened.length > 1 ? "they trade" : "it trades"} in: ${Object.entries(p.allocation.currency).map(([k, v]) => `${k} ${pct(v / p.total, 0, false)}`).join(", ")}.` : "";
   table($("#pfRebal"), [
     { k: "assetClass", label: "Asset class" }, { k: "target", label: "Target", num: 1, fmt: (v) => pct(v, 1, false) }, { k: "actual", label: "Actual", num: 1, fmt: (v) => pct(v, 1, false) },
     // Plain, not green and red: over target isn't a gain and under it isn't a loss (the suggestion carries the colour)
@@ -989,8 +1117,47 @@ function renderModeBadge() {
   $("#modeBadge").innerHTML = `<div class="status">
     ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance.")}
     ${aiStatus(m.aiInfo)}
-    <span class="st cur" role="img" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}" data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings.">${esc(currencySymbol(cur))}</span>
+    <span class="st cur" role="button" tabindex="0" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}. Opens the currency converter." data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings. Click to convert between currencies.">${esc(currencySymbol(cur))}</span>
   </div>`;
+  const icon = $("#modeBadge .st.cur");
+  icon.onclick = openConverter;
+  icon.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openConverter(); } };
+}
+// The converter: today's rate between two currencies, from the same rates the portfolio uses. It starts from your
+// base currency to the dollar, and remembers the last pair.
+const CONVERT_CODES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "CNY", "HKD", "INR", "QAR", "SAR", "AED", "KWD", "BHD", "OMR"];
+function openConverter() {
+  const base = state.meta?.settings?.base_currency || "EUR";
+  let pair; try { pair = JSON.parse(localStorage.getItem("fxPair")); } catch { pair = null; }
+  const [from0, to0] = Array.isArray(pair) && pair.every((c) => CONVERT_CODES.includes(c)) ? pair : [base, base === "USD" ? "EUR" : "USD"];
+  const opts = (sel) => CONVERT_CODES.map((c) => `<option ${c === sel ? "selected" : ""}>${c}</option>`).join("");
+  modal(`<h3>Currency converter</h3>
+    <div class="form-row conv">
+      <label>Amount<input type="number" id="cvAmount" value="1000" min="0" step="any"></label>
+      <label>From<select id="cvFrom">${opts(from0)}</select></label>
+      <button type="button" class="btn ghost sm" id="cvSwap" title="Swap">⇄</button>
+      <label>To<select id="cvTo">${opts(to0)}</select></label>
+      <button type="button" class="btn" id="cvGo">Convert</button>
+    </div>
+    <div id="cvOut" class="conv-out"></div>
+    <div class="modal-actions"><span class="muted sm">Today's rate from Yahoo, as the portfolio uses. Your bank or broker will add its own margin.</span><button class="btn ghost" data-close>Close</button></div>`);
+  let asked = 0;
+  const run = async () => {
+    const from = $("#cvFrom").value, to = $("#cvTo").value, amount = Number($("#cvAmount").value), out = $("#cvOut"), mine = ++asked;
+    try { localStorage.setItem("fxPair", JSON.stringify([from, to])); } catch { /* kept for this visit */ }
+    if (!(amount >= 0)) { out.innerHTML = `<span class="muted">Enter an amount.</span>`; return; }
+    try {
+      const r = await api(`/api/fx?src=${from}&dst=${to}`);
+      if (mine !== asked) return;  // a newer choice is already on its way
+      out.innerHTML = `<div class="conv-big">${money(amount, from)} = <b>${money(amount * r.rate, to)}</b></div>
+        <div class="muted sm">1 ${from} = ${num(r.rate, r.rate < 0.1 ? 6 : 4)} ${to} · 1 ${to} = ${num(1 / r.rate, 1 / r.rate < 0.1 ? 6 : 4)} ${from}${r.stale ? " · Yahoo isn't answering, so this is the last rate it gave" : ""}</div>`;
+    } catch (e) { if (mine === asked) out.innerHTML = `<span class="muted">${esc(e.message)}</span>`; }
+  };
+  // Converts on the button or Enter; swapping converts straight away
+  $("#cvGo").onclick = run;
+  $("#cvAmount").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } };
+  $("#cvSwap").onclick = () => { const f = $("#cvFrom").value; $("#cvFrom").value = $("#cvTo").value; $("#cvTo").value = f; run(); };
+  run(); $("#cvAmount").select();
 }
 $("#btnSaveSettings").onclick = async () => {
   if ($("#sRf").value.trim() === "") return toast("Enter a risk-free rate.");

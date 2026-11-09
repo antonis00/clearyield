@@ -7,7 +7,7 @@ import pandas as pd
 
 from . import data, db, ledger
 from . import indicators as ind
-from .universe import CORE_FUNDS, default_bucket
+from .universe import CORE_FUNDS, FUND_CURRENCIES, default_bucket
 
 
 def positions(extra=None):
@@ -278,6 +278,18 @@ def summary(settings, extra=None):
             through[r["sector"] or "Unknown"] += r["value"]
     allocation["sectorLookThrough"] = dict(sorted(((k, v) for k, v in through.items() if v > 1e-6), key=lambda kv: -kv[1]))
 
+    # Currencies, looking through funds: a broad fund counts in the currencies of what it holds (approximate index
+    # weights), anything else in the currency it trades in (in its main unit, so pence count as pounds)
+    by_cur, opened = defaultdict(float), []
+    for r in rows:
+        weights = FUND_CURRENCIES.get(r["ticker"])
+        if weights:
+            opened.append(r["ticker"])
+        for cur, w in (weights or {data.main_unit(r["currency"]) or "Unknown": 1.0}).items():
+            by_cur[cur] += r["value"] * w
+    allocation["currencyLookThrough"] = dict(sorted(((k, v) for k, v in by_cur.items() if v > 1e-6), key=lambda kv: -kv[1]))
+    allocation["currencyOpened"] = opened
+
     perf, risk = None, {}
     try:
         bench_close = data.history(bench_t, "1y")["Close"] if series else None
@@ -338,7 +350,7 @@ def summary(settings, extra=None):
         fund_part = any(r["assetClass"] == "ETFs" for r in rows)
         if fund_part and name != NO_SECTOR and total and v / total > 0.40 and len(rows) > 2 and not incomplete and allocation["sector"].get(name, 0) / total <= 0.40:
             warnings.append(f"{v / total:.0%} of value is in one sector ({name}), counting what funds hold.")
-    for k, label in (("sector", "sector"), ("region", "region"), ("currency", "currency")):
+    for k, label in (("sector", "sector"), ("region", "region"), ("currencyLookThrough", "currency")):
         for name, v in allocation[k].items():
             if k == "sector" and name == "ETFs":  # a label for funds, not one sector: six broad funds aren't concentrated
                 continue

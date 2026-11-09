@@ -403,6 +403,27 @@ def compare(tickers: str, period: str = "1y"):
 
 
 # ---------------------------------------------------------------- screener
+FX_CODES = ("EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "CNY", "HKD", "INR", "QAR", "SAR", "AED", "KWD", "BHD", "OMR")
+
+
+@app.get("/api/fx")
+def fx(src: str = "EUR", dst: str = "USD"):
+    """Today's rate between two currencies, for the converter: units of `dst` per one `src`."""
+    src, dst = src.upper(), dst.upper()
+    if src not in FX_CODES or dst not in FX_CODES:
+        raise HTTPException(400, f"Choose currencies from: {', '.join(FX_CODES)}.")
+    try:
+        rate = data.fx_rate(src, dst)
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
+    return ok({"from": src, "to": dst, "rate": rate, "stale": data.is_stale_fx(src) or data.is_stale_fx(dst), "codes": FX_CODES})
+
+
+@app.get("/api/opportunities")
+def opportunities(markets: str = "US,Europe,Gulf"):
+    return ok(insights.opportunities(db.get_settings(), [m.strip() for m in markets.split(",") if m.strip()]))
+
+
 @app.post("/api/screener")
 def screener(body: dict = Body(...)):
     settings = db.get_settings()

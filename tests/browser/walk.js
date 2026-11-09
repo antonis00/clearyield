@@ -187,7 +187,8 @@ const SLOW = 150000;
   const sum = pf.positions.reduce((a, r) => a + r.value, 0);
   expect("portfolio: 5 positions, all priced", pf.positions.length === 5 && !pf.incomplete, `total ${Math.round(pf.total)} ${pf.base}, P&L ${Math.round(pf.pnl)}`);
   expect("portfolio: positions add up to the total", Math.abs(sum - pf.total) < 1e-6);
-  for (const k of ["assetClass", "region", "sector", "currency", "bucket"]) expect(`portfolio: ${k} allocation adds up`, Math.abs(Object.values(pf.allocation[k]).reduce((a, b) => a + b, 0) - pf.total) < 1e-6);
+  for (const k of ["assetClass", "region", "sector", "currency", "currencyLookThrough", "bucket"]) expect(`portfolio: ${k} allocation adds up`, Math.abs(Object.values(pf.allocation[k]).reduce((a, b) => a + b, 0) - pf.total) < 1e-6);
+  expect("portfolio: SPY's currencies opened up, with the trading-currency view beside it", pf.allocation.currencyOpened.includes("SPY") && /SPY counted by the currencies/.test(await txt("#aCurNote")), await txt("#aCurNote"));
   expect("portfolio: risk figures present", pf.risk.volatility != null && pf.risk.sharpe != null && pf.risk.beta != null && pf.performance.dates.length > 200, `vol ${pf.risk.volatility?.toFixed(3)} beta ${pf.risk.beta?.toFixed(2)}, ${pf.performance.dates.length} days`);
   expect("portfolio: undated lot warned about", pf.base === "USD" ? true : pf.warnings.some((w) => w.includes("SPY") && w.includes("exchange rate")), pf.warnings.find((w) => w.includes("exchange rate")) ?? "(USD base)");
   expect("portfolio: rebalancing shown", (await p.locator("#pfRebal tbody tr").count()) >= 3);
@@ -255,7 +256,30 @@ const SLOW = 150000;
   await p.locator("[data-jdel]").first().click(); await p.waitForTimeout(900);
   expect("journal: delete an entry", !/walk test/.test(await txt("#journalList")));
 
+  // ---- Opportunities: four charts from one scoring, each bar opening its stock; the dashboard card leads here
+  await nav("opportunities");
+  await p.waitForFunction(() => /stocks scored/.test(document.querySelector("#oppStatus").innerText), null, { timeout: SLOW });
+  await p.waitForTimeout(500);
+  const drawn = [];
+  for (const id of ["#oppMap", "#oppTop", "#oppFit", "#oppSale"]) drawn.push((await p.evaluate((x) => document.querySelector(x).classList.contains("hidden"), id)) || (await canvasDrawn(id)));
+  const opp = await p.evaluate(() => ({ status: document.querySelector("#oppStatus").innerText, fit: document.querySelector("#oppFitHelp").innerText, top: state.charts.oppTop?.data.labels }));
+  expect("opportunities: four charts drawn from today's scores", drawn.every(Boolean) && /stocks scored/.test(opp.status) && opp.top?.length === 10 && /what you hold now/.test(opp.fit), `${opp.status} | top: ${opp.top?.slice(0, 3).join(", ")}`);
+  const bar = await p.evaluate(() => { const c = state.charts.oppTop, m = c.getDatasetMeta(0).data[0], r = c.canvas.getBoundingClientRect(); return { x: r.left + m.x - 10, y: r.top + m.y, t: c.data.labels[0] }; });
+  await p.mouse.click(bar.x, bar.y);
+  await p.waitForFunction((t) => document.querySelector("#rSym")?.textContent === t, bar.t, { timeout: SLOW });
+  expect("opportunities: clicking a bar opens that stock", true, bar.t);
+
   // ---- Dashboard again, now with data
+  await nav("dashboard"); await p.waitForTimeout(1000);
+  await p.waitForFunction(() => document.querySelector("#dashOppList .opp-row, #dashOppList div.muted:not(:has(.spinner)):last-child"), null, { timeout: SLOW });
+  expect("dashboard: opportunity map card drawn", await canvasDrawn("#dashOppChart"), await txt("#dashOppList"));
+  // Hovering a dot names the company; the corner's stocks are named on the map itself
+  const dot = await p.evaluate(() => { const c = state.charts.dashOppChart, m = c.getDatasetMeta(0).data[0], r = c.canvas.getBoundingClientRect(); return { x: r.left + m.x, y: r.top + m.y, t: c.data.datasets[0].data[0].row.ticker }; });
+  await p.mouse.move(dot.x, dot.y); await p.waitForTimeout(300);
+  const tip = await p.evaluate(() => { const t = state.charts.dashOppChart.tooltip; return { shown: t.opacity > 0, lines: (t.body || []).flatMap((b) => b.lines) }; });
+  expect("dashboard: hovering a dot on the map names the company", tip.shown && tip.lines.some((l) => l.includes(dot.t)), tip.lines.join(" | "));
+  await p.click("#dashOppChart"); await p.waitForTimeout(400);
+  expect("dashboard: the opportunity card opens Opportunities", (await p.evaluate(() => location.hash)) === "#opportunities");
   await nav("dashboard"); await p.waitForTimeout(1000);
   await p.waitForFunction(() => /Value/i.test(document.querySelector("#dashPortfolio").innerText), null, { timeout: SLOW });
   await p.waitForTimeout(4000);
@@ -362,6 +386,15 @@ const SLOW = 150000;
     && (await p.evaluate(() => document.documentElement.dataset.theme)) === "navy", navyGrid);
   await nav("settings");
   expect("favicon", (await p.request.get(new URL("favicon.ico", BASE).href)).ok());
+  // The base currency's icon opens the converter: it converts, and swapping turns the rate round
+  await p.click("#modeBadge .st.cur");
+  await p.waitForFunction(() => /=/.test(document.querySelector("#cvOut")?.innerText || ""), null, { timeout: SLOW });
+  await p.fill("#cvAmount", "250"); await p.click("#cvGo"); await p.waitForTimeout(600);
+  const conv1 = await p.evaluate(() => ({ text: document.querySelector("#cvOut").innerText, from: document.querySelector("#cvFrom").value, to: document.querySelector("#cvTo").value }));
+  await p.click("#cvSwap"); await p.waitForTimeout(600);
+  const conv2 = await p.evaluate(() => ({ from: document.querySelector("#cvFrom").value, to: document.querySelector("#cvTo").value, text: document.querySelector("#cvOut").innerText }));
+  expect("converter: opens from the currency icon, converts and swaps", /250/.test(conv1.text) && conv1.from !== conv1.to && conv2.from === conv1.to && conv2.to === conv1.from && /250/.test(conv2.text), conv1.text.split("\n")[0]);
+  await p.click("#modal [data-close]");
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#btnBackup")]);
   expect("settings: backup downloads", /stockpilot-backup/.test(dl.suggestedFilename()), dl.suggestedFilename());
   await p.click("#btnClearCache"); await p.waitForTimeout(600);
