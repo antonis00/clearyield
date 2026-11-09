@@ -1873,6 +1873,59 @@ def test_digest_covers_portfolio_markets_and_headlines():
     assert not any("concentration" in t or "diversification is limited" in t for t in texts), texts
 
 
+def test_currency_converter_and_look_through():
+    from backend import data
+    from backend.universe import FUND_CURRENCIES
+    assert all(abs(sum(w.values()) - 1) < 1e-9 for w in FUND_CURRENCIES.values()), "each fund's currencies add up to all of it"
+    _reset()
+    with TestClient(app) as c:
+        r = c.get("/api/fx?src=eur&dst=usd").json()
+        assert (r["from"], r["to"]) == ("EUR", "USD") and abs(r["rate"] - data.fx_rate("EUR", "USD")) < 1e-12
+        back = c.get("/api/fx?src=USD&dst=EUR").json()["rate"]
+        assert abs(r["rate"] * back - 1) < 1e-9, "the two directions agree"
+        assert c.get("/api/fx?src=EUR&dst=XYZ").status_code == 400
+        # A world fund counts in the currencies of what it holds; a stock in its own (pence as pounds)
+        c.post("/api/settings", json={"base_currency": "EUR"})
+        for t, shares in (("VWCE.DE", 100), ("AZN.L", 10)):
+            assert c.post("/api/transactions", json={"ticker": t, "kind": "buy", "date": "2025-01-06", "shares": shares, "price": 100}).status_code == 200
+        p = c.get("/api/portfolio").json()
+    a, vwce = p["allocation"], next(x for x in p["positions"] if x["ticker"] == "VWCE.DE")
+    look = a["currencyLookThrough"]
+    assert a["currencyOpened"] == ["VWCE.DE"] and set(a["currency"]) == {"EUR", "GBp"}, a["currency"]
+    assert abs(sum(look.values()) - p["total"]) < 1e-6 and "GBp" not in look
+    assert abs(look["USD"] - vwce["value"] * FUND_CURRENCIES["VWCE.DE"]["USD"]) < 1e-6, look
+    azn = next(x for x in p["positions"] if x["ticker"] == "AZN.L")
+    assert abs(look["GBP"] - (azn["value"] + vwce["value"] * FUND_CURRENCIES["VWCE.DE"]["GBP"])) < 1e-6
+    _reset()
+
+
+def test_opportunities_follow_their_rules():
+    from backend import db, insights
+    _reset()
+    with TestClient(app) as c:
+        empty = c.get("/api/opportunities?markets=Europe").json()
+        assert empty["markets"] == ["Europe"] and empty["fit"] == [] and empty["holdings"] == []
+        assert c.post("/api/transactions", json={"ticker": "SAP.DE", "kind": "buy", "date": "2025-01-06", "shares": 10, "price": 100}).status_code == 200
+        o = c.get("/api/opportunities?markets=US,Europe,Gulf,Crypto,Nonsense").json()
+    R = o["rules"]
+    assert o["markets"] == ["US", "Europe", "Gulf"], "stocks only: funds and crypto can't be compared on value"
+    assert o["map"] and all(r["f_value"] is not None for r in o["map"]) and len(o["map"]) == o["scanned"] - len(o["failed"])
+    # Top ranked: the highest overall scores, best first
+    scores = [r["composite"] for r in o["top"]]
+    assert len(o["top"]) == R["top"] and scores == sorted(scores, reverse=True) and scores[0] == max(r["composite"] for r in o["map"])
+    # Quality on sale: every one meets both limits, biggest fall first
+    assert all(r["f_quality"] >= R["saleQuality"] and r["fromHigh"] <= R["saleDrop"] for r in o["onSale"])
+    assert [r["fromHigh"] for r in o["onSale"]] == sorted(r["fromHigh"] for r in o["onSale"])
+    # Fits your portfolio: never what you hold; fit is the average of the score and how much it diversifies
+    assert o["holdings"] == ["SAP.DE"] and o["fit"] and all(r["ticker"] != "SAP.DE" for r in o["fit"])
+    assert all(abs(r["fit"] - (r["composite"] + (1 - max(r["corr"], 0)) * 100) / 2) < 1e-9 for r in o["fit"]) and o["fitWeeks"] > 26
+    # Every reason names its figure, and only factors at the limit are named
+    named = [r for r in o["map"] if r["reasons"]]
+    assert named and all(any(ch.isdigit() for ch in reason) for r in named for reason in r["reasons"] if reason not in ("Cheap", "High quality", "Growing", "Strong trend", "Calm"))
+    assert all(len(r["reasons"]) <= sum((r[f"f_{k}"] or 0) >= R["reasonAt"] for k in ("value", "quality", "growth", "momentum", "risk")) for r in o["map"])
+    _reset()
+
+
 def test_a_sentence_is_not_a_symbol():
     from backend import data
     asked = []

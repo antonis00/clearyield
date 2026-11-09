@@ -28,13 +28,13 @@ a { color: var(--accent2); cursor: pointer; text-decoration: none; }
 
 /* sidebar */
 .side { width: 210px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
-.brand { display: block; font: 600 18px var(--mono); padding: 20px 18px; letter-spacing: .5px; color: var(--text); }
+.brand { display: block; font: 600 18px var(--mono); padding: 20px 12px; letter-spacing: .5px; color: var(--text); }
 .brand:hover .logo { filter: brightness(1.2); }
 .logo { color: var(--accent); }
-nav a { display: block; padding: 10px 18px; color: var(--muted); border-left: 3px solid transparent; font-weight: 500; }
+nav a { display: block; padding: 10px 12px; color: var(--muted); border-left: 3px solid transparent; font-weight: 500; }
 nav a:hover { color: var(--text); background: var(--panel); }
 nav a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel); }
-.side-foot { margin-top: auto; padding: 14px 18px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+.side-foot { margin-top: auto; padding: 14px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font: 500 11px var(--mono); border: 1px solid var(--line); margin: 2px 4px 2px 0; }
 .pill.on { border-color: var(--up); color: var(--up); } .pill.warn { border-color: var(--accent); color: var(--accent); }
 
@@ -96,7 +96,13 @@ label.block { margin: 8px 0; }
 .st.on { color: var(--up); }
 .st.off { opacity: .55; }
 .st.txt { font: 600 11px var(--mono); letter-spacing: .3px; }
-.st.cur { font: 500 13px var(--mono); color: var(--up); } /* a base currency is always in use */
+.st.cur { font: 500 13px var(--mono); color: var(--up); cursor: pointer; } /* a base currency is always in use; it opens the converter */
+/* The currency converter */
+.conv { align-items: flex-end; }
+.conv label input, .conv label select { min-width: 0; width: 120px; }
+#cvSwap { margin-bottom: 2px; }
+.conv-out { margin: 14px 0 4px; min-height: 52px; }
+.conv-big { font: 600 20px var(--mono); margin-bottom: 4px; }
 .brief-check { font-size: 12px; margin-top: 12px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); }
 .brief-check.ok { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); }
 .brief-check.warn { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
@@ -252,3 +258,14 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .toast { position: fixed; bottom: 22px; right: 22px; background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 12px 16px; border-radius: 8px; z-index: 60; max-width: 420px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Opportunities: the page's charts, and the dashboard card */
+.opp-chart { position: relative; height: 340px; }
+.opp-empty { padding: 30px 0; text-align: center; }
+#dashOpp { cursor: pointer; }
+.opp-dash { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; align-items: start; }
+.opp-dash-chart { position: relative; height: 190px; }
+.opp-dash-list { display: flex; flex-direction: column; gap: 6px; }
+.opp-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
+.opp-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) { .opp-dash { grid-template-columns: 1fr; } }

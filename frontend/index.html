@@ -28,10 +28,11 @@
   <a class="brand" href="#dashboard" data-goto="dashboard" title="Dashboard"><span class="logo">◆</span> StockPilot</a>
   <nav id="nav">
     <a data-view="dashboard" class="active">Dashboard</a>
+    <a data-view="portfolio">Portfolio</a>
+    <a data-view="opportunities">Opportunities</a>
     <a data-view="research">Research</a>
     <a data-view="compare">Compare</a>
     <a data-view="screener">Screener</a>
-    <a data-view="portfolio">Portfolio</a>
     <a data-view="backtest">Backtest</a>
     <a data-view="journal">Journal &amp; Alerts</a>
     <a data-view="settings">Settings</a>
@@ -62,6 +63,10 @@
         <div class="card-h"><h3>Today's digest <span id="digestInfo"></span></h3><div class="form-row inline"><div class="seg" id="digestTabs"><button data-tab="highlights">Highlights</button><button data-tab="news">News</button></div><button class="btn ghost sm" id="refreshDigest">Refresh</button></div></div>
         <ul id="digestList" class="digest"></ul>
       </div>
+    </div>
+    <div class="card" id="dashOpp" data-goto="opportunities">
+      <div class="card-h"><h3>Opportunity map</h3><a class="link" data-goto="opportunities">All opportunities →</a></div>
+      <div class="opp-dash"><div class="opp-dash-chart"><canvas id="dashOppChart"></canvas></div><div id="dashOppList" class="opp-dash-list"></div></div>
     </div>
     <div class="card">
       <div class="card-h"><h3>Watchlist</h3><span class="muted sm">Click a row to research</span></div>
@@ -203,6 +208,28 @@
     </div>
   </section>
 
+  <!-- OPPORTUNITIES -->
+  <section id="view-opportunities" class="view hidden">
+    <div class="card">
+      <div class="card-h"><h3>Opportunities</h3><button class="btn ghost sm" id="oppRefresh">Refresh</button></div>
+      <p class="muted sm" style="margin:0 0 8px">Stocks in the app's built-in list, scored on today's data with the same transparent rules as everywhere else. Hover a point or bar for its reasons, click it to research the stock. Decision support, not financial advice: the scores rate current figures against fixed thresholds and don't predict prices.</p>
+      <div class="markets" id="oppMarkets"></div>
+      <div id="oppStatus" class="muted sm"></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Opportunity map</h3><span id="oppMapNote" class="muted sm"></span></div>
+        <div class="opp-chart"><canvas id="oppMap"></canvas></div><p class="muted sm" id="oppMapHelp"></p></div>
+      <div class="card"><div class="card-h"><h3>Top ranked</h3><span class="muted sm">Highest overall score</span></div>
+        <div class="opp-chart"><canvas id="oppTop"></canvas></div><p class="muted sm" id="oppTopHelp"></p></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Fits your portfolio</h3><span id="oppFitNote" class="muted sm"></span></div>
+        <div class="opp-chart" id="oppFitWrap"><canvas id="oppFit"></canvas></div><p class="muted sm" id="oppFitHelp"></p></div>
+      <div class="card"><div class="card-h"><h3>Quality on sale</h3><span class="muted sm">Good companies below their 52-week high</span></div>
+        <div class="opp-chart" id="oppSaleWrap"><canvas id="oppSale"></canvas></div><p class="muted sm" id="oppSaleHelp"></p></div>
+    </div>
+  </section>
+
   <!-- SCREENER -->
   <section id="view-screener" class="view hidden">
     <div class="card">
@@ -265,7 +292,7 @@
       <div class="card"><h4>Asset class</h4><canvas id="aAsset"></canvas></div>
       <div class="card"><h4>Region</h4><canvas id="aRegion"></canvas></div>
       <div class="card"><h4>Sector, opening up funds</h4><canvas id="aSector"></canvas></div>
-      <div class="card"><h4>Currency</h4><canvas id="aCur"></canvas></div>
+      <div class="card"><h4>Currency, opening up funds</h4><canvas id="aCur"></canvas><div class="muted sm" id="aCurNote"></div></div>
     </div>
     <div class="card">
       <div class="card-h"><h3>Transactions</h3></div>
