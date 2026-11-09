@@ -203,6 +203,17 @@ function spark(vals, up) {
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - ((v - mn) / (mx - mn || 1)) * (h - 2) - 1}`).join(" ");
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="${up ? C("--up") : C("--down")}" stroke-width="1.5" points="${pts}"/></svg>`;
 }
+// Below the snapshot's figures: the core share against your target, which opens the Portfolio page
+function snapshotExtras(p) {
+  const out = [], cs = p.coreSatellite;
+  if (cs && isNum(cs.core)) {
+    const core = Math.max(0, Math.min(1, cs.core)), target = Math.max(0, Math.min(1, cs.target));
+    out.push(`<div class="snap-block" data-goto="portfolio" title="Core: broad index funds. Satellite: everything else. The mark is your target, set in Settings.">
+      <div class="snap-h"><span>Core ${pct(core, 0, false)} · Satellite ${pct(1 - core, 0, false)}</span><span class="muted">target ${pct(target, 0, false)} core</span></div>
+      <div class="cs-bar"><i class="core" style="width:${core * 100}%"></i><i class="sat" style="width:${(1 - core) * 100}%"></i><b style="left:${target * 100}%"></b></div></div>`);
+  }
+  return out.join("");
+}
 async function loadDashboard() {
   const strip = $("#macroStrip");
   if (!strip.children.length) loading(strip, "Loading markets…");
@@ -214,13 +225,21 @@ async function loadDashboard() {
   api("/api/portfolio").then((p) => {
     $("#dashIncomplete").classList.toggle("hidden", !p.incomplete);
     if (p.incomplete) $("#dashIncomplete").innerHTML = missingNote(p);
+    // Everything gained: what's still held, what was sold, and the dividends. Only the parts that aren't zero are
+    // listed, so a portfolio that has never sold or been paid reads "open" alone instead of two "€0"s.
+    const parts = [[p.pnl, "open", "from open positions"], [p.realised, "sold", "from sales"], [p.dividends, "dividends", "from dividends"]].filter(([v]) => Math.abs(v) >= 0.5);
+    // One part alone would repeat the figure above it, so it just says where the gain is
+    const gainParts = parts.length === 1 ? `<span class="muted">${parts[0][2]}</span>`
+      : parts.map(([v, w]) => `<span class="${cls(v)}">${money(v, p.base, 0)}</span> ${w}`).join(" · ");
+    // No income isn't missing data: say why, since a fund that reinvests (accumulates) pays nothing out
+    const noIncome = p.annualIncome ? "" : p.positions.some((r) => r.assetClass === "ETFs") ? "Reinvested by your funds" : "None paid in the past year";
     $("#dashPortfolio").innerHTML = p.positions.length ? [
       ["Value", money(p.total, p.base, 0), ""], [dayChange(p)[0], money(p.dayPnl, p.base, 0), cls(p.dayPnl), esc(dayChange(p)[1])],
-      // Everything gained: what's still held, what was sold, and the dividends, with the parts underneath
-      ["Total gain", money(p.totalGain, p.base, 0), cls(p.totalGain), `<span class="${cls(p.pnl)}">${money(p.pnl, p.base, 0)}</span> open · <span class="${cls(p.realised)}">${money(p.realised, p.base, 0)}</span> sold · ${money(p.dividends, p.base, 0)} dividends`],
-      ["Est. income / yr", money(p.annualIncome, p.base, 0), ""],
+      ["Total gain", money(p.totalGain, p.base, 0), cls(p.totalGain), gainParts],
+      ["Est. income / yr", money(p.annualIncome, p.base, 0), "", noIncome && `<span class="muted">${noIncome}</span>`],
     ].map(([l, v, c, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v ${c}">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("")
       : `<div class="muted">No holdings yet. <a data-goto="portfolio">Add your first position →</a></div>`;
+    $("#dashExtras").innerHTML = p.positions.length ? snapshotExtras(p) : "";
   }).catch(() => {});
 
   loadDigest();
@@ -238,14 +257,44 @@ async function loadDashboard() {
     .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
-async function loadDigest() {
-  const ul = $("#digestList"); loading(ul, "Scanning your holdings and watchlist…");
-  try {
-    const d = await api("/api/digest");
-    ul.innerHTML = d.items.length ? d.items.map((i) => `<li class="t${i.tone}" data-t="${esc(i.ticker || "")}"${i.ticker ? ` data-stock="${esc(i.ticker)}"` : ""}>${esc(i.text)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("") : `<li>Quiet day — nothing notable on your names.</li>`;
-    $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => { e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" }); b.closest("li").remove(); checkFiredAlerts(); });
-  } catch (e) { ul.innerHTML = `<li>${esc(e.message)}</li>`; }
+const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts and journal reminders; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock you hold or watch.";
+$("#digestInfo").innerHTML = infoIcon(DIGEST_RULES);
+// Two tabs: Mine (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
+// stocks). The choice is remembered; switching only redraws, it doesn't ask the server again.
+const digestTab = () => { try { return localStorage.getItem("digestTab") === "news" ? "news" : "mine"; } catch { return "mine"; } };
+function renderDigest() {
+  const ul = $("#digestList"), d = state.digest, tab = digestTab();
+  if (!d) return;
+  const news = d.items.filter((i) => i.kind === "news"), mine = d.items.filter((i) => i.kind !== "news");
+  $$("#digestTabs button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.tab === tab);
+    b.textContent = `${b.dataset.tab === "news" ? "News" : "Mine"} (${(b.dataset.tab === "news" ? news : mine).length})`;
+  });
+  const shown = tab === "news" ? news : mine;
+  // A headline links to its source; the link keeps its own job inside a row that opens the stock
+  const text = (i) => i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.text)}</a>` : esc(i.text);
+  ul.innerHTML = shown.length ? shown.map((i) => `<li class="t${i.tone}${i.kind ? ` k-${esc(i.kind)}` : ""}" data-t="${esc(i.ticker || "")}"${i.ticker ? ` data-stock="${esc(i.ticker)}"` : i.kind === "portfolio" ? ` data-goto="portfolio"` : ""}>${text(i)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("")
+    : `<li>${tab === "news" ? "No headlines from the past 3 days name a stock you hold or watch." : "Quiet day — nothing notable on your names."}</li>`;
+  $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" });
+    d.items = d.items.filter((i) => String(i.alertId) !== b.dataset.dismiss); renderDigest(); checkFiredAlerts();
+  });
 }
+// The first load shows a spinner. A refresh keeps the current list in place, faded, and swaps in the new one in a
+// single step, so nothing jumps or flickers; if it fails, the old list stays and a message says so.
+async function loadDigest() {
+  const ul = $("#digestList"), btn = $("#refreshDigest"), had = !!state.digest;
+  if (had) { ul.classList.add("refreshing"); btn.disabled = true; btn.textContent = "Refreshing…"; }
+  else loading(ul, "Scanning your portfolio, watchlist and markets…");
+  try { state.digest = await api("/api/digest"); renderDigest(); }
+  catch (e) { if (had) toast(`The digest couldn't be refreshed: ${e.message}`); else ul.innerHTML = `<li>${esc(e.message)}</li>`; }
+  finally { ul.classList.remove("refreshing"); btn.disabled = false; btn.textContent = "Refresh"; }
+}
+$$("#digestTabs button").forEach((b) => b.onclick = () => {
+  try { localStorage.setItem("digestTab", b.dataset.tab); } catch { /* not remembered, but still shown */ }
+  if (state.digest) renderDigest(); else $$("#digestTabs button").forEach((x) => x.classList.toggle("on", x === b));
+});
+$$("#digestTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === digestTab()));
 $("#refreshDigest").onclick = loadDigest;
 
 /* ---------------------------------------------------------------- research */
