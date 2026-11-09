@@ -55,12 +55,13 @@ def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
 
 _trust_windows_certificates()
 
+import httpx  # noqa: E402
 import numpy as np  # noqa: E402
 from fastapi import Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import ai, backtest, data, db, insights, ledger, portfolio  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, portfolio  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import MACRO, UNIVERSE, search as uni_search  # noqa: E402
 
@@ -379,6 +380,18 @@ def stock_brief(ticker: str):
     ctx = {"ticker": t, "info": inf, "scores": sc, "stats": ind.stats(full["Close"], settings.get("risk_free_rate", 0.04)),
            "news": data.news(t), "financials": data.financials(t), "price": float(full["Close"].iloc[-1])}
     return ok(ai.brief(ctx))
+
+
+@app.post("/api/ask")  # a POST because it spends the AI allowance
+def ask(body: dict = Body(...)):
+    try:
+        return ok(agent.ask(str(body.get("question") or "")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except httpx.TimeoutException:
+        raise HTTPException(504, "The AI model didn't answer in time. Try again, perhaps with a narrower question.")
+    except (RuntimeError, httpx.HTTPError) as e:
+        raise HTTPException(503, str(e)[:300])
 
 
 @app.get("/api/dcf/{ticker}")

@@ -236,7 +236,11 @@ def brief_data(ctx):
         "Profitability and balance sheet": {"Return on equity": _f_pct(i.get("returnOnEquity")), "Operating margin": _f_pct(i.get("operatingMargins")),
                                             "Net margin": _f_pct(i.get("profitMargins")), "Debt to equity": _f_x(i.get("debtToEquity"), 2),
                                             "Current ratio": _f_x(i.get("currentRatio"), 2), "Free cash flow, last 12 months": _f_money(i.get("freeCashflow"), fin_cur)},
-        "Growth (latest year on year)": {"Revenue growth": _f_pct(i.get("revenueGrowth")), "Earnings growth": _f_pct(i.get("earningsGrowth"))},
+        # Several years first, as the growth score uses; the latest quarter separately, so a one-quarter swing isn't
+        # read as the trend
+        "Growth": {"Revenue growth a year, over 3 years": _f_pct(i.get("revenueGrowth3y")), "Net income growth a year, over 3 years": _f_pct(i.get("earningsGrowth3y")),
+                   "Revenue growth, latest quarter vs a year before": _f_pct(i.get("revenueGrowth")),
+                   "Earnings growth, latest quarter vs a year before": _f_pct(i.get("earningsGrowth"))},
         "Dividend": {"Dividend yield": _f_pct(i.get("dividendYield"), 2), "Payout ratio": _f_pct(i.get("payoutRatio"))},
         "Price performance and risk": {"Return, 1 month": _f_pct(st.get("ret1m")), "Return, 3 months": _f_pct(st.get("ret3m")),
                                        "Return, year to date": _f_pct(st.get("ytd")), "Return, 1 year": _f_pct(st.get("ret1y")),
@@ -281,8 +285,8 @@ BRIEF_RULES = (
 
 
 # ---------------------------------------------------------------- checking the brief's figures against the data
-_NUM = re.compile(r"(?<![\w.])([-+−]?)(?:[$€£]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s?(%|x\b|×|times\b|[TBM]\b|trillion\b|billion\b|million\b)?", re.I)
-_SCALE = {"t": 1e12, "trillion": 1e12, "b": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6}
+_NUM = re.compile(r"(?<![\w.])([-+−]?)(?:[$€£]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s?(%|x\b|×|times\b|bn\b|[TBMk]\b|trillion\b|billion\b|million\b|thousand\b)?", re.I)
+_SCALE = {"t": 1e12, "trillion": 1e12, "b": 1e9, "bn": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6, "k": 1e3, "thousand": 1e3}
 # Numbers that are names or periods, not figures: "S&P 500", "50-day", "12-1 month", dates, list markers
 _NOT_FIGURES = re.compile(r"\b(?:S&P|Nasdaq|Russell|FTSE|Stoxx|Euro Stoxx|DAX|Dow|Nikkei|MSCI ACWI|ACWI)[ -]?\d+\b|\b\d{4}-\d{2}-\d{2}\b|"
                           r"\b\d+(?:-\d+)?[ -](?:day|days|week|weeks|month|months|year|years|quarter|quarters)\b|\bQ[1-4]\b|^\s*\d+\.\s", re.I | re.M)
@@ -315,12 +319,13 @@ def check_figures(text, facts):
         if not unit and (1900 <= value <= 2100 and dec == 0 or (abs(value) <= 12 and dec == 0)):
             continue  # a year, or a count like "3 risks"
         checked += 1
-        scale = 1e12 if abs(value) >= 1e12 else 1e9 if abs(value) >= 1e9 else 1e6 if abs(value) >= 1e6 else 1
+        scale = 1e12 if abs(value) >= 1e12 else 1e9 if abs(value) >= 1e9 else 1e6 if abs(value) >= 1e6 else 1e3 if abs(value) >= 1e3 and unit == "money" else 1
 
         def same(k):
             # Rounded to the coarser of the two precisions, and without the sign, since "fell 13.8%" is how -13.8% reads
             kv, ku, kdec, _ = k
-            if unit and ku != unit:
+            # An amount written with a scale ("8.5k") may match one written in full ("8,454.00 EUR")
+            if unit and ku != unit and not (unit == "money" and ku == ""):
                 return False
             tol = 0.5 * 10 ** -min(dec, kdec) * (scale if unit == "money" else 1) + 1e-9
             return abs(abs(value) - abs(kv)) <= tol

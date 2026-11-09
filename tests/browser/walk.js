@@ -269,6 +269,26 @@ const SLOW = 150000;
   await p.waitForFunction((t) => document.querySelector("#rSym")?.textContent === t, bar.t, { timeout: SLOW });
   expect("opportunities: clicking a bar opens that stock", true, bar.t);
 
+  // ---- Ask: the AI icon in the sidebar opens it; with AI off (as in every test run), the page says how to set it up
+  await p.click("#modeBadge .st.ai"); await p.waitForTimeout(300);
+  expect("ask: the sidebar's AI icon opens Ask AI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
+  // The Yahoo mark opens Yahoo Finance in a new tab: the front page here, the stock's page on Research (not loaded in the test)
+  // Records what a click asks the browser to open, without opening Yahoo
+  const yahooTab = async () => {
+    await p.evaluate(() => { window.__open = window.open; window.__opened = null; window.open = (u, t, f) => { window.__opened = [u, t, f]; return null; }; });
+    await p.click("#modeBadge .st.yahoo");
+    return p.evaluate(() => { window.open = window.__open; return (window.__opened || []).join(" "); });
+  };
+  const front = await yahooTab();
+  await research("AAPL");
+  const quote = await yahooTab();
+  expect("sidebar: the Yahoo mark opens Yahoo Finance in a new tab, the stock's page on Research",
+    front === "https://finance.yahoo.com/ _blank noopener,noreferrer" && quote === "https://finance.yahoo.com/quote/AAPL/ _blank noopener,noreferrer", `${front} | ${quote}`);
+  await nav("ask"); await p.waitForTimeout(300);
+  const askInfo = await p.evaluate(() => ({ examples: document.querySelectorAll("#askExamples .ask-ex").length, status: document.querySelector("#askStatus").innerText }));
+  await p.fill("#askInput", "How is my portfolio doing?"); await p.press("#askInput", "Enter"); await p.waitForTimeout(300);
+  expect("ask: page shows examples and explains when AI is off", askInfo.examples >= 4 && /AI_PROVIDER|isn't set up/.test(await txt("#askStatus")) && !(await p.locator("#askAnswers .ask-answer").count()), await txt("#askStatus"));
+
   // ---- Dashboard again, now with data
   await nav("dashboard"); await p.waitForTimeout(1000);
   await p.waitForFunction(() => document.querySelector("#dashOppList .opp-row, #dashOppList div.muted:not(:has(.spinner)):last-child"), null, { timeout: SLOW });
