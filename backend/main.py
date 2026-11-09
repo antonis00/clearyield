@@ -249,7 +249,7 @@ def _tile_list(settings):
 @app.get("/api/meta")
 def meta():
     settings = db.get_settings()
-    return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": ai.describe(), "tiles": _tile_list(settings),
+    return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
                "settings": settings, "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 

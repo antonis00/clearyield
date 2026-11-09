@@ -589,16 +589,19 @@ function briefFooter(r) {
   const own = c.suggested?.length ? ` The triggers use ${c.suggested.length === 1 ? "a level" : `${c.suggested.length} levels`} of the model's own, not from the data: ${c.suggested.map(esc).join(", ")}.` : "";
   const facts = c.checked - (c.suggested?.length || 0), worked = c.derived?.length || 0;
   const how = worked ? ` ${worked === 1 ? "One is" : `${worked} are`} worked out from the others (underlined; hover to see how).` : "";
-  const fixed = r.revised?.fixed ? ` The model corrected or removed ${r.revised.fixed === 1 ? "a figure" : `${r.revised.fixed} figures`} that weren't in the data.` : "";
-  if (!c.unmatched.length) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${how}${fixed}${own} ${by}</p>`;
-  return `<p class="brief-check warn">${c.unmatched.length} of ${facts} figures aren't in the data and can't be worked out from it (marked): <b>${c.unmatched.map(esc).join(", ")}</b>. Check them before relying on them.${how}${fixed}${own} ${by}</p>`;
+  const fixed = r.revised?.fixed ? ` The model corrected ${r.revised.fixed === 1 ? "one figure or quote" : `${r.revised.fixed} figures or quotes`} that weren't in the data.` : "";
+  const quotes = c.quotes?.length ? ` ${c.quotes.length === 1 ? "A quotation isn't" : `${c.quotes.length} quotations aren't`} in the sources word for word (marked).` : "";
+  if (!c.unmatched.length && !quotes) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${how}${fixed}${own} ${by}</p>`;
+  if (!c.unmatched.length) return `<p class="brief-check warn">All ${facts} figures match the data.${quotes}${how}${fixed}${own} ${by}</p>`;
+  return `<p class="brief-check warn">${c.unmatched.length} of ${facts} figures aren't in the data and can't be worked out from it (marked): <b>${c.unmatched.map(esc).join(", ")}</b>. Check them before relying on them.${quotes}${how}${fixed}${own} ${by}</p>`;
 }
 // Marks figures inside rendered text: unsupported ones highlighted, worked-out ones underlined with how. A figure is
 // matched however the model wrote its separators (a narrow space or a comma between thousands, a typographic minus).
 function markFigures(html, c) {
-  if (!c || (!c.unmatched?.length && !c.derived?.length)) return html;
+  if (!c || (!c.unmatched?.length && !c.derived?.length && !c.quotes?.length)) return html;
   const pattern = (f) => f.split("").map((ch) => /[,   ]/.test(ch) ? "[,\\u202f\\u00a0\\u2009]" : /[-−‑–]/.test(ch) ? "[-\\u2212\\u2011\\u2013]" : /\s/.test(ch) ? "\\s*" : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
   const marks = [...(c.unmatched || []).map((f) => ({ f, cls: "fig-bad", title: "Not in the data, and can't be worked out from it" })),
+                 ...(c.quotes || []).map((f) => ({ f, cls: "fig-bad", title: "Not in the sources word for word" })),
                  ...(c.derived || []).map((d) => ({ f: d.figure, cls: "fig-worked", title: `Worked out: ${d.how}` }))]
     .filter((m) => m.f).sort((a, b) => b.f.length - a.f.length);
   if (!marks.length) return html;
@@ -748,10 +751,19 @@ const ASK_STEP = {
   pretrade: (a) => `Pre-trade check: ${a.amount} of ${a.ticker}`, search: (a) => `Searched for "${a.text}"`, get_news: (a) => `Read headlines about ${a.ticker}`,
   get_analysts: (a) => `Read analysts' views on ${a.ticker}`, get_earnings: (a) => `Checked ${a.ticker}'s earnings`, get_dividends: (a) => `Read ${a.ticker}'s dividend history`,
   get_price_history: (a) => `Looked at ${a.ticker} from ${a.start} to ${a.end || "today"}`, get_fund: (a) => `Looked inside ${a.ticker}`, get_market: () => "Checked the markets",
+  web_search: (a) => `Searched the web: "${a.query}"`,
 };
+const WEB_SOURCE = { tavily: "Tavily", groq: "Groq's browser search" };
+// The pages a web search found, to open and check (Groq's search lists none, and says so)
+function webLinks(s) {
+  if (s.tool !== "web_search" || !s.ok) return "";
+  const safe = (s.links || []).filter((l) => /^https?:\/\//.test(l.url || ""));
+  if (!safe.length) return ` <span class="muted">(${esc(s.source || "web")}: no list of pages)</span>`;
+  return `<ul class="web-links">${safe.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title || l.site)}</a> <span class="muted">${esc(l.site || "")}${l.date ? ` · ${esc(l.date.slice(0, 10))}` : ""}</span></li>`).join("")}</ul>`;
+}
 function renderAskSetup() {
   const a = state.meta?.aiInfo;
-  $("#askModel").textContent = a?.on ? `${a.model} via ${a.server}` : "";
+  $("#askModel").textContent = a?.on ? `${a.model} via ${a.server} · web search: ${WEB_SOURCE[a.web] || "off"}` : "";
   $("#askExamples").innerHTML = ASK_EXAMPLES.map((q) => `<button class="pill ask-ex">${esc(q)}</button>`).join("");
   $$("#askExamples .ask-ex").forEach((b) => b.onclick = () => { $("#askInput").value = b.textContent; runAsk(); });
   if (!a?.on) $("#askStatus").textContent = a?.problem ? `AI isn't set up: ${a.problem}` : "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example), then restart the app.";
@@ -763,7 +775,7 @@ async function runAsk() {
   btn.disabled = true; status.innerHTML = `<span class="spinner"></span>Investigating… the AI looks things up first, which can take up to a minute.`;
   try {
     const r = await api("/api/ask", { method: "POST", body: { question: q } });
-    const steps = r.steps.map((s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}</li>`).join("");
+    const steps = r.steps.map((s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}${webLinks(s)}</li>`).join("");
     const card = document.createElement("div"); card.className = "card ask-answer";
     card.innerHTML = `<div class="ask-q">${esc(q)}</div><div class="brief">${markFigures(DOMPurify.sanitize(marked.parse(r.answer)), r.check)}</div>
       <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}</summary><ol>${steps || "<li>Answered without looking anything up.</li>"}</ol></details>

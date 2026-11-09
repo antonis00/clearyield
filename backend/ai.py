@@ -72,6 +72,9 @@ def config():
     t = _env("AI_THINKING").lower()
     out["thinking"] = ("off" if t in ("off", "false", "no", "0", "none") else "on" if t in ("on", "true", "yes", "1")
                        else t if t in ("low", "medium", "high") else "default")
+    # AI_API_KEY may hold several keys separated by commas: the first one not resting after a limit is used
+    out["keys"] = split_keys(out.get("key", ""))
+    out["key"] = next((k for k in out["keys"] if not key_resting(k)), out["keys"][0] if out["keys"] else "")
     # A key still set to the example text would fail on every call, so it counts as not set up
     if out.get("key", "").lower() in PLACEHOLDER_KEYS and not out["problem"]:
         out["problem"] = f"AI_API_KEY in .env is still the placeholder '{out['key']}'. Put your key there and restart the app."
@@ -80,6 +83,49 @@ def config():
     except ValueError:
         out["timeout"] = REMOTE_TIMEOUT
     return out
+
+
+def split_keys(raw):
+    return list(dict.fromkeys(k.strip() for k in (raw or "").split(",") if k.strip()))
+
+
+def _key_id(key):
+    """A key's fingerprint for the record of resting keys: the key itself is never stored."""
+    import hashlib
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def key_resting(key):
+    import time
+    from . import db
+    try:
+        until = db.cache_get(f"aikey:rest:{_key_id(key)}", 10 ** 9)
+    except Exception:  # a database not set up yet: no key is resting
+        return False
+    return bool(until) and time.time() < until
+
+
+def rest_key(key, seconds):
+    """Put a key aside after a rate limit, for as long as the provider said (at least a minute)."""
+    import time
+    from . import db
+    db.cache_set(f"aikey:rest:{_key_id(key)}", time.time() + max(60.0, float(seconds or 0)))
+
+
+def is_limit(status, text):
+    """A refusal that another key could get past: a rate limit, or Groq's 'blocked at the organization level',
+    which it sent once the day's allowance was used up."""
+    return status == 429 or (status == 403 and "blocked at the organization level" in (text or ""))
+
+
+def switch_key(c, wait):
+    """After a limit: rest the key in use and return the next one ready, or None when every key is resting."""
+    if c.get("key"):
+        rest_key(c["key"], wait if wait else (3600 if len(c.get("keys") or []) > 1 else 60))
+    nxt = next((k for k in c.get("keys") or [] if k != c.get("key") and not key_resting(k)), None)
+    if nxt:
+        c["key"] = nxt
+    return nxt
 
 
 def available():
@@ -96,6 +142,8 @@ def describe():
 def clean(text):
     """A model's reply without reasoning blocks (<think>...</think>, used by some local models)."""
     text = re.sub(r"<think>.*?(?:</think>|$)", "", text or "", flags=re.S | re.I)
+    # gpt-oss marks where a fact came from with its own references ("【get_stock†L31-L33】"), meaningless to a reader
+    text = re.sub(r"\s?【[^】\n]{0,80}】", "", text)
     return text.strip()
 
 
@@ -104,18 +152,19 @@ def complete(user, system=SYSTEM, max_tokens=900, temperature=0):
     if not available():
         raise RuntimeError(c["problem"] or "No AI provider is set up.")
     if c["provider"] == "anthropic":
-        r = httpx.post(
-            f"{c['base']}/messages",
-            headers={"x-api-key": c["key"], "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": c["model"], "max_tokens": max_tokens, "temperature": temperature, "system": system, "messages": [{"role": "user", "content": user}]},
-            timeout=c["timeout"],
-        )
+        while True:
+            r = httpx.post(
+                f"{c['base']}/messages",
+                headers={"x-api-key": c["key"], "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": c["model"], "max_tokens": max_tokens, "temperature": temperature, "system": system, "messages": [{"role": "user", "content": user}]},
+                timeout=c["timeout"],
+            )
+            if not (is_limit(r.status_code, r.text) and switch_key(c, _retry_after(r))):
+                break
         r.raise_for_status()
         text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
     else:
         headers = {"content-type": "application/json", "X-Title": "StockPilot"}
-        if c["key"]:  # Ollama and LM Studio need none
-            headers["authorization"] = f"Bearer {c['key']}"
         body = {"model": c["model"], "max_tokens": max_tokens, "temperature": temperature, "stream": False,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         if c["thinking"] == "off":
@@ -124,13 +173,27 @@ def complete(user, system=SYSTEM, max_tokens=900, temperature=0):
             body["reasoning_effort"] = c["thinking"]
         if c["thinking"] not in ("off", "default"):
             body["max_tokens"] = max_tokens * THINKING_ROOM  # reasoning counts against the allowance on most servers
-        r = httpx.post(f"{c['base']}/chat/completions", headers=headers, timeout=c["timeout"], json=body)
+        while True:
+            if c["key"]:  # Ollama and LM Studio need none
+                headers["authorization"] = f"Bearer {c['key']}"
+            r = httpx.post(f"{c['base']}/chat/completions", headers=headers, timeout=c["timeout"], json=body)
+            if not (is_limit(r.status_code, r.text) and switch_key(c, _retry_after(r))):
+                break
         r.raise_for_status()
         text = ((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     text = clean(text)
     if not text:
         raise RuntimeError("The model returned an empty reply.")
     return text
+
+
+def _retry_after(r):
+    """Seconds until a limited key can be used again, from retry-after ('1320', '22m0s') if given."""
+    v = r.headers.get("retry-after") or ""
+    total = 0.0
+    for num, unit in re.findall(r"([\d.]+)(ms|m|s|h)?", v):
+        total += float(num) * {"ms": 0.001, "m": 60, "h": 3600}.get(unit, 1)
+    return total
 
 
 def _pct(v):
@@ -299,12 +362,13 @@ _NOT_FIGURES = re.compile(r"\b(?:S&P|Nasdaq|Russell|FTSE|Stoxx|Euro Stoxx|DAX|Do
 _PLAIN = str.maketrans({**{c: "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2212\ufe63\uff0d"}, **{c: " " for c in "\u00a0\u2007\u2009\u202f"}})
 
 
-def _figures(text):
-    """(value, unit, decimals, as written) for each figure in a text, with % / x / money scale as its unit."""
+def _figures(text, at=None):
+    """(value, unit, decimals, as written) for each figure in a text, with % / x / money scale as its unit. Given a
+    list as `at`, each figure's position in the text is added to it (every step below keeps the text's length)."""
     out = []
     # A narrow or no-break space between digit groups is a thousands separator ("24 579.43", as some models write it)
     text = re.sub(r"(?<=\d)[    ](?=\d{3}(?!\d))", ",", text)
-    for m in _NUM.finditer(_NOT_FIGURES.sub(" ", text.translate(_PLAIN))):
+    for m in _NUM.finditer(_NOT_FIGURES.sub(lambda x: " " * len(x.group(0)), text.translate(_PLAIN))):
         sign, whole, frac, unit = m.groups()
         value = float(whole.replace(",", "") + ("." + frac if frac else "")) * (-1 if sign in ("-", "−") else 1)
         u = (unit or "").lower()
@@ -312,7 +376,40 @@ def _figures(text):
         if u == "money":
             value *= _SCALE[unit.lower()]
         out.append((value, u, len(frac or ""), m.group(0).strip()))
+        if at is not None:
+            at.append(m.start())
     return out
+
+
+NEAR = 200  # characters: a figure worked out from others is written next to them ("5.6%, so core is 94.4%")
+
+
+def _near(text, a, b):
+    """Two positions on the same line, or close together outside a table (a table's rows are separate facts)."""
+    lo, hi = sorted((a, b))
+    if "\n" not in text[lo:hi]:
+        return True
+    line = lambda i: text[text.rfind("\n", 0, i) + 1:].lstrip()[:1]
+    return hi - lo <= NEAR and "|" not in (line(lo), line(hi))
+
+
+_QUOTE = re.compile(r"[“\"]([^”\"\n]{20,400})[”\"]")
+
+
+def _words(s):
+    return " ".join(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+
+def check_quotes(text, facts):
+    """Quoted passages (20+ characters) that aren't in the sources word for word. A model asked for news rewrote a
+    headline in its own words and kept the quotation marks. Punctuation and case are ignored, and a quote joining a
+    headline to its summary with a dash or an ellipsis is checked part by part."""
+    hay, bad = _words(facts), []
+    for q in _QUOTE.findall(text or ""):
+        parts = [p for p in re.split(r"\s[–—-]\s|…|\.\.\.", q) if len(_words(p).split()) >= 3]
+        if parts and not all(_words(p) in hay for p in parts):
+            bad.append(q.strip())
+    return list(dict.fromkeys(bad))
 
 
 def check_figures(text, facts):
@@ -320,7 +417,8 @@ def check_figures(text, facts):
     unit (a ROE of 142.1% doesn't make "1.42" right); a bare number may match any. Years and small counts are skipped."""
     known = _figures(facts)
     checked, unmatched, verified = 0, [], []
-    for value, unit, dec, written in _figures(text):
+    at = []
+    for n, (value, unit, dec, written) in enumerate(_figures(text, at)):
         skip = not unit and (1900 <= value <= 2100 and dec == 0 or (abs(value) <= 12 and dec == 0))  # a year, or a count like "3 risks"
         if not skip:
             checked += 1
@@ -336,15 +434,16 @@ def check_figures(text, facts):
             return abs(abs(value) - abs(kv)) <= tol
         found = any(same(k) for k in known)
         if found:
-            verified.append((value, unit, dec, written))  # a part a worked-out figure may use, even one not checked ("2,000")
+            verified.append(((value, unit, dec, written), at[n]))  # a part a worked-out figure may use, even one not checked ("2,000")
         elif not skip:
-            unmatched.append((value, unit, dec, written))
+            unmatched.append(((value, unit, dec, written), at[n]))
     # A figure not in the data may still be right: worked out from figures the answer itself states and that are in the
     # data ("35,816.51 = 33,816.51 + 2,000", "94% = 100% - 6%"). Only those count as the parts, so a coincidence among
-    # all the data's numbers can't pass off a slip like "7 + 31 = 40" as worked out.
+    # all the data's numbers can't pass off a slip like "7 + 31 = 40" as worked out; and only those written near it,
+    # since among forty figures across an answer two unrelated ones multiplied to an invented fund cost ("10.1% of 2.2%").
     derived, still = [], []
-    for fig in unmatched:
-        how = _worked_out(fig, verified)
+    for fig, pos in unmatched:
+        how = _worked_out(fig, [f for f, p in verified if _near(text, pos, p)])
         (derived if how else still).append((fig[3], how))
     return {"checked": checked, "unmatched": list(dict.fromkeys(w for w, _ in still)),
             "derived": [{"figure": w, "how": h} for w, h in dict(derived).items()]}
@@ -357,20 +456,23 @@ def _worked_out(fig, parts):
     scale = 1e12 if target >= 1e12 else 1e9 if target >= 1e9 else 1e6 if target >= 1e6 else 1e3 if target >= 1e3 and unit == "money" else 1
     tol = 0.5 * 10 ** -dec * scale + 1e-9
     near = lambda x: abs(abs(x) - target) <= max(tol, target * 1e-4)
-    vals = list({(abs(p[0]), p[3]) for p in parts if p[0]})[:40]
-    for i, (a, wa) in enumerate(vals):
-        if unit == "%" and near(100 - a):
+    vals = list({(abs(p[0]), p[3], p[1]) for p in parts if p[0]})[:40]
+    for i, (a, wa, ua) in enumerate(vals):
+        if unit == "%" and ua == "%" and near(100 - a):
             return f"100% − {wa}"
-        for b, wb in vals[i + 1:] + vals[:i]:
-            if near(a + b):
+        for b, wb, ub in vals[i + 1:] + vals[:i]:
+            # a sum or a difference keeps the unit: percentages from percentages, amounts from amounts
+            keeps = ua == ub and (ua == unit or {ua, unit} <= {"", "money"})
+            if keeps and near(a + b):
                 return f"{wa} + {wb}"
-            if near(a - b):
+            if keeps and near(a - b):
                 return f"{wa} − {wb}" if a >= b else f"{wb} − {wa}"
-            if b and unit == "%" and near(a / b * 100):
+            # a share or a change is of amounts, not of percentages ("from 10.1% to 8%" isn't a figure anyone writes)
+            if b and unit == "%" and "%" not in (ua, ub) and near(a / b * 100):
                 return f"{wa} as a share of {wb}"
-            if b and unit == "%" and near((a / b - 1) * 100):
+            if b and unit == "%" and "%" not in (ua, ub) and near((a / b - 1) * 100):
                 return f"change from {wb} to {wa}"
-            if near(a * b / 100):
+            if (ua == "%") != (ub == "%") and near(a * b / 100):  # a percentage of an amount
                 return f"{wa} of {wb}"
             if b and unit != "%" and near(a / b):
                 return f"{wa} ÷ {wb}"

@@ -15,6 +15,7 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING"):
     os.environ.pop(_k, None)
 os.environ["AI_PROVIDER"] = "none"  # set before .env is read, which never overrides what's already set
+os.environ["WEB_SEARCH"] = "off"  # nor a Tavily key from .env; the tests that need web search set it themselves
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import warnings  # noqa: E402
@@ -2715,7 +2716,8 @@ def _with_env(**env):
 
     @contextlib.contextmanager
     def block():
-        keys = ("AI_PROVIDER", "AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL")
+        keys = ("AI_PROVIDER", "AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+                "TAVILY_API_KEY", "WEB_SEARCH")  # a Tavily key in .env must never be used by a test
         before = {k: os.environ.get(k) for k in keys}
         for k in keys:
             os.environ.pop(k, None)
@@ -3216,6 +3218,14 @@ def test_figure_check_reads_scaled_amounts():
     # Rounded forms of figures in the data match; a different figure doesn't
     assert ok("FCF €13.98 bn") and ok("about €8.5k") and ok("€8,454") and ok("P/E 9.2×")
     assert not ok("about €9.5k") and not ok("a 37.5% rise") and not ok("€2.5 bn")
+    # Worked out only from figures written near it, and only by arithmetic that means something: a fund cost a model
+    # brought in ("typically ~0.22%") passed as "10.1% of 2.2%", two figures from other rows of a table
+    data = "Industrials 10.1%; Amazon 2.2%; EUR 8%; satellite 5.6%; 2,000; 33,816.51; price 100; price 125"
+    table = "| Sector | Industrials 10.1% |\n| Amazon | 2.2% |\n| Cost | typically ~0.22% |\n| Others | EUR 8%, others 21% |"
+    assert ai.check_figures(table, data)["unmatched"] == ["0.22%", "21%"]
+    assert ai.check_figures("Amazon is 2.2% and industrials 10.1%, so 0.22% of it", data)["unmatched"] == ["0.22%"], "a percentage of a percentage"
+    assert ai.check_figures("Satellite is 5.6%, so core is 94.4%.", data)["derived"] == [{"figure": "94.4%", "how": "100% − 5.6%"}]
+    assert ai.check_figures("From 100 to 125 is a rise of 25%.", data)["derived"] == [{"figure": "25%", "how": "change from 100 to 125"}]
     # An index's level after its name is a figure ("Nasdaq 24,579.43"); its name's number isn't ("S&P 500");
     # a narrow or no-break space between digit groups is a thousands separator, as some models write it
     levels = "Nasdaq 24,579.43; DAX 26,089.93"
@@ -3239,6 +3249,9 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             # Round 1 asks for two tools at once; round 2 answers, quoting a figure from a result and one it made up
             stock = json.loads(agent.run_tool("get_stock", {"ticker": "AAPL"})[0])
             score = stock["StockPilot scores"]["Composite"].split()[0]  # "30.2 out of 100"
+            # The latest day's move, dated, so "did it move today" has an answer
+            day = stock["Latest trading day"]
+            assert set(day) == {"date", "price (the close, or the latest price while trading)", "change from the day before", "is today"} and day["change from the day before"].endswith(")"), day
             llm.replies = [_tool_call(("get_portfolio", {}), ("get_stock", {"ticker": "AAPL"})),
                            _chat(f"Apple scores {score}. It could rise 37.5% next year."),
                            _chat(f"Apple scores {score}. It could rise 37.5% or 50% next year.")]  # a revision that's no better
@@ -3256,7 +3269,7 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             # The model is told today's date, which it can't know otherwise
             import datetime as dt
             assert first["messages"][1]["content"].startswith(f"(Today is {dt.date.today():%A %d %B %Y}.)") and first["messages"][1]["content"].endswith("Should I add Apple?")
-            assert {t["function"]["name"] for t in first["tools"]} == set(agent.TOOLS) and first["tool_choice"] == "auto"
+            assert {t["function"]["name"] for t in first["tools"]} == set(agent.TOOLS) - {"web_search"} and first["tool_choice"] == "auto"
             back = [m for m in second["messages"] if m["role"] == "tool"]
             assert [m["tool_call_id"] for m in back] == ["c0", "c1"] and "VWCE.DE" in back[0]["content"]
             # The figure check: the score is in the data, the forecast isn't
@@ -3319,6 +3332,189 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             assert r.status_code == 503 and "AI" in r.json()["detail"]
     finally:
         llm.close()
+        _reset()
+
+
+def test_ask_checks_quotes_and_search_years():
+    import datetime as dt
+    import json
+
+    from backend import agent, ai
+    # Quotes must be the source's words: a rewritten headline in quotation marks is caught; real ones, a headline
+    # joined to its summary, and typographic punctuation pass
+    facts = json.dumps({"headlines": ["Zacks: Novo Up 4% in a Month: How Should Investors Approach the Stock Now?",
+                                      "GuruFocus.com: Novo Nordisk Reveals Surprising New Benefit for Wegovy — The blockbuster treatment could reach an unexpected patient population.",
+                                      "Motley Fool: Bank of America Is Doubling Down on Apple. Here’s Its Price Target"]}, ensure_ascii=False)
+    ans = ('“Novo Nordisk Reveals Surprising New Benefit for Wegovy – the blockbuster treatment could reach an unexpected patient population.” '
+           '"NVO gains 4 % in a month on strong Q3 Wegovy sales." *“Bank of America Is Doubling Down on Apple. Here\'s Its Price Target”* “short”')
+    assert ai.check_quotes(ans, facts) == ["NVO gains 4 % in a month on strong Q3 Wegovy sales."]
+    # gpt-oss's own source marks are taken out of the reply
+    assert ai.clean("It rose 1.46% to $40.90【get_stock†L31-L33】. Sales rose【web_search†L5-L7】 4%.") == "It rose 1.46% to $40.90. Sales rose 4%."
+    _reset()
+    llm, web = _FakeLLM([]), _FakeLLM([])
+    url_before = agent.TAVILY_URL
+    try:
+        agent.TAVILY_URL = web.url + "/search"
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", TAVILY_API_KEY="tvly-q"):
+            # A misquote goes back once with the figures; the revision without it is kept
+            web.replies = [(200, {"results": [{"title": "Novo Up 4% in a Month", "url": "https://z.com", "content": "Novo Up 4% in a Month: How Should Investors Approach the Stock Now?",
+                                               "published_date": dt.date.today().isoformat()}]}, 0)]
+            llm.replies = [_tool_call(("web_search", {"query": "Novo Nordisk news November 9 2024"})),
+                           _chat('Zacks wrote "Novo shares jumped on strong Wegovy sales and guidance".'),
+                           _chat("Zacks noted that Novo was up 4% in a month.")]
+            out = agent.ask("What's new at Novo?")
+            # the stale year was dropped from the search words; this year's stays
+            assert web.seen[0][2]["query"] == "Novo Nordisk news November 9", web.seen[0][2]["query"]
+            fix = llm.seen[2][2]["messages"][1]["content"]
+            assert "aren't in the data word for word" in fix and "Novo shares jumped" in fix
+            assert out["answer"] == "Zacks noted that Novo was up 4% in a month." and out["check"]["quotes"] == [] and out["revised"]["fixed"] == 1, out
+            year = str(dt.date.today().year)
+            web.replies = [(200, {"results": []}, 0)]
+            agent.web_search(f"Novo results {year}")
+            assert web.seen[-1][2]["query"] == f"Novo results {year}"
+            web.replies = [(200, {"results": []}, 0)]
+            agent.web_search("Novo history 1923", background=True)  # background facts keep their years
+            assert web.seen[-1][2]["query"] == "Novo history 1923"
+    finally:
+        agent.TAVILY_URL = url_before
+        llm.close(); web.close()
+        _reset()
+
+
+def test_ai_keys_take_turns_at_limits():
+    from backend import agent, ai, db
+    _reset()
+    llm = _FakeLLM([])
+    daily = (429, {"error": {"message": "Rate limit reached ... on tokens per day (TPD): Limit 200000, Used 199999, Requested 900."}}, 0)
+    try:
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk_one, gsk_two"):
+            assert ai.config()["keys"] == ["gsk_one", "gsk_two"] and ai.config()["key"] == "gsk_one"
+            # Ask: the first key's day is used up, so the same question goes on with the second at once
+            llm.replies = [daily, _chat("Fine.")]
+            assert agent.ask("Anything?")["answer"] == "Fine."
+            assert [s[1]["authorization"] for s in llm.seen] == ["Bearer gsk_one", "Bearer gsk_two"]
+            # ...and the next call starts with the second; the key is never stored, only a fingerprint
+            assert ai.config()["key"] == "gsk_two" and not db.q("SELECT key FROM cache WHERE key LIKE '%gsk_%' OR value LIKE '%gsk_%'")
+            # Briefs and screener questions (ai.complete) switch the same way; Groq's "blocked" refusal counts as a limit
+            llm.seen.clear()
+            llm.replies = [(403, {"error": {"message": "The model `m` is blocked at the organization level."}}, 0)]
+            with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk_two, gsk_three"):
+                llm.replies += [_chat("Brief.")]
+                assert ai.complete("x") == "Brief." and [s[1]["authorization"] for s in llm.seen] == ["Bearer gsk_two", "Bearer gsk_three"]
+            # Every key resting: the day's limit is said plainly, naming every key, with no endless retries
+            with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk_four, gsk_five"):
+                llm.seen.clear()
+                llm.replies = [daily, daily]
+                try:
+                    agent.ask("Anything?")
+                    raise AssertionError("should have failed")
+                except RuntimeError as e:
+                    assert "used up on every key" in str(e) and len(llm.seen) == 2, (str(e), len(llm.seen))
+        # One key, as before: a day's limit is reported, not retried
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk_six"):
+            llm.seen.clear()
+            llm.replies = [daily]
+            try:
+                agent.ask("Anything?")
+            except RuntimeError as e:
+                assert "used up (200,000" in str(e) and len(llm.seen) == 1
+    finally:
+        llm.close()
+        _reset()
+
+
+def test_ask_searches_the_web():
+    import datetime as dt
+
+    from backend import agent
+    _reset()
+    llm, web = _FakeLLM([]), _FakeLLM([])
+    url_before = agent.TAVILY_URL
+    try:
+        # Off unless set up: no key and not a gpt-oss on Groq, so the tool isn't even offered
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"):
+            assert agent.web_source() is None and "web_search" not in agent._tools() and "web_search" not in agent._system()
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL="https://api.groq.com/openai/v1", AI_MODEL="openai/gpt-oss-120b", AI_API_KEY="k"):
+            assert agent.web_source() == "groq", "gpt-oss on Groq searches with Groq's own browser search"
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL="https://api.groq.com/openai/v1", AI_MODEL="openai/gpt-oss-120b", AI_API_KEY="k", WEB_SEARCH="off"):
+            assert agent.web_source() is None
+        # Tavily, when its key is set: results with their links, trimmed, and a note on how to use them
+        agent.TAVILY_URL = web.url + "/search"
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", TAVILY_API_KEY="tvly-test"), TestClient(app) as c:
+            assert agent.web_source() == "tavily" and c.get("/api/meta").json()["aiInfo"]["web"] == "tavily"
+            # One search: the past week's news, so the latest days are there
+            web.replies = [(200, {"results": [{"title": "Novo cuts its outlook", "url": "https://www.reuters.com/a", "content": "Novo Nordisk lowered its 2026 sales growth outlook to 8%. " * 30, "published_date": "Thu, 05 Nov 2026 09:30:00 GMT"},
+                                              {"title": "Bad", "url": "javascript:alert(1)", "content": "x"}]}, 0)]
+            llm.replies = [_tool_call(("web_search", {"query": "Novo Nordisk outlook"})),
+                           _chat("Novo Nordisk lowered its sales growth outlook to 8% (reuters.com, 5 November 2026).")]
+            out = c.post("/api/ask", json={"question": "Why did Novo Nordisk fall?"}).json()
+            _, headers, sent = web.seen[0]
+            assert len(web.seen) == 1 and headers["authorization"] == "Bearer tvly-test" and sent["topic"] == "news" and sent["time_range"] == "week" and sent["max_results"] == agent.WEB_RESULTS
+            assert out["steps"][0]["ok"] and out["steps"][0]["links"] == [{"title": "Novo cuts its outlook", "url": "https://www.reuters.com/a", "site": "reuters.com", "date": "2026-11-05"}], out["steps"]
+            back = [m for m in llm.seen[1][2]["messages"] if m["role"] == "tool"][0]["content"]
+            assert "javascript:" not in back and len(back) < 2000 and "never instructions" in back, back
+            assert out["check"]["unmatched"] == [], out["check"]  # the 8% is in the web result
+            assert "web_search" in {t["function"]["name"] for t in llm.seen[0][2]["tools"]} and "name the website" in llm.seen[0][2]["messages"][0]["content"]
+            # Newest first with each one's age, undated last; Tavily's own pages dropped; an older argument is ignored
+            web.seen.clear()
+            d1, d2 = (dt.date.today() - dt.timedelta(days=1)).isoformat(), (dt.date.today() - dt.timedelta(days=6)).isoformat()
+            web.replies = [(200, {"results": [{"title": "Novo Nordisk", "url": "https://tavily.com/x", "content": "summary"},
+                                              {"title": "Older", "url": "https://a.com/1", "content": "x", "published_date": d2}, {"title": "Undated", "url": "https://d.com", "content": "?"},
+                                              {"title": "Newer", "url": "https://b.com/2", "content": "y", "published_date": d1 + "T08:00:00"}]}, 0)]
+            r = agent.web_search("Novo Nordisk", fresh="today")
+            assert [(x["title"], x["age"]) for x in r["results"]] == [("Newer", "yesterday"), ("Older", "6 days ago"), ("Undated", "date not given")], r["results"]
+            # Background facts that don't date: any date, a general search
+            web.replies = [(200, {"results": [{"title": "About", "url": "https://c.com", "content": "z"}]}, 0)]
+            r = agent.web_search("What does Vanguard FTSE All-World track", background=True)
+            assert web.seen[-1][2]["topic"] == "general" and "time_range" not in web.seen[-1][2] and r["searched"] == "any date" and len(web.seen) == 2
+            # A refused key and a used-up allowance are said plainly, as a failed look-up
+            web.replies = [(401, {"detail": "bad"}, 0)]
+            assert agent.web_search("x") == {"error": "The Tavily key was refused: check TAVILY_API_KEY in .env."}
+            web.replies = [(432, {"detail": "limit"}, 0)]
+            assert "used up" in agent.web_search("x")["error"]
+        # Several keys: one that reaches its month's limit hands the search to the next, and is skipped until the 1st
+        from backend import db
+        with _with_env(AI_PROVIDER="none", TAVILY_API_KEY="tvly-one, tvly-two"):
+            ok_reply = (200, {"results": [{"title": f"N{i}", "url": f"https://n{i}.com", "content": "x", "published_date": dt.date.today().isoformat()} for i in range(3)]}, 0)
+            web.seen.clear()
+            web.replies = [(432, {"detail": "plan limit"}, 0), ok_reply]
+            assert agent.web_source() == "tavily" and len(agent.web_search("a")["results"]) == 3
+            assert [s[1]["authorization"] for s in web.seen] == ["Bearer tvly-one", "Bearer tvly-two"]
+            web.replies = [ok_reply]
+            agent.web_search("b")  # straight to the second key
+            assert web.seen[-1][1]["authorization"] == "Bearer tvly-two" and len(web.seen) == 3
+            # the key itself is never stored, only a fingerprint
+            assert not db.q("SELECT key FROM cache WHERE key LIKE '%tvly-%' OR value LIKE '%tvly-%'")
+            # A minute's limit on the last key: every key is spent for now, said so without another request
+            web.replies = [(429, {"detail": "slow down"}, 0)]
+            assert "every key" in agent.web_search("c")["error"]
+            n = len(web.seen)
+            assert "every key" in agent.web_search("d")["error"] and len(web.seen) == n
+        # A refused key passes the search on too
+        with _with_env(AI_PROVIDER="none", TAVILY_API_KEY="tvly-three,tvly-four"):
+            web.seen.clear()
+            web.replies = [(401, {"detail": "bad key"}, 0), ok_reply]
+            assert len(agent.web_search("e")["results"]) == 3 and len(web.seen) == 2
+        # Yahoo's headlines, the freshest news: newest first, with the hour and how long ago, and Yahoo's summary trimmed
+        now = dt.datetime.now(dt.timezone.utc)
+        h = agent._headline({"time": (now - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ"), "publisher": "Reuters",
+                             "title": "Is Novo back?", "summary": "Shares rose after the company said " + "more " * 80})
+        assert h.startswith(f"{now - dt.timedelta(hours=3):%Y-%m-%d %H:%M} UTC (3 hours ago) Reuters: Is Novo back? — Shares rose") and h.endswith("…") and len(h) < 330, h
+        assert "(25 minutes ago)" in agent._headline({"time": (now - dt.timedelta(minutes=25)).isoformat(), "title": "x"})
+        heads = agent.get_news("AAPL")["headlines"]
+        assert isinstance(heads, list) and heads == sorted(heads, reverse=True), heads
+        # Groq's browser search: a separate call with Groq's built-in tool, its citation marks removed
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="openai/gpt-oss-120b", WEB_SEARCH="groq"):
+            llm.seen.clear()
+            llm.replies = [_chat("- Novo lowered its outlook【3†L1-L4】 (Reuters, 5 Nov 2026) https://www.reuters.com/a")]
+            r = agent.web_search("Novo Nordisk outlook")
+            body = llm.seen[0][2]
+            assert "latest news of the past few days" in body["messages"][0]["content"]
+            assert body["tools"] == [{"type": "browser_search"}] and body["tool_choice"] == "required" and body["reasoning_effort"] == "low"
+            assert "【" not in r["findings"] and r["links_seen"] == ["https://www.reuters.com/a"] and "no list" in r["source"], r
+    finally:
+        agent.TAVILY_URL = url_before
+        llm.close(); web.close()
         _reset()
 
 
