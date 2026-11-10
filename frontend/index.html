@@ -25,7 +25,7 @@
 </head>
 <body>
 <aside class="side">
-  <a class="brand" href="#dashboard" data-goto="dashboard" title="Dashboard"><span class="logo">◆</span> StockPilot</a>
+  <a class="brand" href="#dashboard" data-goto="dashboard" title="Dashboard"><img class="logo" src="/static/favicon.svg" alt=""><span>StockPilot</span></a>
   <nav id="nav">
     <a data-view="dashboard" class="active">Dashboard</a>
     <a data-view="portfolio">Portfolio</a>
@@ -36,7 +36,7 @@
     <a data-view="backtest">Backtest</a>
     <a data-view="journal">Journal &amp; Alerts</a>
     <a data-view="settings">Settings</a>
-    <a data-view="ask" class="nav-ask"><img src="/static/favicon.svg" alt="" class="nav-ico"> Ask StockPilotAI</a>
+    <a data-view="ask" class="nav-ask"><span class="nav-ico nav-mark" aria-hidden="true">◆</span> Ask StockPilotAI</a>
   </nav>
   <div class="side-foot" id="modeBadge"></div>
 </aside>
@@ -44,7 +44,7 @@
 <main>
   <header class="top">
     <div class="searchbox">
-      <input id="globalSearch" placeholder="Research a Company or Ticker: Apple or AAPL  - OR - Ask the Screener: cheap European banks" autocomplete="off">
+      <input id="globalSearch" placeholder="Research a stock, e.g. Apple or AAPL, or ask the Screener, e.g. cheap European banks" autocomplete="off">
       <div id="searchResults" class="dropdown hidden"></div>
     </div>
   </header>
@@ -76,7 +76,7 @@
 
   <!-- RESEARCH -->
   <section id="view-research" class="view hidden">
-    <div id="researchEmpty" class="empty">Search for a ticker above to start researching.</div>
+    <div id="researchEmpty" class="empty">Research a company or ticker above to start.</div>
     <div id="researchBody" class="hidden">
       <div class="stock-head">
         <div>
@@ -213,10 +213,9 @@
   <!-- ASK -->
   <section id="view-ask" class="view hidden">
     <div class="card">
-      <div class="card-h"><h3>Ask StockPilotAI</h3><span class="muted sm" id="askModel"></span></div>
-      <p class="muted sm" style="margin:0 0 10px">Ask anything about your portfolio or the markets the app follows. The AI looks things up with the app's own tools (your portfolio, a stock's scores, the screener, Opportunities, Compare, the pre-trade check, news), then answers with the figures it found, each checked against the data. The tools only read: nothing is bought, sold or saved. Decision support, not financial advice.</p>
+      <div class="card-h"><h3>Ask StockPilotAI</h3></div>
+      <p class="muted sm" style="margin:0 0 10px">Ask about your portfolio or the markets. The AI answers from the app's own data and checks every figure against it. It only reads: nothing is bought, sold or saved.</p>
       <div class="form-row ask-row"><label class="grow">Your question<input id="askInput" maxlength="500" placeholder="e.g. Which European stock would add the most diversification to my portfolio without much risk?"></label><button class="btn" id="askGo">Ask</button></div>
-      <div class="ask-examples" id="askExamples"></div>
       <div id="askStatus" class="muted sm"></div>
     </div>
     <div id="askAnswers"></div>

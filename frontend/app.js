@@ -826,9 +826,6 @@ $("#scrQuery").onkeydown = (e) => { if (e.key === "Enter") $("#btnScrQuery").cli
 /* ---------------------------------------------------------------- ask */
 // A question goes to the AI, which uses the app's read-only tools in a loop and answers. Each answer shows how it was
 // worked out (every tool it used) and the check of its figures. Answers stay on the page for this visit only.
-const ASK_EXAMPLES = ["How is my portfolio doing, and is anything off-plan?", "Which European stock would add the most diversification to my portfolio without much risk?",
-  "Compare TotalEnergies and Shell for a long-term holder", "What would buying 2,000 of SAP.DE do to my portfolio?",
-  "What do analysts think of ASML, and when does it report next?", "How did Nvidia do in 2022, and how are markets doing today?"];
 const ASK_STEP = {
   get_portfolio: () => "Read your portfolio", get_stock: (a) => `Looked up ${a.ticker}`,
   screen: (a) => `Ran the screener${a.question ? `: "${a.question}"` : a.filters ? ` with ${Object.keys(a.filters).join(", ")}` : ""}`,
@@ -838,7 +835,6 @@ const ASK_STEP = {
   get_price_history: (a) => `Looked at ${a.ticker} from ${a.start} to ${a.end || "today"}`, get_fund: (a) => `Looked inside ${a.ticker}`, get_market: () => "Checked the markets",
   web_search: (a) => `Searched the web: "${a.query}"`,
 };
-const WEB_SOURCE = { tavily: "Tavily", groq: "Groq's browser search" };
 // The pages a web search found, to open and check (Groq's search lists none, and says so)
 function webLinks(s) {
   if (s.tool !== "web_search" || !s.ok) return "";
@@ -848,9 +844,6 @@ function webLinks(s) {
 }
 function renderAskSetup() {
   const a = state.meta?.aiInfo;
-  $("#askModel").textContent = a?.on ? `${a.model} via ${a.server} · web search: ${WEB_SOURCE[a.web] || "off"}` : "";
-  $("#askExamples").innerHTML = ASK_EXAMPLES.map((q) => `<button class="pill ask-ex">${esc(q)}</button>`).join("");
-  $$("#askExamples .ask-ex").forEach((b) => b.onclick = () => { $("#askInput").value = b.textContent; runAsk(); });
   if (!a?.on) $("#askStatus").textContent = a?.problem ? `AI isn't set up: ${a.problem}` : "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example), then restart the app.";
 }
 async function runAsk() {
