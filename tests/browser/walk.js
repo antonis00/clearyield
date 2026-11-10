@@ -28,7 +28,7 @@ const SLOW = 150000;
   const txt = (s) => p.evaluate((x) => document.querySelector(x)?.innerText?.replace(/\s+/g, " ").trim() ?? null, s);
   const shot = (n) => p.screenshot({ path: `${OUT}/${MODE}_${n}.png`, fullPage: true });
   const canvasDrawn = (s) => p.evaluate((x) => { const c = document.querySelector(x); if (!c) return false; const d = c.getContext("2d")?.getImageData(0, 0, c.width, c.height).data; if (!d) return true; for (let i = 3; i < d.length; i += 4) if (d[i]) return true; return false; }, s);
-  const research = async (t) => { await p.fill("#search, input[placeholder*='Search']", ""); await p.evaluate((x) => { location.hash = `#research/${encodeURIComponent(x)}`; }, t); await p.waitForFunction((x) => { const e = document.querySelector("#researchEmpty"); if (e && !e.classList.contains("hidden") && e.textContent.trim()) return true; return document.querySelector("#rSym")?.textContent === x && document.querySelector("#researchBody").style.opacity === "1" && !document.querySelector("#newsList .spinner"); }, t, { timeout: SLOW }); await p.waitForTimeout(600); };
+  const research = async (t) => { await p.fill("#globalSearch", ""); await p.evaluate((x) => { location.hash = `#research/${encodeURIComponent(x)}`; }, t); await p.waitForFunction((x) => { const e = document.querySelector("#researchEmpty"); if (e && !e.classList.contains("hidden") && e.textContent.trim()) return true; return document.querySelector("#rSym")?.textContent === x && document.querySelector("#researchBody").style.opacity === "1" && !document.querySelector("#newsList .spinner"); }, t, { timeout: SLOW }); await p.waitForTimeout(600); };
 
   // Live: a non-USD base exercises the currency conversions, and two regions keep the run light on Yahoo: every run
   // starts with an empty cache, and downloading all 400 symbols each time gets the computer refused for a while.
@@ -39,15 +39,23 @@ const SLOW = 150000;
   const meta = await p.evaluate(async () => (await fetch("/api/meta")).json());
   expect(`mode is ${MODE}`, meta.demo === (MODE === "demo"), `base ${meta.settings.base_currency}, AI ${meta.ai}`);
 
-  // ---- The frame: Ask StockAI with the app's mark, just above Settings; the quote as an icon; a full-width search
+  // ---- The frame: Ask StockPilotAI with the app's mark, last and apart at the bottom, by the line; the quote as an icon; a full-width search
   const frame = await p.evaluate(() => {
     const links = [...document.querySelectorAll("nav a")], ask = document.querySelector('nav a[data-view="ask"]');
     const top = document.querySelector("header.top").getBoundingClientRect().width, box = document.querySelector(".searchbox").getBoundingClientRect().width;
-    return { ask: ask.innerText.trim(), icon: !!ask.querySelector("img.nav-ico"), next: links[links.indexOf(ask) + 1]?.dataset.view,
+    return { ask: ask.innerText.trim(), icon: !!ask.querySelector("img.nav-ico"), last: links[links.length - 1] === ask, gap: ask.getBoundingClientRect().top - links[links.length - 2].getBoundingClientRect().bottom,
+             toLine: document.querySelector("#modeBadge").getBoundingClientRect().top - ask.getBoundingClientRect().bottom,
              quote: document.querySelector("#modeBadge .st.quote")?.dataset.tip || "", oldQuote: !!document.querySelector("header .disclaimer"), share: box / top };
   });
-  expect("frame: Ask StockAI with its mark, just above Settings", frame.ask === "Ask StockAI" && frame.icon && frame.next === "settings", JSON.stringify(frame));
+  expect("frame: Ask StockPilotAI with its mark, at the bottom by the line, apart from the rest", frame.ask === "Ask StockPilotAI" && frame.icon && frame.last && frame.gap > 40 && frame.toLine >= 0 && frame.toLine < 4, JSON.stringify(frame));
   expect("frame: the quote is an icon beside the others, shown on hover", /Plato/.test(frame.quote) && !frame.oldQuote, frame.quote);
+  const seen = [];
+  for (let i = 0; i < 4; i++) {
+    await p.hover("#modeBadge .st.quote"); await p.waitForTimeout(150);
+    seen.push(await p.evaluate(() => { const t = document.querySelector("#tooltip"); return t.classList.contains("hidden") ? "" : t.textContent; }));
+    await p.mouse.move(700, 450); await p.waitForTimeout(100);
+  }
+  expect("frame: each hover shows another quote from the pool", seen.every((q) => q && /^“/.test(q)) && seen.every((q, i) => !i || q !== seen[i - 1]), seen.join(" | "));
   expect("frame: the search box takes the top bar's width", frame.share > 0.9, frame.share.toFixed(2));
 
   // ---- Dashboard
@@ -341,7 +349,7 @@ const SLOW = 150000;
 
   // ---- Ask: the AI icon in the sidebar opens it; with AI off (as in every test run), the page says how to set it up
   await p.click("#modeBadge .st.ai"); await p.waitForTimeout(300);
-  expect("ask: the sidebar's AI icon opens Ask StockAI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
+  expect("ask: the sidebar's AI icon opens Ask StockPilotAI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
   // The Yahoo mark opens Yahoo Finance in a new tab: the front page here, the stock's page on Research (not loaded in the test)
   // Records what a click asks the browser to open, without opening Yahoo
   const yahooTab = async () => {

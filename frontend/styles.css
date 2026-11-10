@@ -27,7 +27,7 @@ body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); di
 a { color: var(--accent2); cursor: pointer; text-decoration: none; }
 
 /* sidebar */
-.side { width: 210px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
+.side { width: 172px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
 .brand { display: block; font: 600 18px var(--mono); padding: 20px 12px; letter-spacing: .5px; color: var(--text); }
 .brand:hover .logo { filter: brightness(1.2); }
 .logo { color: var(--accent); }
@@ -311,7 +311,9 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 #rOwn h4 { margin: 10px 0 6px; }
 .clip-wide { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 #rOwn td .sub { display: block; font-size: 11px; color: var(--muted); }
-.st.quote { font: 600 15px Georgia, serif; color: var(--up); cursor: default; line-height: 1; }
+.st.quote { color: var(--up); cursor: default; }
+#nav { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+nav a.nav-ask { margin-top: auto; }
 .nav-ico { width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
 @media (max-width: 1100px) { nav a.nav-ask .nav-ico { margin-right: 0; } }
 .cv-cur { min-width: 210px; }

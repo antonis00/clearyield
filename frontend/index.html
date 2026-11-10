@@ -35,8 +35,8 @@
     <a data-view="screener">Screener</a>
     <a data-view="backtest">Backtest</a>
     <a data-view="journal">Journal &amp; Alerts</a>
-    <a data-view="ask" class="nav-ask"><img src="/static/favicon.svg" alt="" class="nav-ico"> Ask StockAI</a>
     <a data-view="settings">Settings</a>
+    <a data-view="ask" class="nav-ask"><img src="/static/favicon.svg" alt="" class="nav-ico"> Ask StockPilotAI</a>
   </nav>
   <div class="side-foot" id="modeBadge"></div>
 </aside>
@@ -44,7 +44,7 @@
 <main>
   <header class="top">
     <div class="searchbox">
-      <input id="globalSearch" placeholder="Search a ticker or company — AAPL, SAP.DE, BTC-USD — or ask the screener: cheap European banks…" autocomplete="off">
+      <input id="globalSearch" placeholder="Research a Company or Ticker: Apple or AAPL  - OR - Ask the Screener: cheap European banks" autocomplete="off">
       <div id="searchResults" class="dropdown hidden"></div>
     </div>
   </header>
@@ -213,7 +213,7 @@
   <!-- ASK -->
   <section id="view-ask" class="view hidden">
     <div class="card">
-      <div class="card-h"><h3>Ask StockAI</h3><span class="muted sm" id="askModel"></span></div>
+      <div class="card-h"><h3>Ask StockPilotAI</h3><span class="muted sm" id="askModel"></span></div>
       <p class="muted sm" style="margin:0 0 10px">Ask anything about your portfolio or the markets the app follows. The AI looks things up with the app's own tools (your portfolio, a stock's scores, the screener, Opportunities, Compare, the pre-trade check, news), then answers with the figures it found, each checked against the data. The tools only read: nothing is bought, sold or saved. Decision support, not financial advice.</p>
       <div class="form-row ask-row"><label class="grow">Your question<input id="askInput" maxlength="500" placeholder="e.g. Which European stock would add the most diversification to my portfolio without much risk?"></label><button class="btn" id="askGo">Ask</button></div>
       <div class="ask-examples" id="askExamples"></div>

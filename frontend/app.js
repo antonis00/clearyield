@@ -1409,17 +1409,40 @@ const currencySymbol = (code) => {
 function aiStatus(a) {
   const tip = a?.on ? `AI: ${a.model} via ${a.server}${a.thinking === "off" ? ", thinking off" : a.thinking === "on" ? ", thinking on" : ["low", "medium", "high"].includes(a.thinking) ? `, thinking ${a.thinking}` : ""}. Writes research briefs and reads screener questions.`
     : a?.problem ? `AI isn't set up: ${a.problem}` : "AI is off. Set AI_PROVIDER in .env (see .env.example) for AI-written briefs.";
-  // A click opens Ask StockAI, where the model answers questions with the app's tools
-  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask StockAI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
+  // A click opens Ask StockPilotAI, where the model answers questions with the app's tools
+  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask StockPilotAI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
 }
-const QUOTE = "“The greatest wealth is to live content with little.” Plato";
+// The quote icon shows one of these at random on each hover, never the same twice in a row.
+const QUOTES = [
+  "“The greatest wealth is to live content with little.” Plato",
+  "“The love of money is the metropolis of all evils.” Diogenes",
+  "“Nothing is enough for the man to whom enough is too little.” Epicurus",
+  "“Misers have not got wealth; wealth has got them.” Bion of Borysthenes",
+  "“It is not the man who has too little, but the man who craves more, that is poor.” Seneca",
+  "“Wealth is the slave of a wise man, the master of a fool.” Seneca",
+  "“Not to be greedy is wealth; not to be a compulsive buyer is income.” Cicero",
+  "“Endless money is the sinews of war.” Cicero",
+  "“Money amassed either serves us or rules us.” Horace",
+  "“The love of money grows as the money itself grows.” Juvenal",
+  "“Pecunia non olet” (money doesn’t stink). Vespasian",
+  "“Money alone rules all things.” Publilius Syrus",
+  "“Time is money.” Benjamin Franklin",
+  "“That man is the richest whose pleasures are the cheapest.” Thoreau",
+  "“Price is what you pay. Value is what you get.” Warren Buffett",
+];
+const QUOTE = QUOTES[0];
+const nextQuote = (el) => {
+  const others = QUOTES.filter((q) => q !== el.dataset.tip);
+  const q = others[Math.floor(Math.random() * others.length)];
+  el.dataset.tip = q; el.setAttribute("aria-label", q);
+};
 function renderModeBadge() {
   const m = state.meta, cur = m.settings.base_currency;
   $("#modeBadge").innerHTML = `<div class="status">
     ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", `${m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance."} Click to open Yahoo Finance (the stock's page when you're on one).`).replace('class="st ', 'class="st yahoo ').replace('role="img"', 'role="link" tabindex="0"')}
     ${aiStatus(m.aiInfo)}
     <span class="st cur" role="button" tabindex="0" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}. Opens the currency converter." data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings. Click to convert between currencies.">${esc(currencySymbol(cur))}</span>
-    <span class="st quote" tabindex="0" aria-label="${esc(QUOTE)}" data-tip="${esc(QUOTE)}">❝</span>
+    <span class="st quote" tabindex="0" aria-label="${esc(QUOTE)}" data-tip="${esc(QUOTE)}"><i style="--icon: url('/static/icons/column.svg')"></i></span>
   </div>`;
   const icon = $("#modeBadge .st.cur");
   icon.onclick = openConverter;
@@ -1527,6 +1550,7 @@ $("#restoreFile").onchange = async (e) => {
   document.body.appendChild(tip);
   let current = null;
   const show = (el) => {
+    if (el !== current && el.classList.contains("quote")) nextQuote(el);
     current = el; tip.textContent = el.dataset.tip; tip.classList.remove("hidden");
     const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
     const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
