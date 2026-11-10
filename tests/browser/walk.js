@@ -235,6 +235,33 @@ const SLOW = 150000;
   }
   await shot("backtest");
 
+  // ---- Portfolio backtest and futures: the same page, its other tab
+  await p.click("#btMode button[data-mode=portfolio]");
+  await p.waitForSelector("#pmRows .pm-row", { timeout: SLOW });
+  expect("portfolio sim: the tab shows a mix", !(await p.evaluate(() => document.querySelector("#btPortfolio").classList.contains("hidden"))) && (await p.locator("#pmRows .pm-row").count()) >= 1);
+  // a mix of two that doesn't add up to 100% says so, and isn't run
+  await p.evaluate(() => { document.querySelector("#pmRows").innerHTML = ""; });
+  await p.click("#pmAdd"); await p.click("#pmAdd");
+  const rowsIn = p.locator("#pmRows .pm-row");
+  await rowsIn.nth(0).locator(".pm-t").fill("SPY"); await rowsIn.nth(0).locator(".pm-w").pressSequentially("60");
+  await rowsIn.nth(1).locator(".pm-t").fill("AAPL"); await rowsIn.nth(1).locator(".pm-w").pressSequentially("30");
+  expect("portfolio sim: weights not adding to 100% are flagged", /90\.00%.*must make 100%/.test(await txt("#pmTotal")), await txt("#pmTotal"));
+  await rowsIn.nth(1).locator(".pm-w").fill("40"); await rowsIn.nth(1).locator(".pm-w").dispatchEvent("input");
+  expect("portfolio sim: 100% accepted", /100\.00%/.test(await txt("#pmTotal")) && !/must/.test(await txt("#pmTotal")), await txt("#pmTotal"));
+  await p.selectOption("#pmPeriod", "3y"); await p.fill("#pmMonthly", "100"); await p.click("#pmRunPast");
+  await p.waitForFunction(() => !document.querySelector("#pmRunPast").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
+  const past = await txt("#pmPastOut");
+  expect("portfolio sim: the past has results, a chart and each year", /Yearly return/.test(past) && /Worst fall/.test(past) && /Return on the money added/.test(past)
+    && (await p.locator("#pmYears tr").count()) >= 3 && !/undefined|NaN/.test(past) && (await canvasDrawn("#pmPastChart")), past.slice(0, 120));
+  await p.fill("#mcYears", "5"); await p.fill("#mcMonthly", "100"); await p.fill("#mcGoal", "20000"); await p.click("#mcRun");
+  await p.waitForFunction(() => !document.querySelector("#mcRun").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
+  const fut = await txt("#mcOut");
+  expect("portfolio sim: the future shows a range, the goal and its assumptions", /Middle outcome/i.test(fut) && /Bad 1 in 10/i.test(fut) && /Reaches the goal/i.test(fut)
+    && /Assumes/.test(fut) && /12-month blocks/.test(fut) && !/undefined|NaN/.test(fut) && (await canvasDrawn("#mcChart")), fut.slice(0, 120));
+  await shot("portfolio-sim");
+  await p.click("#btMode button[data-mode=single]");
+  expect("portfolio sim: back to a single asset", !(await p.evaluate(() => document.querySelector("#btSingle").classList.contains("hidden"))));
+
   // ---- Journal & alerts
   await nav("journal");
   await p.fill("#jTicker", "MSFT"); await p.selectOption("#jAction", "buy"); await p.fill("#jPrice", "400"); await p.fill("#jThesis", "walk test"); await p.fill("#jInval", "growth slows"); await p.fill("#jStop", "300"); await p.fill("#jTarget", "900"); await p.fill("#jReview", "2020-01-01");

@@ -640,13 +640,22 @@ def fx_series(currency, base, index):
     if "USD" not in (major, base):
         legs = fx_series(major, "USD", index), fx_series(base, "USD", index)
         return legs[0] / legs[1] / divisor if legs[0] is not None and legs[1] is not None else None
+    # Dates older than five years need the whole history: with five years only, every older date took the oldest
+    # rate in them (a 2019 price converted at a November 2021 rate)
+    old = len(index) and pd.Timestamp(index[0]) < pd.Timestamp.today().normalize() - pd.DateOffset(years=5) + pd.Timedelta(days=30)
     for sym, invert in ((f"{major}{base}=X", False), (f"{base}{major}=X", True)):
         try:
-            closes = history(sym, "5y")["Close"]
+            closes = history(sym, "max" if old else "5y")["Close"].dropna()
         except DataError:
             continue
+        if closes.empty:
+            continue
         rates = (1 / closes if invert else closes) / divisor
-        return rates.reindex(rates.index.union(index)).ffill().bfill().reindex(index)
+        out = rates.reindex(rates.index.union(index)).ffill().reindex(index)
+        # A date just before the first rate (a holiday, a day the FX market had no quote) takes the first one; a date
+        # further back has no rate, rather than a wrong one
+        out[(out.index < rates.index[0]) & (out.index >= rates.index[0] - pd.Timedelta(days=7))] = rates.iloc[0]
+        return out
     return None
 
 

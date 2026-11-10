@@ -1448,6 +1448,18 @@ def test_fx_series_reads_the_history():
             assert data.fx_series("QAR", "USD", idx).tolist() == [0.2747] * 4  # a peg needs no history
             assert [round(x, 6) for x in data.fx_series("GBP", "EUR", idx)] == [1.3, 1.3, round(1.3 / 1.1, 6), round(1.3 / 1.1, 6)]
             assert data.fx_series("HKD", "USD", idx) is None
+        # Dates older than five years get their own rates: with five years only, every older date took the oldest
+        # rate in them (a 2019 price converted at a 2021 rate)
+        today = pd.Timestamp.today().normalize()
+        long = pd.bdate_range(end=today, periods=9 * 261)
+        rising = pd.Series([0.8 + i * 0.0001 for i in range(len(long))], index=long)
+        with _FakeMarket({"EURUSD=X": rising}):
+            old = long[:3]
+            assert data.fx_series("EUR", "USD", old).round(6).tolist() == rising[:3].round(6).tolist()
+            # a date a few days before the first rate takes it; one well before has none, rather than a wrong one
+            early = pd.DatetimeIndex([long[0] - pd.Timedelta(days=3), long[0] - pd.Timedelta(days=40)])
+            got = data.fx_series("EUR", "USD", early)
+            assert round(got.iloc[0], 6) == round(rising.iloc[0], 6) and pd.isna(got.iloc[1]), got.tolist()
     finally:
         data.DEMO = real_demo
         db.cache_clear()
@@ -3333,6 +3345,115 @@ def test_ask_uses_the_tools_and_checks_its_figures():
     finally:
         llm.close()
         _reset()
+
+
+def test_portfolio_backtest_matches_independent_sums():
+    import pandas as pd
+
+    from backend import backtest, data, simulate
+    _reset()
+    with TestClient(app) as c:
+        # A single fund held throughout, no costs: the same as the single-asset buy & hold
+        r = c.post("/api/simulate/backtest", json={"mix": [{"ticker": "SPY", "weight": 100}], "period": "5y", "rebalance": "none",
+                                                   "cost_bps": 0, "benchmark": ""}).json()
+        b = backtest.run(data.history("SPY", "max"), "buy_hold", {}, 0, 0.04, start=pd.Timestamp(r["start"]))
+        assert abs(r["value"][-1] - b["buyHold"][-1]) < 1e-6 and abs(r["portfolio"]["cagr"] - b["benchmark"]["cagr"]) < 1e-9
+        # 50/50 rebalanced each year with 20 bps: the same as a separate day-by-day sum
+        r = c.post("/api/simulate/backtest", json={"mix": [{"ticker": "SPY", "weight": 50}, {"ticker": "AAPL", "weight": 50}],
+                                                   "period": "5y", "rebalance": "yearly", "cost_bps": 20, "benchmark": "QQQ"}).json()
+        px, _, _ = simulate.prices(["SPY", "AAPL"], "USD", 5)
+        u, yr = 10000 * 0.998 * 0.5 / px.iloc[0], px.index[0].year
+        for d, row in px.iterrows():
+            if d.year != yr:
+                v = (u * row).sum()
+                v -= (v * 0.5 - u * row).abs().sum() * 0.002
+                u, yr = v * 0.5 / row, d.year
+        assert abs(r["value"][-1] - float((u * px.iloc[-1]).sum())) < 1e-6 and r["portfolio"]["rebalances"] == len({d.year for d in px.index}) - 1
+        assert r["benchmark"]["ticker"] == "QQQ" and len(r["benchmark"]["growth"]) == len(r["dates"])
+        # the growth line starts at 100 less the purchase's cost; each year is marked when it's only part of one
+        assert abs(r["growth"][0] - 100 * 0.998) < 1e-9 and r["portfolio"]["yearly"][0]["partial"] and r["portfolio"]["worstYear"]["year"] in [y["year"] for y in r["portfolio"]["yearly"] if not y["partial"]]
+        assert any("Hindsight" in x for x in r["caveats"])
+        # A mix that is the benchmark gets no second column repeating it
+        same = c.post("/api/simulate/backtest", json={"mix": [{"ticker": "SPY", "weight": 100}], "benchmark": "SPY"}).json()
+        assert "benchmark" not in same and same["portfolio"]["cagr"] is not None
+        # The weights must add up to 100%, and a symbol Yahoo lacks is named
+        bad = c.post("/api/simulate/backtest", json={"mix": [{"ticker": "SPY", "weight": 60}, {"ticker": "AAPL", "weight": 30}]})
+        assert bad.status_code == 400 and "90.00%" in bad.json()["detail"]
+        assert c.post("/api/simulate/backtest", json={"mix": [{"ticker": "SPY", "weight": -5}, {"ticker": "AAPL", "weight": 105}]}).status_code == 400
+        assert c.post("/api/simulate/backtest", json={"mix": [{"ticker": "SPY", "weight": 100}], "rebalance": "daily"}).status_code == 400
+        # Your holdings as a starting mix, adding up to 100%
+        c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": "2025-01-06", "shares": 10, "price": 100})
+        c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "date": "2025-01-06", "shares": 3, "price": 100})
+        m = c.get("/api/simulate/mix").json()
+        assert {x["ticker"] for x in m["mix"]} == {"SPY", "AAPL"} and abs(sum(x["weight"] for x in m["mix"]) - 100) < 1e-9 and m["base"]
+    # New money each month at a flat price: no gain, and every euro counted
+    flat = pd.DataFrame({"X": 100.0, "Y": 50.0}, index=pd.bdate_range("2020-01-01", "2022-12-30"))
+    value, level, flows, _ = simulate._run(flat, {"X": 0.6, "Y": 0.4}, "none", 0, 1000, 100)
+    assert abs(value.iloc[-1] - 4500) < 1e-6 and abs(level.iloc[-1] - 1) < 1e-12 and -sum(a for _, a in flows[:-1]) == 4500  # 1,000 + 35 months
+    # ...and it goes first to what's below its target: X doubled in January, so February's 100 all buys Y. X then
+    # halves again, which shows where the money went: 5 X at 100 and 12 Y at 50 (an even split would leave 1,075)
+    idx = pd.bdate_range("2020-01-01", "2020-02-14")  # ends before March brings more money
+    x = [100.0 if d.day < 15 and d.month == 1 else 200.0 for d in idx]
+    x = [p if d < pd.Timestamp("2020-02-10") else 100.0 for d, p in zip(idx, x)]
+    v, _, _, _ = simulate._run(pd.DataFrame({"X": x, "Y": 50.0}, index=idx), {"X": 0.5, "Y": 0.5}, "none", 0, 1000, 100)
+    assert abs(v.iloc[-1] - 1100) < 1e-6, v.iloc[-1]
+    _reset()
+
+
+def test_monte_carlo_matches_formulas():
+    import numpy as np
+
+    from backend import simulate
+    # Constant returns: every path is the compound-interest sum, money added at each month's start
+    r = 0.005
+    v, _ = simulate.project(np.log1p(np.full(60, r)), 1000, 100, 120, paths=200)
+    fv = 1000 * (1 + r) ** 120 + 100 * sum((1 + r) ** k for k in range(1, 121))
+    assert abs(v[:, -1].min() - fv) < 1e-6 and abs(v[:, -1].max() - fv) < 1e-6
+    # Nothing earned: exactly what went in
+    v, _ = simulate.project(np.zeros(40), 500, 25, 36, paths=100)
+    assert np.allclose(v[:, -1], 1400)
+    # An assumed yearly return is what the paths grow at on average, keeping history's ups and downs
+    hist = np.log1p(np.random.default_rng(3).normal(0.01, 0.04, 80))
+    _, idx = simulate.project(hist, 1000, 0, 240, paths=20000, expected=0.05)
+    assert abs(np.expm1(np.log(idx[:, -1]).mean() / 20) - 0.05) < 0.002
+    # Blocks are 12 months in a row from history, wrapping round at its end; the same seed gives the same futures
+    d = simulate._draw(np.arange(30.0), 24, 5, 12, np.random.default_rng(0))
+    assert all(((np.diff(row[:12]) == 1) | (np.diff(row[:12]) == -29)).all() for row in d)
+    a, _ = simulate.project(hist, 1000, 50, 60, paths=500, seed=7)
+    b, _ = simulate.project(hist, 1000, 50, 60, paths=500, seed=7)
+    assert (a == b).all()
+    # Whole months only: a part-month at either end isn't a month's return
+    import pandas as pd
+    level = pd.Series(1.0, index=pd.bdate_range("2020-01-15", "2020-05-12"))
+    assert [str(p) for p in simulate.monthly_returns(level).index] == ["2020-02", "2020-03", "2020-04"]
+    # A fund with a short history takes an older same-index fund's moves before it, scaled to meet its first price;
+    # without stand-ins it starts where its own history does
+    days = pd.bdate_range("2010-01-04", "2020-12-31")
+    older = pd.Series([50.0 * 1.0003 ** i for i in range(len(days))], index=days)
+    own = pd.Series([200.0 * 1.0002 ** i for i in range(len(days[days >= "2019-07-29"]))], index=days[days >= "2019-07-29"])
+    with _FakeMarket({"VWCE.DE": own, "VT": older}):
+        used = []
+        px, _, _ = simulate.prices(["VWCE.DE"], "USD", None, True, used)
+        assert px.index[0] == days[0] and abs(px["VWCE.DE"].loc[own.index[0]] - 200.0) < 1e-9
+        assert abs(px["VWCE.DE"].iloc[0] / px["VWCE.DE"].loc[own.index[0]] - older.iloc[0] / older.loc[own.index[0]]) < 1e-9  # joined on the fund's first day, so the move across the joint is the stand-in's
+        assert used == [{"ticker": "VWCE.DE", "standIn": "VT", "from": "2010-01-04", "until": "2019-07-29"}]
+        assert simulate.prices(["VWCE.DE"], "USD")[0].index[0] == own.index[0]
+    _reset()
+    with TestClient(app) as c:
+        body = {"mix": [{"ticker": "SPY", "weight": 60}, {"ticker": "AAPL", "weight": 40}], "years": 10, "start_value": 10000,
+                "monthly": 200, "paths": 2000, "inflation": 0.02, "goal": 30000}
+        out = c.post("/api/simulate/future", json=body).json()
+        bands = [out["nominal"][str(p)][-1] for p in simulate.PERCENTILES]
+        assert bands == sorted(bands) and len(out["years"]) == 11 and out["invested"][-1] == 10000 + 120 * 200
+        assert out["real"]["50"][-1] < out["nominal"]["50"][-1] and 0 <= out["final"]["reachGoal"] <= 1 and out["assumption"]["months"] >= 36
+        assert out["assumption"]["usedYearly"] == out["assumption"]["historicalYearly"] and len(out["caveats"]) == 4
+        # Assuming a lower return moves the whole range down; history's swings stay
+        low = c.post("/api/simulate/future", json={**body, "expected": -0.02}).json()
+        assert low["final"]["median"] < out["final"]["median"] or out["assumption"]["historicalYearly"] < -0.02
+        assert abs(low["assumption"]["historicalVolatility"] - out["assumption"]["historicalVolatility"]) < 1e-12
+        for bad in ({"years": 0}, {"paths": 10}, {"expected": 0.9}, {"inflation": -0.01}):
+            assert c.post("/api/simulate/future", json={**body, **bad}).status_code == 400, bad
+    _reset()
 
 
 def test_ask_checks_quotes_and_search_years():

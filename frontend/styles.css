@@ -290,3 +290,14 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .ask-steps summary { cursor: pointer; }
 .ask-steps ol { margin: 6px 0 0 18px; padding: 0; }
 .ask-steps li.warn { color: var(--accent); }
+
+/* Portfolio backtest */
+.bt-switch { margin-bottom: 12px; align-items: center; }
+.form-row label.check { flex-direction: row; align-items: center; gap: 6px; align-self: flex-end; padding-bottom: 8px; }
+.form-row label.check input { min-width: 0; }
+.pm-rows { display: grid; gap: 4px; margin-bottom: 8px; }
+.pm-row { align-items: end; }
+.pm-row .pm-t { width: 140px; text-transform: uppercase; }
+.pm-row .pm-w { width: 90px; }
+#pmKpis, #mcKpis { margin-bottom: 14px; }
+#pmPastOut .grid2 { margin-top: 14px; }

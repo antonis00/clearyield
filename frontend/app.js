@@ -122,7 +122,7 @@ function show(view, push = true) {
     const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup }[view] || (() => {}))();
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView }[view] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
 
@@ -1093,6 +1093,132 @@ $("#btnBt").onclick = async () => {
       ["Sharpe", "sharpe", (v) => num(v)], ["Max drawdown", "maxDrawdown", (v) => cpct(v)], ["Trades", "trades", (v) => num(v, 0)], ["Time in market", "exposure", (v) => pct(v, 0, false)]];
     $("#btTable").innerHTML = `<table><tr><th>Metric</th><th class="num">${esc(d.label)}</th><th class="num">Buy &amp; hold</th></tr>${m.map(([l, k, f]) => `<tr><td>${l}</td><td class="num">${f(d.strategy[k])}</td><td class="num">${k === "exposure" ? "100%" : f(d.benchmark[k])}</td></tr>`).join("")}</table>`;
     $("#btCaveats").innerHTML = d.caveats.map((c) => `<li class="t-1">${esc(c)}</li>`).join("");
+  } catch (e) { toast(e.message); } finally { b.disabled = false; }
+};
+
+/* ---------------------------------------------------------------- portfolio backtest and futures */
+// One mix feeds both: how it did (a day-by-day backtest) and what it might do (paths drawn from its own months).
+const PM = { loaded: false, base: "USD" };
+const BT_HINT = { single: "One asset, one trading rule.", portfolio: "A mix of assets: how it did, and a range of what it might do." };
+function setBtMode(mode, load = true) {
+  $$("#btMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  $("#btSingle").classList.toggle("hidden", mode !== "single");
+  $("#btPortfolio").classList.toggle("hidden", mode !== "portfolio");
+  $("#btModeHint").textContent = BT_HINT[mode];
+  try { localStorage.setItem("btMode", mode); } catch { /* not remembered, but still shown */ }
+  if (mode === "portfolio" && load) pmLoad().catch((e) => toast(e.message));
+}
+$$("#btMode button").forEach((b) => b.onclick = () => setBtMode(b.dataset.mode));
+function btMode() { try { return localStorage.getItem("btMode") === "portfolio" ? "portfolio" : "single"; } catch { return "single"; } }
+setBtMode(btMode(), false);
+function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) => toast(e.message)); }
+
+function pmRow(ticker = "", weight = "") {
+  const row = document.createElement("div");
+  row.className = "form-row inline pm-row";
+  row.innerHTML = `<label>Asset<input class="pm-t" value="${esc(ticker)}" placeholder="e.g. VWCE.DE" autocomplete="off"></label>
+    <label>Weight (%)<input class="pm-w" type="number" min="0" max="100" step="0.1" value="${esc(String(weight))}"></label>
+    <button class="btn ghost sm pm-del" title="Remove this asset" aria-label="Remove">✕</button>`;
+  row.querySelector(".pm-del").onclick = () => { row.remove(); pmTotal(); };
+  row.querySelectorAll("input").forEach((i) => { i.oninput = () => pmTotal(); });
+  $("#pmRows").append(row);
+}
+function pmMix() {
+  return $$("#pmRows .pm-row").map((r) => ({ ticker: r.querySelector(".pm-t").value.trim().toUpperCase(), weight: Number(r.querySelector(".pm-w").value || 0) }))
+    .filter((m) => m.ticker);
+}
+function pmTotal() {
+  const t = pmMix().reduce((s, m) => s + m.weight, 0), good = Math.abs(t - 100) <= 0.05;
+  $("#pmTotal").innerHTML = `Weights add up to <b class="${good ? "up" : "down"}">${t.toFixed(2)}%</b>${good ? "" : " (they must make 100%)"}`;
+  return good;
+}
+async function pmLoad(fromHoldings = false) {
+  if (PM.loaded && !fromHoldings) return;
+  const d = await api("/api/simulate/mix");
+  PM.base = d.base;
+  if (!PM.loaded) {
+    $("#pmRebal").innerHTML = Object.entries(d.rebalance).map(([k, v]) => `<option value="${k}" ${k === "yearly" ? "selected" : ""}>${esc(v)}</option>`).join("");
+    [["#pmStartLabel", "Start amount"], ["#pmMonthlyLabel", "Add each month"], ["#mcStartLabel", "Start amount"], ["#mcMonthlyLabel", "Add each month"], ["#mcGoalLabel", "Goal, in today's money"]]
+      .forEach(([id, text]) => { $(id).firstChild.textContent = `${text} (${d.base})`; });
+  }
+  PM.loaded = true;
+  $("#pmRows").innerHTML = "";
+  const mix = d.mix.length ? d.mix : [{ ticker: "VWCE.DE", weight: 80 }, { ticker: "SPY", weight: 20 }];
+  mix.forEach((m) => pmRow(m.ticker, m.weight));
+  pmTotal();
+  if (fromHoldings && !d.mix.length) toast("You hold nothing yet, so an example mix is shown.");
+}
+$("#pmMine").onclick = () => pmLoad(true).catch((e) => toast(e.message));
+$("#pmAdd").onclick = () => { pmRow(); pmTotal(); };
+function pmBody() {
+  if (!pmTotal()) throw new Error("The weights must add up to 100%.");
+  return { mix: pmMix(), rebalance: $("#pmRebal").value, cost_bps: Number($("#pmCost").value || 0), stand_ins: $("#pmStand").checked };
+}
+const pmMoney = (v) => money(v, PM.base, 0);
+
+$("#pmRunPast").onclick = async () => {
+  const b = $("#pmRunPast"); b.disabled = true;
+  try {
+    const d = await api("/api/simulate/backtest", { method: "POST", body: { ...pmBody(), period: $("#pmPeriod").value, start_value: Number($("#pmStart").value || 0), monthly: Number($("#pmMonthly").value || 0) } });
+    const p = d.portfolio, bm = d.benchmark, adding = Number($("#pmMonthly").value || 0) > 0;
+    $("#pmPastOut").classList.remove("hidden");
+    $("#pmKpis").innerHTML = [
+      ["Yearly return", cpct(p.cagr), `${d.start} to ${d.end}`],
+      ["Worst fall", cpct(p.maxDrawdown), `from a high to a later low`],
+      ["Longest below a high", `${Math.round(p.longestUnderwaterDays / 30.4)} months`, p.underwaterNow ? "still below it now" : "before a new high"],
+      ["Final value", pmMoney(p.finalValue), `${pmMoney(p.invested)} put in`],
+    ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s muted">${esc(s)}</div></div>`).join("");
+    mkChart("pmPastChart", { type: "line", data: { labels: d.dates, datasets: [
+      { label: "The mix (growth of 100)", data: d.growth, borderColor: C("--accent"), borderWidth: 2, pointRadius: 0 },
+      ...(bm ? [{ label: `${bm.ticker} held throughout`, data: bm.growth, borderColor: C("--muted"), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 }] : [])] },
+      options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 10 } } } } });
+    const rows = [["Yearly return", "cagr", (v) => cpct(v)], ["Total return", "totalReturn", (v) => cpct(v)], ["Volatility", "volatility", (v) => pct(v, 1, false)],
+      ["Worst fall", "maxDrawdown", (v) => cpct(v)], ["Sharpe", "sharpe", (v) => num(v)], ["Best full year", "bestYear", (v) => v ? `${cpct(v.return)} <span class="muted">${v.year}</span>` : "—"],
+      ["Worst full year", "worstYear", (v) => v ? `${cpct(v.return)} <span class="muted">${v.year}</span>` : "—"],
+      ...(adding ? [["Return on the money added", "moneyWeightedReturn", (v) => cpct(v)]] : [])];
+    $("#pmPastTable").innerHTML = `<table><tr><th>Measure</th><th class="num">The mix</th>${bm ? `<th class="num">${esc(bm.ticker)}</th>` : ""}</tr>
+      ${rows.map(([l, k, f]) => `<tr><td>${l}</td><td class="num">${f(p[k])}</td>${bm ? `<td class="num">${f(bm[k])}</td>` : ""}</tr>`).join("")}
+      <tr><td>Rebalanced</td><td class="num">${Object.keys(d.weights).length > 1 ? `${esc(d.rebalance)} (${p.rebalances} times)` : "not needed: one asset"}</td>${bm ? `<td class="num">never</td>` : ""}</tr></table>`;
+    const bmYear = Object.fromEntries((bm?.yearly || []).map((y) => [y.year, y.return]));
+    $("#pmYears").innerHTML = `<table><tr><th>Year</th><th class="num">The mix</th>${bm ? `<th class="num">${esc(bm.ticker)}</th>` : ""}</tr>
+      ${p.yearly.map((y) => `<tr><td>${y.year}${y.partial ? ' <span class="muted sm">(part)</span>' : ""}</td><td class="num">${cpct(y.return)}</td>${bm ? `<td class="num">${cpct(bmYear[y.year])}</td>` : ""}</tr>`).join("")}</table>`;
+    $("#pmPastCaveats").innerHTML = d.caveats.map((c) => `<li class="t-1">${esc(c)}</li>`).join("");
+  } catch (e) { toast(e.message); } finally { b.disabled = false; }
+};
+
+$("#mcRun").onclick = async () => {
+  const b = $("#mcRun"); b.disabled = true;
+  const opt = (id, scale = 1) => ($(id).value === "" ? null : Number($(id).value) * scale);
+  try {
+    const d = await api("/api/simulate/future", { method: "POST", body: { ...pmBody(), period: "max", years: Number($("#mcYears").value || 10),
+      start_value: Number($("#mcStart").value || 0), monthly: Number($("#mcMonthly").value || 0), expected: opt("#mcExpected", 0.01),
+      inflation: (opt("#mcInfl", 0.01) || 0), goal: opt("#mcGoal") } });
+    const a = d.assumption, f = d.final, real = !!d.real, show = real ? d.real : d.nominal, word = real ? "in today's money" : "";
+    $("#mcOut").classList.remove("hidden");
+    $("#mcKpis").innerHTML = [
+      ["Middle outcome", pmMoney(real ? f.medianReal : f.median), `after ${d.years[d.years.length - 1]} years ${word}`.trim()],
+      ["Bad 1 in 10", pmMoney(show["10"].at(-1)), "or worse"],
+      ["Good 1 in 10", pmMoney(show["90"].at(-1)), "or better"],
+      ["Put in", pmMoney(d.invested.at(-1)), `ends below it in ${pct(f.belowInvested, 1, false)} of futures`],
+      ...(d.goal ? [["Reaches the goal", pct(f.reachGoal, 0, false), `of futures reach ${pmMoney(d.goal)}`]] : []),
+      ["A fall of 30%+ on the way", pct(d.falls.worseThan30, 0, false), `of futures; the middle one's worst fall ${pct(d.falls.median, 0)}`],
+    ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s muted">${esc(s)}</div></div>`).join("");
+    const band = (k) => show[k], none = { borderWidth: 0, pointRadius: 0 };
+    mkChart("mcChart", { type: "line", data: { labels: d.years.map((y) => `${y}y`), datasets: [
+      { label: "10th percentile", data: band("10"), ...none, fill: false },
+      { label: "10th to 90th", data: band("90"), ...none, fill: 0, backgroundColor: tint("--accent", "1f") },
+      { label: "25th percentile", data: band("25"), ...none, fill: false },
+      { label: "25th to 75th", data: band("75"), ...none, fill: 2, backgroundColor: tint("--accent", "3d") },
+      { label: "Middle (50th)", data: band("50"), borderColor: C("--accent"), borderWidth: 2, pointRadius: 0 },
+      { label: "Put in", data: d.invested.map((v, i) => real ? v / (1 + a.inflation) ** d.years[i] : v), borderColor: C("--muted"), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 }] },
+      options: { interaction: { mode: "index", intersect: false },
+        plugins: { legend: { labels: { filter: (item) => !/percentile$/.test(item.text) } },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${pmMoney(c.parsed.y)}` } } },
+        scales: { y: { ticks: { callback: (v) => pmMoney(v) } } } } });
+    $("#mcLegend").textContent = `Shaded: the middle half of futures (25th to 75th percentile) and 8 in 10 (10th to 90th). Assumes ${pct(a.usedYearly, 1)} a year`
+      + `${a.expected == null ? ` as in its history` : ` (its history: ${pct(a.historicalYearly, 1)})`}, with history's swings (volatility ${pct(a.historicalVolatility, 1, false)}, worst month ${pct(a.worstMonth, 1)}).`
+      + ` ${a.paths.toLocaleString()} futures${real ? `, ${pct(a.inflation, 1, false)} inflation taken out` : ""}.`;
+    $("#mcCaveats").innerHTML = d.caveats.map((c) => `<li class="t-1">${esc(c)}</li>`).join("");
   } catch (e) { toast(e.message); } finally { b.disabled = false; }
 };
 
