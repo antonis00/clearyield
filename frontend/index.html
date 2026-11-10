@@ -321,6 +321,54 @@
 
   <!-- BACKTEST -->
   <section id="view-backtest" class="view hidden">
+    <div class="form-row bt-switch"><div class="seg" id="btMode"><button data-mode="single" class="on">Single asset</button><button data-mode="portfolio">Portfolio</button></div>
+      <span class="muted sm" id="btModeHint">One asset, one trading rule.</span></div>
+    <div id="btPortfolio" class="hidden">
+      <div class="card">
+        <div class="card-h"><h3>The mix</h3><div class="form-row inline"><button class="btn ghost sm" id="pmMine">Use my portfolio</button><button class="btn ghost sm" id="pmAdd">+ Asset</button></div></div>
+        <div id="pmRows" class="pm-rows"></div>
+        <div class="form-row">
+          <span id="pmTotal" class="sm"></span>
+          <label>Rebalance<select id="pmRebal"></select></label>
+          <label>Cost (bps)<input type="number" id="pmCost" value="10" min="0" max="500"></label>
+          <label class="check" title="Before a fund's own history begins, use an older fund tracking almost the same index (VWCE.DE: VT, from 2008)"><input type="checkbox" id="pmStand" checked> Longer history from similar older funds</label>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Past: how this mix did</h3></div>
+        <div class="form-row">
+          <label>Period<select id="pmPeriod"><option value="3y">3y</option><option value="5y">5y</option><option value="10y" selected>10y</option><option value="max">Max</option></select></label>
+          <label id="pmStartLabel">Start amount<input type="number" id="pmStart" value="10000" min="1"></label>
+          <label id="pmMonthlyLabel">Add each month<input type="number" id="pmMonthly" value="0" min="0"></label>
+          <button class="btn" id="pmRunPast">Run backtest</button>
+        </div>
+        <div id="pmPastOut" class="hidden">
+          <div class="kpis" id="pmKpis"></div>
+          <canvas id="pmPastChart" height="110"></canvas>
+          <div class="grid2"><div id="pmPastTable" class="tablewrap"></div><div id="pmYears" class="tablewrap"></div></div>
+          <ul id="pmPastCaveats" class="signals"></ul>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Future: a range of outcomes</h3><span class="muted sm">Thousands of possible futures, built from this mix's own history</span></div>
+        <div class="form-row">
+          <label>Years<input type="number" id="mcYears" value="10" min="1" max="50"></label>
+          <label id="mcStartLabel">Start amount<input type="number" id="mcStart" value="10000" min="1"></label>
+          <label id="mcMonthlyLabel">Add each month<input type="number" id="mcMonthly" value="0" min="0"></label>
+          <label>Yearly return to assume (%)<input type="number" id="mcExpected" placeholder="as in history" step="0.5"></label>
+          <label>Inflation (%)<input type="number" id="mcInfl" value="2" min="0" step="0.5"></label>
+          <label id="mcGoalLabel">Goal<input type="number" id="mcGoal" placeholder="optional" min="0"></label>
+          <button class="btn" id="mcRun">Simulate</button>
+        </div>
+        <div id="mcOut" class="hidden">
+          <div class="kpis" id="mcKpis"></div>
+          <canvas id="mcChart" height="110"></canvas>
+          <p class="muted sm" id="mcLegend"></p>
+          <ul id="mcCaveats" class="signals"></ul>
+        </div>
+      </div>
+    </div>
+    <div id="btSingle">
     <div class="card">
       <div class="form-row">
         <label>Ticker<input id="bTicker" value="SPY"></label>
@@ -335,6 +383,7 @@
     <div class="grid2">
       <div class="card"><div class="card-h"><h3>Results</h3></div><div id="btTable" class="tablewrap"></div></div>
       <div class="card"><div class="card-h"><h3>Read before trusting this</h3></div><ul id="btCaveats" class="signals"></ul></div>
+    </div>
     </div>
   </section>
 

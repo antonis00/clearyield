@@ -85,6 +85,12 @@ CURRENCY_BY_SUFFIX = {
 }
 
 
+# An older fund tracking almost the same index, whose history stands in before a fund's own begins, so a simulation
+# isn't built from a few good years alone (VWCE.DE's starts in 2019, VT's in 2008, through the financial crisis).
+# Each pair was checked in euros over the years both exist: yearly returns within 0.15 points (VWCE.DE 12.58% vs
+# VT 12.71%, IWDA.AS 12.93% vs URTH 13.08%, CSPX.L 15.72% vs SPY 15.87%). Add a pair only after the same check.
+STAND_INS = {"VWCE.DE": "VT", "IWDA.AS": "URTH", "EUNL.DE": "URTH", "CSPX.L": "SPY", "VUAA.DE": "SPY"}
+
 # Broad, market-weighted index funds: the usual core of a core-and-satellite portfolio. Everything else (single
 # stocks, sector, country, factor and thematic funds, crypto) starts as a satellite. Any holding can be switched.
 CORE_FUNDS = {

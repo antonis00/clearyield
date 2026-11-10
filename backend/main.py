@@ -94,7 +94,7 @@ from fastapi import Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, portfolio  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, portfolio, simulate  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import MACRO, UNIVERSE, search as uni_search  # noqa: E402
 
@@ -615,6 +615,48 @@ def run_backtest(body: dict = Body(...)):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return ok({"ticker": t, **res})
+
+
+# ---------------------------------------------------------------- portfolio simulations
+@app.get("/api/simulate/mix")
+def simulate_mix():
+    """Your holdings today as a mix to start from, with the base currency and benchmark the tests use."""
+    settings = db.get_settings()
+    return ok({"mix": simulate.current_mix(portfolio.summary(settings)), "base": settings["base_currency"],
+               "benchmark": settings.get("benchmark"), "rebalance": simulate.REBALANCE, "periods": list(simulate.PERIODS)})
+
+
+@app.post("/api/simulate/backtest")
+def simulate_backtest(body: dict = Body(...)):
+    settings = db.get_settings()
+    bench = str(body.get("benchmark", settings.get("benchmark")) or "").strip().upper() or None
+    try:
+        res = simulate.backtest(body.get("mix"), settings["base_currency"], bench, str(body.get("period", "10y")),
+                                str(body.get("rebalance", "yearly")), _number(body, "cost_bps", 10.0),
+                                _number(body, "start_value", 10000.0), _number(body, "monthly", 0.0),
+                                settings.get("risk_free_rate", 0.04), body.get("stand_ins", True) is not False)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
+    return ok(res)
+
+
+@app.post("/api/simulate/future")
+def simulate_future(body: dict = Body(...)):
+    settings = db.get_settings()
+    opt = lambda k: _number(body, k) if body.get(k) not in (None, "") else None
+    try:
+        res = simulate.monte_carlo(body.get("mix"), settings["base_currency"], _number(body, "years", 10.0),
+                                   _number(body, "start_value", 10000.0), _number(body, "monthly", 0.0),
+                                   str(body.get("rebalance", "yearly")), _number(body, "cost_bps", 10.0), str(body.get("period", "max")),
+                                   int(_number(body, "paths", 5000.0)), opt("expected"), _number(body, "inflation", 0.0), opt("goal"),
+                                   rf=settings.get("risk_free_rate", 0.04), stand_ins=body.get("stand_ins", True) is not False)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
+    return ok(res)
 
 
 # ---------------------------------------------------------------- journal
