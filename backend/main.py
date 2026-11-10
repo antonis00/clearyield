@@ -100,6 +100,8 @@ from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, se
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stockpilot")
+# The page checks /api/progress every second or two while data downloads; those checks stay out of the request log
+logging.getLogger("uvicorn.access").addFilter(lambda r: "/api/progress" not in r.getMessage())
 ALERT_INTERVAL = int(os.getenv("ALERT_CHECK_MINUTES", "15")) * 60
 
 
@@ -509,6 +511,12 @@ def fx(src: str = "EUR", dst: str = "USD"):
     except data.DataError as e:
         raise HTTPException(404, str(e))
     return ok({"from": src, "to": dst, "rate": rate, "stale": data.is_stale_fx(src) or data.is_stale_fx(dst)})
+
+
+@app.get("/api/progress")
+def progress():
+    """How far the long scorings under way have got (the day's first downloads), for the page's loader."""
+    return ok(insights.progress())
 
 
 @app.get("/api/opportunities")

@@ -2,7 +2,9 @@
 import datetime as dt
 from collections import defaultdict
 import json
+import itertools
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,7 +13,7 @@ import pandas as pd
 
 from . import data, db, ledger, scoring
 from . import indicators as ind
-from .universe import CORE_FUNDS, REGIONS, tickers_for
+from .universe import CORE_FUNDS, REGIONS, region_of, tickers_for
 
 log = logging.getLogger("stockpilot.insights")
 
@@ -84,20 +86,67 @@ BATCH = 40           # a long list is scored this many at a time...
 GENTLE_FROM = 100    # ...when it has more than this many
 
 
-def rows_for(tickers, settings, workers=8, patience=60):
+# ---------------------------------------------------------------- progress of long scorings
+# The day's first Screener, Opportunities or sector ranking downloads every stock, which takes a while: each long list
+# being scored is kept here with how far it has got, overall and per region, so the page can show real progress.
+TRACK_FROM = 20  # a shorter list is quick: nothing to show
+_jobs, _jobs_lock, _job_ids = {}, threading.Lock(), itertools.count(1)
+
+
+def progress():
+    """The long scorings under way, oldest first: what for (`kind`), how many of how many, per region, seconds so far,
+    and the seconds left of a pause Yahoo asked for (the scoring waits it out)."""
+    now = time.time()
+    with _jobs_lock:
+        jobs = [{**j, "regions": {r: list(v) for r, v in j["regions"].items()}, "elapsed": now - j["started"]} for j in _jobs.values()]
+    return {"jobs": sorted(jobs, key=lambda j: j["started"]), "pause": data.rate_limited_for()}
+
+
+def _tracked(tickers, kind):
+    """A job entry for a long list, and the function that counts one ticker done; None for a short list."""
+    if len(tickers) < TRACK_FROM:
+        return None, lambda t: None
+    regions = {}
+    for t in tickers:
+        regions.setdefault(region_of(t), [0, 0])[1] += 1
+    job = {"id": next(_job_ids), "kind": kind, "done": 0, "total": len(tickers), "started": time.time(), "regions": regions}
+    with _jobs_lock:
+        _jobs[job["id"]] = job
+
+    def tick(t):
+        with _jobs_lock:
+            job["done"] += 1
+            job["regions"][region_of(t)][0] += 1
+    return job, tick
+
+
+def rows_for(tickers, settings, workers=8, patience=60, kind="scoring"):
     """Each ticker's quick row. A long list goes in batches, and when Yahoo has just refused for asking too much, the
-    next batch waits for the pause to end (up to `patience` seconds in all) rather than asking hundreds more times."""
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        if len(tickers) <= GENTLE_FROM:
-            return list(ex.map(lambda t: _quick_row(t, settings), tickers))
-        out, waited = [], 0.0
-        for i in range(0, len(tickers), BATCH):
-            while (pause := data.rate_limited_for()) > 0 and waited < patience:
-                step = min(pause, 15.0, patience - waited)
-                time.sleep(step)
-                waited += step
-            out.extend(ex.map(lambda t: _quick_row(t, settings), tickers[i:i + BATCH]))
-        return out
+    next batch waits for the pause to end (up to `patience` seconds in all) rather than asking hundreds more times.
+    A long list's progress is kept for `progress()` while it runs, under `kind` (what it's for)."""
+    job, tick = _tracked(tickers, kind)
+
+    def row(t):
+        try:
+            return _quick_row(t, settings)
+        finally:
+            tick(t)
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            if len(tickers) <= GENTLE_FROM:
+                return list(ex.map(row, tickers))
+            out, waited = [], 0.0
+            for i in range(0, len(tickers), BATCH):
+                while (pause := data.rate_limited_for()) > 0 and waited < patience:
+                    step = min(pause, 15.0, patience - waited)
+                    time.sleep(step)
+                    waited += step
+                out.extend(ex.map(row, tickers[i:i + BATCH]))
+            return out
+    finally:
+        if job:
+            with _jobs_lock:
+                _jobs.pop(job["id"], None)
 
 
 # ---------------------------------------------------------------- ownership
@@ -163,7 +212,7 @@ def peer_table(settings, fresh=False, patience=60):
     table = None if fresh else db.cache_get(key, PEERS_FOR)
     if table is None:
         table = {}
-        for r in rows_for(tickers_for(regions), settings, 6, patience):
+        for r in rows_for(tickers_for(regions), settings, 6, patience, kind="ranks"):
             if "error" in r or r.get("assetClass") != "Stocks" or not r.get("sector"):
                 continue
             table[r["ticker"]] = {"sector": r["sector"], "region": r.get("region"), **{k: r.get(f"f_{k}") for k in RANKED[1:]}}
@@ -291,7 +340,7 @@ def opportunities(settings, markets):
     mine = followed(settings)
     markets = [REGION_OF_COUNTRY[LEGACY_MARKETS[m][0]] if m in LEGACY_MARKETS else m for m in (markets or [])]  # "US": its region
     markets = [m for m in dict.fromkeys(markets or mine) if m in mine] or mine
-    rows = rows_for(tickers_for(markets), settings)
+    rows = rows_for(tickers_for(markets), settings, kind="opportunities")
     failed = [r["ticker"] for r in rows if "error" in r]
     stocks = [r for r in rows if "error" not in r and r.get("assetClass") == "Stocks" and r.get("composite") is not None]
     for r in stocks:
@@ -361,7 +410,7 @@ def screen(body, settings):
         asked = list(dict.fromkeys(REGION_OF_COUNTRY[c] for c in countries if c in REGION_OF_COUNTRY))
     markets = [m for m in (asked or offered) if m in offered] or offered
     tickers = tickers_for(markets) + [t.strip().upper() for t in (body.get("extra") or []) if t.strip()]
-    rows = rows_for(list(dict.fromkeys(tickers)), settings)
+    rows = rows_for(list(dict.fromkeys(tickers)), settings, kind="screener")
     ok, failed = [r for r in rows if "error" not in r], [r["ticker"] for r in rows if "error" in r]
 
     debt_skipped = []

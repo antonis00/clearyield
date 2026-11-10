@@ -127,13 +127,14 @@ label.block { margin: 8px 0; }
 h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .3px; }
 h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .6px; }
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-.grid2 > .card, .grid4 > .card { margin-bottom: 0; }
+.grid2 > .card, .grid3 > .card, .grid4 > .card { margin-bottom: 0; }
 .grid2:has(> .card.hidden) { grid-template-columns: 1fr; } /* one card left: it takes the whole row */
-.grid2, .grid4 { margin-bottom: 16px; }
+.grid2, .grid3, .grid4 { margin-bottom: 16px; }
 /* Compare's metrics table needs about 700px, so its pair stacks well before the other two-column grids */
 @media (max-width: 1700px) { .cmp-grid { grid-template-columns: 1fr; } }
-@media (max-width: 1100px) { .grid2, .grid4 { grid-template-columns: 1fr; } .side { width: 64px; } .brand span:not(.logo), nav a { font-size: 0; } nav a::first-letter { font-size: 14px; } }
+@media (max-width: 1100px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .side { width: 64px; } .brand span:not(.logo), nav a { font-size: 0; } nav a::first-letter { font-size: 14px; } }
 .empty { padding: 80px 0; text-align: center; color: var(--muted); }
 
 /* macro strip */
@@ -267,11 +268,19 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 
 /* Opportunities: the page's charts, and the dashboard card */
 .opp-chart { position: relative; height: 340px; }
+.card-h-sub { flex-direction: column; align-items: flex-start; gap: 4px; } /* the subtitle on its own line under the title */
+.opp-map-card .opp-chart { height: 440px; } /* the map has the page's width: taller to match */
+#oppStatus .dl-loader { max-width: none; } /* the page's loader takes the card's width */
+.opp-map-tools { display: flex; align-items: center; gap: 10px; min-height: 32px; } /* as tall with the button as without, so the map doesn't jump: Reset zoom (shown while zoomed in) sits beside the note, off the map */
+#oppMap { touch-action: none; } /* a drag moves the zoomed map, not the page */
 .opp-empty { padding: 30px 0; text-align: center; }
 #dashOpp { cursor: pointer; }
 .opp-dash { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; align-items: start; }
 .opp-dash-chart { position: relative; height: 190px; }
 .opp-dash-list { display: flex; flex-direction: column; gap: 6px; }
+.opp-dash.loading .opp-dash-chart { display: none; } /* while scoring, the message has the whole card, centred */
+.opp-dash.loading .opp-dash-list { grid-column: 1 / -1; min-height: 190px; align-items: center; justify-content: center; }
+.opp-dash.loading .dl-loader { width: min(720px, 100%); }
 .opp-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
 .opp-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) { .opp-dash { grid-template-columns: 1fr; } }
@@ -318,3 +327,31 @@ nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu
    the logo is level with the search box */
 @media (max-width: 1100px) { nav a.nav-ask .nav-ico { margin-right: 0; font-size: 14px; } .brand span:not(.logo) { display: none; } }
 .cv-cur { min-width: 210px; }
+
+/* The day's first downloads: real progress, region by region (dlLoader), and the background badge in the top bar */
+.dl-loader { max-width: 720px; margin: 8px 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); font: 13px var(--sans);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--panel2)), var(--panel2) 60%); }
+.dl-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.dl-count { margin-left: auto; font: 500 12px var(--mono); color: var(--muted); }
+.dl-mark { color: var(--accent); display: inline-block; font-size: 15px; line-height: 1; animation: dl-pulse 1.6s ease-in-out infinite; }
+@keyframes dl-pulse { 0%, 100% { transform: scale(1) rotate(0); opacity: 1; } 50% { transform: scale(.8) rotate(90deg); opacity: .6; } }
+.dl-bar { position: relative; height: 8px; margin: 12px 0 10px; border-radius: 99px; background: color-mix(in srgb, var(--line) 70%, transparent); overflow: hidden; }
+.dl-bar i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit; transition: width .6s ease;
+  background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+.dl-bar i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent);
+  transform: translateX(-100%); animation: dl-shine 1.4s linear infinite; }
+@keyframes dl-shine { to { transform: translateX(100%); } }
+.dl-loader.paused .dl-bar i { background: var(--neutral); }
+.dl-loader.paused .dl-bar i::after, .dl-loader.paused .dl-mark { animation-play-state: paused; }
+.dl-regions { display: flex; flex-wrap: wrap; gap: 6px; }
+.dl-reg { font-size: 12px; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent2) 22%, transparent) calc(var(--p) * 100%), transparent 0); }
+.dl-reg b { font: 500 11px var(--mono); margin-left: 3px; }
+.dl-reg.busy { color: var(--text); border-color: color-mix(in srgb, var(--accent2) 60%, var(--line)); }
+.dl-reg.done { color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, var(--line)); background: color-mix(in srgb, var(--up) 10%, transparent); }
+.dl-foot { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; font-size: 12px; }
+.dl-eta { color: var(--text); }
+.bg-progress { position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 7px 12px 9px; border: 1px solid var(--line); border-radius: 99px;
+  font-size: 12px; color: var(--muted); background: var(--panel); overflow: hidden; cursor: default; }
+.bg-progress i { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; transition: width .6s ease; background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+@media (prefers-reduced-motion: reduce) { .dl-mark, .dl-bar i::after { animation: none; } }

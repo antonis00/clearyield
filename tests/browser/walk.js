@@ -117,6 +117,27 @@ const SLOW = 150000;
   await p.fill("#globalSearch", "cheap"); await p.waitForFunction(() => /Ask the Screener/.test(document.querySelector("#searchResults").textContent), null, { timeout: 15000 });
   expect("search: the dropdown offers the screen first", /^Ask the Screener/.test(await txt("#searchResults div")), await txt("#searchResults div"));
   await p.fill("#globalSearch", ""); await p.reload(); await p.waitForTimeout(500);
+  // The day's first downloads: the loader shows real progress, region by region, until the results replace it, and the
+  // background scoring shows in the top bar. Mocked here: demo data is never slow enough to see it.
+  let fakeDone = 150;
+  const fakeJob = (kind) => ({ id: 1, kind, done: fakeDone, total: 400, elapsed: fakeDone / 5, started: 0, regions: { "North America": [Math.min(fakeDone, 150), 150], "Europe": [Math.max(0, fakeDone - 150), 250] } });
+  const fakeProgress = (r) => { fakeDone = Math.min(400, fakeDone + 10); r.fulfill({ contentType: "application/json", body: JSON.stringify({ jobs: [fakeJob("screener"), fakeJob("ranks")], pause: 0 }) }); };
+  const slowScreen = async (r) => { await new Promise((res) => setTimeout(res, 4000)); r.continue(); };
+  await p.route("**/api/progress", fakeProgress); await p.route("**/api/screener", slowScreen);
+  await nav("screener"); await p.click("#btnScr");
+  await p.waitForSelector("#scrTable .dl-loader", { timeout: 5000 });
+  await p.waitForTimeout(900);
+  const ld = await p.evaluate(() => ({ count: $("#scrTable .dl-count").textContent, regions: $$("#scrTable .dl-reg").map((x) => `${x.className}: ${x.textContent}`),
+    eta: $("#scrTable .dl-eta").textContent, bar: parseFloat($("#scrTable .dl-bar i").style.width) }));
+  expect("loader: a long first download shows how far it has got, region by region", /^\d+ of 400 stocks$/.test(ld.count) && ld.regions.length === 2
+    && /done: North America ✓/.test(ld.regions[0]) && /busy: Europe \d+\/250/.test(ld.regions[1]) && /s left|Almost/.test(ld.eta) && ld.bar > 37, JSON.stringify(ld));
+  await p.waitForSelector("#bgProgress:not(.hidden)", { timeout: 12000 });
+  expect("loader: the background scoring shows in the top bar", /Preparing today's data · \d+%/.test(await txt("#bgProgress")) && /Scoring every stock/.test(await p.getAttribute("#bgProgress", "data-tip")), await txt("#bgProgress"));
+  await p.waitForFunction(() => /matches out of/.test($("#scrInfo").innerText) && !$("#scrTable .dl-loader"), null, { timeout: SLOW });
+  expect("loader: the results replace it", true);
+  await p.unroute("**/api/progress", fakeProgress); await p.unroute("**/api/screener", slowScreen);
+  await p.waitForSelector("#bgProgress.hidden", { state: "attached", timeout: 12000 });
+  expect("loader: the top bar's badge goes when the background scoring ends", true);
   await research("^GSPC");
   // The mouse wheel scrolls the page over a chart; only Ctrl + wheel zooms it (and the RSI and MACD follow)
   const span = () => p.evaluate(() => state.lw.map((c) => { const r = c.timeScale().getVisibleLogicalRange(); return r ? Math.round((r.to - r.from) * 100) / 100 : null; }));
@@ -349,6 +370,32 @@ const SLOW = 150000;
   for (const id of ["#oppMap", "#oppTop", "#oppFit", "#oppSale"]) drawn.push((await p.evaluate((x) => document.querySelector(x).classList.contains("hidden"), id)) || (await canvasDrawn(id)));
   const opp = await p.evaluate(() => ({ status: document.querySelector("#oppStatus").innerText, fit: document.querySelector("#oppFitHelp").innerText, top: state.charts.oppTop?.data.labels }));
   expect("opportunities: four charts drawn from today's scores", drawn.every(Boolean) && /stocks scored/.test(opp.status) && opp.top?.length === 10 && /what you hold now/.test(opp.fit), `${opp.status} | top: ${opp.top?.slice(0, 3).join(", ")}`);
+  // The map zooms with Ctrl + wheel around the pointer (a plain wheel scrolls the page), names every stock in view,
+  // moves with a drag (which doesn't open a stock), and resets
+  await p.locator("#oppMap").scrollIntoViewIfNeeded();
+  const mapRange = () => p.evaluate(() => { const s = state.charts.oppMap.scales; return [s.x.min, s.x.max, s.y.min, s.y.max].map((v) => Math.round(v * 10) / 10); });
+  const mapAt = (v) => p.evaluate((v) => { const c = state.charts.oppMap, r = c.canvas.getBoundingClientRect(); return { x: r.left + c.scales.x.getPixelForValue(v), y: r.top + c.scales.y.getPixelForValue(v) }; }, v);
+  let pt = await mapAt(70);
+  await p.mouse.move(pt.x, pt.y);
+  const scrolledFrom = await p.evaluate(() => scrollY);
+  await p.mouse.wheel(0, 120); await p.waitForTimeout(200);
+  const plainWheel = { range: await mapRange(), scrolled: (await p.evaluate(() => scrollY)) !== scrolledFrom };
+  await p.evaluate(() => window.scrollTo(0, scrollY - 120)); await p.waitForTimeout(150);
+  pt = await mapAt(70); await p.mouse.move(pt.x, pt.y);
+  await p.keyboard.down("Control"); for (let i = 0; i < 4; i++) { await p.mouse.wheel(0, -100); await p.waitForTimeout(60); } await p.keyboard.up("Control");
+  const zoomedTo = await mapRange(), stillAt = await mapAt(70);
+  expect("opportunities: Ctrl + wheel zooms the map around the pointer; a plain wheel scrolls the page",
+    plainWheel.range.join() === "-6,106,-6,106" && plainWheel.scrolled && zoomedTo[1] - zoomedTo[0] < 50 && zoomedTo[0] < 70 && zoomedTo[1] > 70
+    && Math.abs(stillAt.x - pt.x) < 8 && Math.abs(stillAt.y - pt.y) < 8 && await p.isVisible("#oppMapReset"), JSON.stringify({ plainWheel, zoomedTo, moved: [Math.round(stillAt.x - pt.x), Math.round(stillAt.y - pt.y)] }));  // the axis labels change width, so the plot shifts a few pixels
+  const ticks = await p.evaluate(() => state.charts.oppMap.scales.x.ticks.map((t) => t.value));
+  expect("opportunities: zoomed in, the marks are finer", ticks.length >= 3 && ticks[1] - ticks[0] <= 10, ticks.join(","));
+  const mapBox = await p.locator("#oppMap").boundingBox();
+  await p.mouse.move(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2); await p.mouse.down();
+  await p.mouse.move(mapBox.x + mapBox.width / 2 + 120, mapBox.y + mapBox.height / 2 + 60, { steps: 6 }); await p.mouse.up(); await p.waitForTimeout(300);
+  const dragged = await mapRange();
+  expect("opportunities: a drag moves the zoomed map and opens nothing", dragged[0] < zoomedTo[0] && dragged[2] > zoomedTo[2] && (await p.evaluate(() => location.hash)) === "#opportunities", JSON.stringify(dragged));
+  await p.click("#oppMapReset"); await p.waitForTimeout(200);
+  expect("opportunities: Reset zoom shows the whole map again", (await mapRange()).join() === "-6,106,-6,106" && !(await p.isVisible("#oppMapReset")), JSON.stringify(await mapRange()));
   const bar = await p.evaluate(() => { const c = state.charts.oppTop, m = c.getDatasetMeta(0).data[0], r = c.canvas.getBoundingClientRect(); return { x: r.left + m.x - 10, y: r.top + m.y, t: c.data.labels[0] }; });
   await p.mouse.click(bar.x, bar.y);
   await p.waitForFunction((t) => document.querySelector("#rSym")?.textContent === t, bar.t, { timeout: SLOW });
@@ -398,6 +445,9 @@ const SLOW = 150000;
   await nav("dashboard"); await p.waitForTimeout(1000);
   await p.waitForFunction(() => document.querySelector("#dashOppList .opp-row, #dashOppList div.muted:not(:has(.spinner)):last-child"), null, { timeout: SLOW });
   expect("dashboard: opportunity map card drawn", await canvasDrawn("#dashOppChart"), await txt("#dashOppList"));
+  const corner = await p.evaluate(() => { const c = state.charts.dashOppChart, z = state.opp.data.rules.zone, pts = c.data.datasets[0].data;
+    return { z, x: c.scales.x.min, y: c.scales.y.min, n: pts.length, all: pts.every((d) => d.x >= z && d.y >= z), inZone: state.opp.data.map.filter((r) => r.f_value >= z && r.f_momentum >= z).length }; });
+  expect("dashboard: the small map shows only the shaded corner", corner.all && corner.n === corner.inZone && corner.x === corner.z - 3 && corner.y === corner.z - 3, JSON.stringify(corner));
   // Hovering a dot names the company; the corner's stocks are named on the map itself
   // the dot furthest from any other, since with hundreds of stocks a dot can sit under another one
   const dot = await p.evaluate(() => {

@@ -148,6 +148,77 @@ document.addEventListener("click", (e) => {
   show(g.dataset.goto);
 });
 
+/* ---------------------------------------------------------------- the day's first downloads */
+// The first Screener, Opportunities or sector ranking of the day downloads every stock in the regions you follow,
+// which can take a minute or more. The loader shows real progress from /api/progress: how many stocks of how many,
+// region by region, about how long is left, and when Yahoo has asked for a pause. A quick load (the data already kept)
+// shows only the small spinner: the loader appears once a download is actually under way.
+const DL_TITLE = { screener: "Scanning the stocks", opportunities: "Scoring the stocks", ranks: "Ranking the stocks within their sectors" };
+const DL_NOTE = "The first load of the day downloads every stock in the regions you follow. You can adjust your regions in the Settings page.";
+function dlEta(j, pause) {
+  if (pause > 0) return `Yahoo asked for a short pause. Carrying on in ${Math.ceil(pause)} s…`;
+  if (j.done >= j.total) return "Finishing…";
+  if (j.done < 10 || j.elapsed < 3) return "Working out how long it takes…";
+  const left = (j.total - j.done) / (j.done / j.elapsed);
+  return left < 5 ? "Almost done…" : `About ${left < 60 ? `${Math.max(5, Math.round(left / 5) * 5)} s` : `${Math.round(left / 60)} min`} left`;
+}
+const dlRegions = (j) => Object.entries(j.regions).map(([r, [d, t]]) =>
+  `<span class="dl-reg${d >= t ? " done" : d ? " busy" : ""}" style="--p:${t ? (d / t).toFixed(3) : 0}">${esc(r)} <b>${d >= t ? "✓" : `${d}/${t}`}</b></span>`).join("");
+function dlRender(box, j, pause, kind) {
+  let l = box.querySelector(".dl-loader");
+  if (!l) {
+    box.innerHTML = `<div class="dl-loader" role="status" aria-live="polite">
+      <div class="dl-head"><span class="dl-mark" aria-hidden="true">◆</span><b>${esc(DL_TITLE[kind] || "Getting today's data")}</b><span class="dl-count"></span></div>
+      <div class="dl-bar"><i></i></div><div class="dl-regions"></div>
+      <div class="dl-foot"><span class="dl-eta"></span><span class="muted">${esc(DL_NOTE)}</span></div></div>`;
+    l = box.querySelector(".dl-loader");
+  }
+  l.classList.toggle("paused", pause > 0);
+  $(".dl-count", l).textContent = `${j.done.toLocaleString()} of ${j.total.toLocaleString()} stocks`;
+  $(".dl-bar i", l).style.width = `${(100 * j.done / Math.max(j.total, 1)).toFixed(1)}%`;  // the same element, so it glides
+  $(".dl-regions", l).innerHTML = dlRegions(j);
+  $(".dl-eta", l).textContent = dlEta(j, pause);
+}
+// Shows `quick` with a spinner in `el` and, while that's still there and a scoring of `kind` is under way, the loader.
+// It stops on its own once the caller puts the results (or an error) in `el`.
+function dlLoader(el, kind, quick = "Loading…") {
+  if (!el.querySelector(".dl-loader")) el.innerHTML = `<div class="muted dl-wait"><span class="spinner"></span>${quick}</div>`;
+  const token = el._dl = {};
+  let last = null;
+  const waiting = () => el._dl === token && el.isConnected && el.querySelector(".dl-wait, .dl-loader");
+  const tick = async () => {
+    if (!waiting()) return;
+    let p = null;
+    try { p = await api("/api/progress"); } catch { /* the next check tries again */ }
+    if (!waiting()) return;  // the results came while we asked
+    const job = p?.jobs.filter((j) => j.kind === kind).at(-1);
+    if (job) { last = job; dlRender(el, job, p.pause, kind); }
+    // The download is done but the page is still working the results out (the portfolio fit, the ranks): shown complete
+    else if (p && last && el.querySelector(".dl-loader")) {
+      const full = Object.fromEntries(Object.entries(last.regions).map(([r, [, t]]) => [r, [t, t]]));
+      dlRender(el, { ...last, done: last.total, regions: full }, 0, kind);
+    }
+    setTimeout(tick, 800);
+  };
+  setTimeout(tick, 350);
+}
+// The background scoring (soon after the app starts, then every six hours) shows as a small badge in the top bar while
+// it runs, so a page that seems slow says why. Checked every few seconds; every second or so while it runs.
+async function watchBackground() {
+  let p = null;
+  try { p = await api("/api/progress"); } catch { /* tried again shortly */ }
+  const j = p?.jobs.find((x) => x.kind === "ranks"), b = $("#bgProgress");
+  b.classList.toggle("hidden", !j);
+  if (j) {
+    const share = j.done / Math.max(j.total, 1);
+    if (!b.querySelector("i")) b.innerHTML = `<span class="dl-mark" aria-hidden="true">◆</span><span class="bg-text"></span><i></i>`;
+    $(".bg-text", b).textContent = `Preparing today's data · ${Math.round(share * 100)}%`;
+    $("i", b).style.width = `${(share * 100).toFixed(1)}%`;
+    b.dataset.tip = `Scoring every stock in the regions you follow in the background (${j.done} of ${j.total}), so sector ranks, the Screener and Opportunities are quick. ${dlEta(j, p.pause)}`;
+  }
+  setTimeout(watchBackground, j ? 1500 : 8000);
+}
+
 /* ---------------------------------------------------------------- search */
 (() => {
   const inp = $("#globalSearch"), dd = $("#searchResults");
@@ -511,7 +582,7 @@ const PEER_INFO = "Ranks compare a score with the other stocks in the same secto
   + "the rank says how it compares with its own kind. A sector with fewer than 8 others isn't ranked.";
 async function loadPeers(t, request, tries = 0) {
   const stock = state.stock?.info?.assetClass === "Stocks";
-  $("#rPeers").innerHTML = stock ? '<span class="muted">Comparing with its sector…</span>' : "";
+  if (!tries || !$("#rPeers .dl-loader")) $("#rPeers").innerHTML = stock ? '<span class="muted">Comparing with its sector…</span>' : "";
   $$(".factor .peer").forEach((el) => { el.textContent = ""; });
   if (!stock) return;
   let r;
@@ -519,8 +590,8 @@ async function loadPeers(t, request, tries = 0) {
   if (request !== state.stockRequest) return;
   if (!r) { $("#rPeers").innerHTML = ""; return; }
   if (r.pending) {  // the first ranking of the followed regions is being built in the background: look again shortly
-    $("#rPeers").innerHTML = '<span class="muted">Sector ranks are being prepared (the first ranking downloads every followed stock, a minute or two). Checking again shortly…</span>';
-    if (tries < 12) setTimeout(() => { if (request === state.stockRequest) loadPeers(t, request, tries + 1); }, 15000);
+    dlLoader($("#rPeers"), "ranks", "Sector ranks are being prepared: the first ranking downloads every stock in the regions you follow…");
+    if (tries < 180) setTimeout(() => { if (request === state.stockRequest) loadPeers(t, request, tries + 1); }, 5000);  // up to 15 minutes, as long as the build may wait on Yahoo
     return;
   }
   const where = Object.entries(r.regions).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${v}`).join(", ");
@@ -796,7 +867,7 @@ function screenerFilters() {
            min_score: v("#fScore"), max_vol: v("#fVol", 100), sort: $("#fSort").value, ...($("#fCountry").value ? { countries: [$("#fCountry").value] } : {}) };
 }
 async function runScreen(body) {
-  const el = $("#scrTable"); loading(el, "Scanning the universe… the first run downloads data for ~100 tickers.");
+  const el = $("#scrTable"); dlLoader(el, "screener", "Scanning the stocks…");
   $$("#btnScr,#btnScrQuery").forEach((b) => b.disabled = true);
   try {
     const d = await api("/api/screener", { method: "POST", body });
@@ -884,24 +955,32 @@ async function getOpportunities(force) {
 const oppName = (r) => `${r.name || r.ticker} (${r.ticker})`;
 const oppTip = (r, extra = []) => [oppName(r), `Score ${num(r.composite, 0)} · ${r.stance}`, ...extra, ...(r.reasons || [])];
 // The map: value across, momentum up, quality as size, overall score as colour; the "cheap and rising" corner shaded
+// The map's full extent: a little room past 0 and 100, so a stock at the edge isn't cut in half
+const MAP_LO = -6, MAP_HI = 106, MAP_MIN_SPAN = 6;
 function oppMapChart(id, rows, zone, small) {
+  // The dashboard's small map shows only the shaded corner (cheap and rising), a little past its edge so a dot on it isn't cut
+  if (small) rows = rows.filter((r) => r.f_value >= zone && r.f_momentum >= zone);
+  const from = small ? zone - 3 : MAP_LO;
   const shade = { id: "zone", beforeDatasetsDraw(c) {
-    const { ctx, chartArea: a, scales: { x, y } } = c, x0 = x.getPixelForValue(zone), y0 = y.getPixelForValue(zone);
+    const { ctx, chartArea: a, scales: { x, y } } = c;
+    const x0 = Math.max(a.left, Math.min(a.right, x.getPixelForValue(zone))), y0 = Math.max(a.top, Math.min(a.bottom, y.getPixelForValue(zone)));  // zoomed, the corner may be partly out of view
     ctx.save(); ctx.fillStyle = tint("--up", "1c"); ctx.fillRect(x0, a.top, a.right - x0, y0 - a.top);
     ctx.restore();
   } };
-  // The stocks in the corner are named on the map, best score first, each to the right of its dot or else to the
-  // left; a name that would overlap one already placed is left for the hover, so nothing is written over anything
+  // The stocks in the corner are named on the map (zoomed in, every stock in view), best score first, each to the right
+  // of its dot or else to the left; a name that would overlap one already placed is left for the hover, so nothing is
+  // written over anything
   const names = { id: "names", afterDatasetsDraw(c) {
-    const { ctx, chartArea: a, scales: { x } } = c, pts = c.getDatasetMeta(0).data, h = small ? 11 : 13, placed = [];
+    const { ctx, chartArea: a, scales: { x, y } } = c, pts = c.getDatasetMeta(0).data, h = small ? 11 : 13, placed = [];
+    const zoomedIn = x.max - x.min < 100 || y.max - y.min < 100;
     ctx.save(); ctx.textBaseline = "middle";
-    if (!small) {
+    if (!small && x.getPixelForValue(zone) < a.right - 100 && y.getPixelForValue(zone) > a.top + 14) {
       ctx.font = "600 11px IBM Plex Sans"; ctx.fillStyle = C("--up"); ctx.textAlign = "left";
-      const tx = x.getPixelForValue(zone) + 6, ty = a.top + 10, tw = ctx.measureText("Cheap and rising").width;
+      const tx = Math.max(a.left, x.getPixelForValue(zone)) + 6, ty = a.top + 10, tw = ctx.measureText("Cheap and rising").width;
       ctx.fillText("Cheap and rising", tx, ty); placed.push({ l: tx, r: tx + tw, t: ty - h / 2, b: ty + h / 2 });
     }
     ctx.font = `600 ${small ? 10 : 11}px IBM Plex Sans`; ctx.fillStyle = C("--text");
-    const corner = c.data.datasets[0].data.map((d, i) => ({ d, pt: pts[i] })).filter(({ d }) => d.x >= zone && d.y >= zone).sort((p, q) => q.d.row.composite - p.d.row.composite);
+    const corner = c.data.datasets[0].data.map((d, i) => ({ d, pt: pts[i] })).filter(({ d }) => (zoomedIn ? d.x >= x.min && d.x <= x.max && d.y >= y.min && d.y <= y.max : d.x >= zone && d.y >= zone)).sort((p, q) => q.d.row.composite - p.d.row.composite);
     // The dots themselves are obstacles too, so a name doesn't sit on another stock
     corner.forEach(({ d, pt }) => placed.push({ l: pt.x - d.r, r: pt.x + d.r, t: pt.y - d.r, b: pt.y + d.r, dot: true }));
     corner.forEach(({ d, pt }) => {
@@ -917,21 +996,77 @@ function oppMapChart(id, rows, zone, small) {
     });
     ctx.restore();
   } };
-  return mkChart(id, {
+  // Axis marks every 20 points, finer as you zoom in
+  const marks = (ax) => {
+    const span = ax.max - ax.min, step = span > 60 ? 20 : span > 30 ? 10 : span > 12 ? 5 : 2;
+    ax.ticks = [];
+    for (let v = Math.ceil(Math.max(0, ax.min) / step) * step; v <= Math.min(100, ax.max); v += step) ax.ticks.push({ value: v });
+  };
+  const chart = mkChart(id, {
     type: "bubble", plugins: [shade, names],
     data: { datasets: [{ data: rows.map((r) => ({ x: r.f_value, y: r.f_momentum, r: (small ? 2.5 : 4) + ((r.f_quality || 0) / 100) * (small ? 5 : 9), row: r })),
-      backgroundColor: rows.map((r) => scoreColor(r.composite) + "cc"), borderColor: rows.map((r) => scoreColor(r.composite)), borderWidth: 1 }] },
+      backgroundColor: rows.map((r) => scoreColor(r.composite) + "cc"), borderColor: rows.map((r) => scoreColor(r.composite)), borderWidth: 1, clip: 0 }] },
     options: { maintainAspectRatio: false, animation: false, plugins: { legend: { display: false },
       tooltip: { callbacks: { label: (c) => (small ? oppTip(c.raw.row).slice(0, 3) : oppTip(c.raw.row)) } } },
       // A little room past 0 and 100, so a stock at the edge isn't cut in half
-      scales: { x: { min: -6, max: 106, title: { display: true, text: small ? "cheaper →" : "Value score — cheaper →", font: { size: small ? 10 : 12 } },
-                     ticks: { display: !small }, afterBuildTicks: (ax) => { ax.ticks = [0, 20, 40, 60, 80, 100].map((value) => ({ value })); } },
-                y: { min: -6, max: 106, title: { display: true, text: small ? "stronger trend ↑" : "Momentum score — stronger trend ↑", font: { size: small ? 10 : 12 } },
-                     ticks: { display: !small }, afterBuildTicks: (ax) => { ax.ticks = [0, 20, 40, 60, 80, 100].map((value) => ({ value })); } } },
-      onClick: small ? undefined : (e, els) => { if (els[0]) openStock(state.charts[id].data.datasets[0].data[els[0].index].row.ticker); },
-      onHover: (e, els) => { e.native.target.style.cursor = els.length || small ? "pointer" : "default"; } },
+      scales: { x: { min: from, max: MAP_HI, title: { display: true, text: small ? "cheaper →" : "Value score — cheaper →", font: { size: small ? 10 : 12 } },
+                     ticks: { display: !small }, afterBuildTicks: marks },
+                y: { min: from, max: MAP_HI, title: { display: true, text: small ? "stronger trend ↑" : "Momentum score — stronger trend ↑", font: { size: small ? 10 : 12 } },
+                     ticks: { display: !small }, afterBuildTicks: marks } },
+      onClick: small ? undefined : (e, els, c) => { if (c.$dragged) { c.$dragged = false; return; } if (els[0]) openStock(c.data.datasets[0].data[els[0].index].row.ticker); },
+      onHover: (e, els, c) => { if (!c.$drag) e.native.target.style.cursor = els.length || small ? "pointer" : c.$zoomed?.() ? "grab" : "default"; } },
   });
+  if (!small) oppZoom(chart, $("#oppMapReset"));
+  return chart;
 }
+// The big map zooms: Ctrl + wheel in and out around the pointer (a plain wheel scrolls the page, as on Research),
+// a drag moves around once zoomed in, and a double-click or "Reset zoom" shows it all again
+function oppZoom(chart, reset) {
+  // Chart.js builds its options afresh on each update, so they're looked up every time rather than kept
+  const cv = chart.canvas, ax = (k) => chart.options.scales[k];
+  const zoomed = chart.$zoomed = () => ax("x").min > MAP_LO || ax("x").max < MAP_HI || ax("y").min > MAP_LO || ax("y").max < MAP_HI;
+  const place = (k, lo, hi) => {  // keep the window inside the map, at the same size
+    const span = Math.min(MAP_HI - MAP_LO, Math.max(MAP_MIN_SPAN, hi - lo));
+    lo = Math.min(Math.max(lo, MAP_LO), MAP_HI - span);
+    ax(k).min = lo; ax(k).max = lo + span;
+  };
+  const redraw = () => { chart.update("none"); reset.classList.toggle("hidden", !zoomed()); };
+  const all = () => { place("x", MAP_LO, MAP_HI); place("y", MAP_LO, MAP_HI); redraw(); };
+  reset.onclick = all;
+  cv.ondblclick = all;
+  cv.onwheel = (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();  // not the browser's own page zoom
+    const f = e.deltaY < 0 ? 0.8 : 1.25, { x, y } = chart.scales;
+    const at = { x: x.getValueForPixel(e.offsetX), y: y.getValueForPixel(e.offsetY) };
+    for (const [k, sc, v] of [["x", x, at.x], ["y", y, at.y]]) {
+      const lo = sc.min, hi = sc.max, span = Math.min(MAP_HI - MAP_LO, Math.max(MAP_MIN_SPAN, (hi - lo) * f));
+      const share = (v - lo) / (hi - lo);  // the point under the pointer stays under it
+      place(k, v - share * span, v + (1 - share) * span);
+    }
+    redraw();
+  };
+  cv.onpointerdown = (e) => {
+    chart.$dragged = false;
+    if (!zoomed() || e.button !== 0) return;
+    const { x, y } = chart.scales;
+    chart.$drag = { x: e.clientX, y: e.clientY, sx: [x.min, x.max], sy: [y.min, y.max] };
+    cv.setPointerCapture(e.pointerId);
+  };
+  cv.onpointermove = (e) => {
+    const d = chart.$drag;
+    if (!d) return;
+    const dx = e.clientX - d.x, dy = e.clientY - d.y, a = chart.chartArea;
+    if (!chart.$dragged && Math.hypot(dx, dy) < 4) return;  // a small wobble is still a click
+    chart.$dragged = true; cv.style.cursor = "grabbing";
+    const vx = dx * (d.sx[1] - d.sx[0]) / (a.right - a.left), vy = dy * (d.sy[1] - d.sy[0]) / (a.bottom - a.top);
+    place("x", d.sx[0] - vx, d.sx[1] - vx); place("y", d.sy[0] + vy, d.sy[1] + vy);
+    redraw();
+  };
+  cv.onpointerup = cv.onpointercancel = () => { chart.$drag = null; cv.style.cursor = zoomed() ? "grab" : "default"; };
+  reset.classList.add("hidden");
+}
+
 // A ranked list as horizontal bars, each opening its stock
 function oppBars(id, rows, value, { label, tip, color, max, fmt }) {
   return mkChart(id, {
@@ -958,7 +1093,7 @@ async function loadOpportunities(force) {
     try { localStorage.setItem("oppMarkets", JSON.stringify(picked)); } catch { /* kept for this visit only */ }
     loadOpportunities();
   });
-  status.innerHTML = `<span class="spinner"></span>Scoring the stocks… the first load of the day downloads all of them and takes about half a minute.`;
+  dlLoader(status, "opportunities", "Scoring the stocks…");
   $("#oppRefresh").disabled = true;
   let d;
   try { d = await getOpportunities(force); } catch (e) { status.textContent = e.message; return; } finally { $("#oppRefresh").disabled = false; }
@@ -967,7 +1102,8 @@ async function loadOpportunities(force) {
   const inZone = d.map.filter((r) => r.f_value >= R.zone && r.f_momentum >= R.zone);
   oppMapChart("oppMap", d.map, R.zone, false);
   $("#oppMapNote").textContent = `${inZone.length} in the shaded corner`;
-  $("#oppMapHelp").textContent = `Each dot is a stock. Further right is cheaper (value score), higher has a stronger price trend (momentum score), a bigger dot is better quality, and the colour is its overall score. The shaded corner is ${R.zone} or more on both: cheap and rising.`;
+  $("#oppMapHelp").textContent = `Each dot is a stock. Further right is cheaper (value score), higher has a stronger price trend (momentum score), a bigger dot is better quality, and the colour is its overall score. The shaded corner is ${R.zone} or more on both: cheap and rising. Ctrl + scroll zooms in, and every stock in view gets its name; drag to move around, double-click to see it all.`;
+  $("#oppTopNote").textContent = `The ${R.top} highest overall scores, at most ${R.sectorCap} from one sector`;
   oppBars("oppTop", d.top, (r) => r.composite, { label: (r) => r.ticker, tip: (r) => oppTip(r).slice(1), color: (r) => scoreColor(r.composite), max: 100 });
   $("#oppTopHelp").textContent = `The ${R.top} highest overall scores (the five factors, weighted as in Settings), with at most ${R.sectorCap} from one sector so the list isn't one sector's bet. Hover a bar for the strongest reasons (factors at ${R.reasonAt} or more).`;
   const sat = d.satellite;
@@ -982,10 +1118,11 @@ async function loadOpportunities(force) {
 $("#oppRefresh").onclick = () => loadOpportunities(true);
 // The dashboard's card: the map in small, and the top of the "cheap and rising" corner. Loaded after the rest.
 async function loadDashOpp() {
-  const list = $("#dashOppList");
-  if (!state.opp) list.innerHTML = `<div class="muted sm"><span class="spinner"></span>Scoring the stocks…</div>`;
+  const list = $("#dashOppList"), wrap = list.parentElement;
+  if (!state.opp) { wrap.classList.add("loading"); dlLoader(list, "opportunities", "Scoring the stocks…"); }
   let d;
-  try { d = await getOpportunities(false); } catch (e) { list.innerHTML = `<div class="muted sm">${esc(e.message)}</div>`; return; }
+  try { d = await getOpportunities(false); } catch (e) { wrap.classList.add("loading"); list.innerHTML = `<div class="muted sm">${esc(e.message)}</div>`; return; }  // an error, centred too
+  wrap.classList.remove("loading");  // the map comes back beside the list
   oppMapChart("dashOppChart", d.map, d.rules.zone, true);
   const zone = d.map.filter((r) => r.f_value >= d.rules.zone && r.f_momentum >= d.rules.zone).sort((a, b) => b.composite - a.composite).slice(0, 5);
   list.innerHTML = `<div class="muted sm">Cheap and rising, best first</div>` + (zone.length ? zone.map((r) => `<div class="opp-row"><b>${esc(r.ticker)}</b><span class="muted">${esc((r.reasons || [])[0] || "")}</span><b style="color:${scoreColor(r.composite)}">${num(r.composite, 0)}</b></div>`).join("")
@@ -1625,6 +1762,7 @@ function renderMarketChoices() {
   const m = state.meta;
   renderModeBadge();
   checkFiredAlerts(); setInterval(checkFiredAlerts, 60000);
+  watchBackground();
   renderMarketChoices();
   $("#bStrat").innerHTML = Object.entries(m.strategies).map(([k, v]) => `<option value="${k}" ${k === "sma_cross" ? "selected" : ""}>${v.label}</option>`).join("");
   $("#bStrat").onchange = renderParams; renderParams();
