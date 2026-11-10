@@ -96,7 +96,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from . import agent, ai, backtest, data, db, insights, ledger, portfolio, simulate  # noqa: E402
 from . import indicators as ind  # noqa: E402
-from .universe import MACRO, UNIVERSE, search as uni_search  # noqa: E402
+from .universe import MACRO, STOCK_MARKETS, UNIVERSE, search as uni_search, tickers_for  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stockpilot")
@@ -144,9 +144,31 @@ async def lifespan(app):
             log.info("removed %d cache entries not refreshed for %d days", gone, db.CACHE_KEEP_DAYS)
     except Exception as e:  # never stop the app over housekeeping
         log.warning("cache pruning failed: %s", e)
-    task = asyncio.create_task(_alert_loop())
+    tasks = [asyncio.create_task(_alert_loop())]
+    if not data.DEMO and os.environ.get("STOCKPILOT_WARM", "1") != "0":
+        tasks.append(asyncio.create_task(_warm_loop()))
     yield
-    task.cancel()
+    for task in tasks:
+        task.cancel()
+
+
+WARM_EVERY = 6 * 3600  # company details are kept six hours, so scoring again then finds most of them still fresh
+
+
+async def _warm_loop():
+    """Scores every stock in the list in the background, soon after the app starts and then every six hours, so the
+    Screener, Opportunities and sector ranks don't wait about a minute for the day's first downloads, and the table
+    of sector ranks is always ready."""
+    await asyncio.sleep(20)
+    while True:
+        try:
+            started = time.time()
+            # The background can wait out Yahoo's pauses: nobody is waiting for it
+            table = await asyncio.to_thread(insights.peer_table, db.get_settings(), True, 900)
+            log.info("background scoring: %d stocks with a sector in %.0f s", len(table), time.time() - started)
+        except Exception as e:  # never stop the app over a warm-up
+            log.warning("background scoring failed: %s", e)
+        await asyncio.sleep(WARM_EVERY)
 
 
 app = FastAPI(title="StockPilot", lifespan=lifespan)
@@ -250,7 +272,7 @@ def _tile_list(settings):
 def meta():
     settings = db.get_settings()
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
-               "settings": settings, "markets": list(UNIVERSE), "alertKinds": insights.ALERT_KINDS,
+               "settings": settings, "markets": list(UNIVERSE), "stockMarkets": STOCK_MARKETS, "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
 
@@ -388,6 +410,23 @@ def stock_earnings(ticker: str):
     return ok(data.earnings_record(T(ticker)))
 
 
+@app.get("/api/stock/{ticker}/ownership")
+def stock_ownership(ticker: str):
+    """Insiders and institutions, as Yahoo reports them; null when it has nothing (funds, coins, many markets)."""
+    t = T(ticker)
+    own = data.ownership(t)
+    return ok({**own, "summary": insights.insider_summary(own), "currency": data.main_unit(data.info(t).get("currency"))} if own else None)
+
+
+@app.get("/api/stock/{ticker}/peers")
+def stock_peers(ticker: str):
+    """Where the stock's scores stand within its sector; null for funds, crypto and stocks without a sector."""
+    try:
+        return ok(insights.sector_ranks(T(ticker), db.get_settings()))
+    except data.DataError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.get("/api/stock/{ticker}/fund")
 def stock_fund(ticker: str):
     t = T(ticker)
@@ -467,7 +506,7 @@ def fx(src: str = "EUR", dst: str = "USD"):
 
 
 @app.get("/api/opportunities")
-def opportunities(markets: str = "US,Europe,Gulf"):
+def opportunities(markets: str = ""):
     return ok(insights.opportunities(db.get_settings(), [m.strip() for m in markets.split(",") if m.strip()]))
 
 

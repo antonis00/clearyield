@@ -68,8 +68,10 @@ def with_server(demo, command):
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         env = {**os.environ, "STOCKPILOT_DB": str(Path(tmp) / "check.db")}
         env.pop("ANTHROPIC_API_KEY", None)
-        env["AI_PROVIDER"], env["WEB_SEARCH"] = "none", "off"  # the browser checks expect rule-based briefs, not a wait on a model from .env
+        env["AI_PROVIDER"], env["WEB_SEARCH"], env["STOCKPILOT_WARM"] = "none", "off", "0"  # the browser checks expect rule-based briefs, not a wait on a model from .env
         env["STOCKPILOT_DEMO"] = "1" if demo else "0"
+        if not demo:  # sector ranks against the first three markets only, so a run doesn't download the whole list
+            env["STOCKPILOT_PEER_MARKETS"] = "US,Europe,Gulf"
         log_path = Path(tmp) / "server.log"
         log = open(log_path, "w", encoding="utf-8")
         server = subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(port), "--log-level", "warning"],

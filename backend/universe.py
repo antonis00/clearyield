@@ -14,6 +14,19 @@ UNIVERSE = {
         "ORCL": "Oracle", "NFLX": "Netflix", "INTC": "Intel", "CSCO": "Cisco", "QCOM": "Qualcomm",
         "TXN": "Texas Instruments", "MCD": "McDonald's", "NKE": "Nike", "DIS": "Disney", "CAT": "Caterpillar",
         "GS": "Goldman Sachs", "PFE": "Pfizer",
+        # More of each sector, so every one has enough companies to compare a stock with
+        "HON": "Honeywell", "GE": "GE Aerospace", "RTX": "RTX", "UNP": "Union Pacific", "UPS": "UPS", "DE": "Deere",
+        "LMT": "Lockheed Martin", "BA": "Boeing", "ETN": "Eaton", "BAC": "Bank of America", "WFC": "Wells Fargo",
+        "MS": "Morgan Stanley", "C": "Citigroup", "BLK": "BlackRock", "SCHW": "Charles Schwab", "AXP": "American Express",
+        "SPGI": "S&P Global", "ABT": "Abbott", "TMO": "Thermo Fisher", "DHR": "Danaher", "AMGN": "Amgen",
+        "ISRG": "Intuitive Surgical", "BMY": "Bristol-Myers Squibb", "GILD": "Gilead", "CVS": "CVS Health", "MDT": "Medtronic",
+        "PM": "Philip Morris", "MO": "Altria", "MDLZ": "Mondelez", "CL": "Colgate-Palmolive", "LOW": "Lowe's",
+        "SBUX": "Starbucks", "BKNG": "Booking", "TJX": "TJX", "GM": "General Motors", "F": "Ford", "COP": "ConocoPhillips",
+        "SLB": "SLB", "EOG": "EOG Resources", "NEE": "NextEra Energy", "DUK": "Duke Energy", "SO": "Southern Company",
+        "D": "Dominion Energy", "PLD": "Prologis", "AMT": "American Tower", "EQIX": "Equinix", "O": "Realty Income",
+        "SPG": "Simon Property", "LIN": "Linde", "SHW": "Sherwin-Williams", "APD": "Air Products", "FCX": "Freeport-McMoRan",
+        "NEM": "Newmont", "T": "AT&T", "VZ": "Verizon", "CMCSA": "Comcast", "TMUS": "T-Mobile US", "IBM": "IBM",
+        "NOW": "ServiceNow", "INTU": "Intuit", "AMAT": "Applied Materials", "MU": "Micron", "PANW": "Palo Alto Networks",
     },
     "Europe": {
         "ASML.AS": "ASML", "SAP.DE": "SAP", "MC.PA": "LVMH", "NESN.SW": "Nestle", "NOVO-B.CO": "Novo Nordisk",
@@ -25,12 +38,86 @@ UNIVERSE = {
         "BNP.PA": "BNP Paribas", "INGA.AS": "ING", "UCG.MI": "UniCredit", "ISP.MI": "Intesa Sanpaolo", "BBVA.MC": "BBVA",
         "DBK.DE": "Deutsche Bank", "BARC.L": "Barclays", "LLOY.L": "Lloyds", "UBSG.SW": "UBS", "NDA-FI.HE": "Nordea",
         "CS.PA": "AXA", "ZURN.SW": "Zurich Insurance", "MUV2.DE": "Munich Re",
+        # Industrials, healthcare, consumer, energy, materials, utilities, telecoms, tech and property
+        "SU.PA": "Schneider Electric", "RR.L": "Rolls-Royce", "SAF.PA": "Safran", "ABBN.SW": "ABB", "VOLV-B.ST": "Volvo",
+        "ATCO-A.ST": "Atlas Copco", "DSV.CO": "DSV", "RHM.DE": "Rheinmetall", "DG.PA": "Vinci", "NOVN.SW": "Novartis",
+        "SAN.PA": "Sanofi", "GSK.L": "GSK", "BAYN.DE": "Bayer", "LONN.SW": "Lonza", "EL.PA": "EssilorLuxottica",
+        "ITX.MC": "Inditex", "ABI.BR": "AB InBev", "DGE.L": "Diageo", "RI.PA": "Pernod Ricard", "ADS.DE": "Adidas",
+        "VOW3.DE": "Volkswagen", "MBG.DE": "Mercedes-Benz", "STLAM.MI": "Stellantis", "RACE.MI": "Ferrari",
+        "CFR.SW": "Richemont", "BATS.L": "British American Tobacco", "TSCO.L": "Tesco", "KER.PA": "Kering", "BP.L": "BP",
+        "ENI.MI": "Eni", "EQNR.OL": "Equinor", "REP.MC": "Repsol", "BAS.DE": "BASF", "RIO.L": "Rio Tinto",
+        "GLEN.L": "Glencore", "AAL.L": "Anglo American", "SIKA.SW": "Sika", "AI.PA": "Air Liquide", "ENGI.PA": "Engie",
+        "NG.L": "National Grid", "EOAN.DE": "E.ON", "RWE.DE": "RWE", "SSE.L": "SSE", "DTE.DE": "Deutsche Telekom",
+        "ORA.PA": "Orange", "VOD.L": "Vodafone", "TEF.MC": "Telefonica", "IFX.DE": "Infineon", "CAP.PA": "Capgemini",
+        "ADYEN.AS": "Adyen", "PRX.AS": "Prosus", "NOKIA.HE": "Nokia", "ERIC-B.ST": "Ericsson", "DSY.PA": "Dassault Systemes",
+        "VNA.DE": "Vonovia", "SGRO.L": "Segro", "LAND.L": "Land Securities", "HEIA.AS": "Heineken", "DHL.DE": "DHL Group",
+        "MAERSK-B.CO": "Maersk",
     },
     "Gulf": {
         "QNBK.QA": "QNB", "IQCD.QA": "Industries Qatar", "QIBK.QA": "Qatar Islamic Bank",
         "ORDS.QA": "Ooredoo", "MARK.QA": "Masraf Al Rayan", "QGTS.QA": "Nakilat",
         "2222.SR": "Saudi Aramco", "1120.SR": "Al Rajhi Bank", "2010.SR": "SABIC", "7010.SR": "STC",
         "1180.SR": "Saudi National Bank", "EMAAR.AE": "Emaar Properties", "DIB.AE": "Dubai Islamic Bank",
+        # Saudi, Qatari, Dubai and Kuwaiti companies across sectors. Abu Dhabi (ADX) isn't on Yahoo at all.
+        "2082.SR": "ACWA Power", "1150.SR": "Alinma Bank", "1211.SR": "Ma'aden", "2280.SR": "Almarai",
+        "5110.SR": "Saudi Electricity", "1010.SR": "Riyad Bank", "1060.SR": "Saudi Awwal Bank", "4002.SR": "Mouwasat Medical",
+        "4190.SR": "Jarir Marketing", "CBQK.QA": "Commercial Bank of Qatar", "QEWS.QA": "Qatar Electricity & Water",
+        "DUBK.QA": "Dukhan Bank", "QAMC.QA": "Qatar Aluminium", "EMIRATESNBD.AE": "Emirates NBD",
+        "DEWA.AE": "Dubai Electricity & Water", "SALIK.AE": "Salik", "NBK.KW": "National Bank of Kuwait",
+        "KFH.KW": "Kuwait Finance House", "ZAIN.KW": "Zain",
+    },
+    "Asia-Pacific": {
+        # Japan, Hong Kong (incl. Chinese companies listed there), India, Korea, Taiwan, Australia, Singapore, Indonesia.
+        # Mainland A-shares (.SS/.SZ) are left out: Yahoo's data for them is patchy, and the big ones list in Hong Kong too.
+        "7203.T": "Toyota", "6758.T": "Sony", "8306.T": "Mitsubishi UFJ", "6861.T": "Keyence", "9984.T": "SoftBank Group",
+        "6098.T": "Recruit", "9432.T": "NTT", "8035.T": "Tokyo Electron", "4063.T": "Shin-Etsu Chemical",
+        "9983.T": "Fast Retailing", "7974.T": "Nintendo", "8058.T": "Mitsubishi Corp", "6501.T": "Hitachi", "4502.T": "Takeda",
+        "4568.T": "Daiichi Sankyo", "7267.T": "Honda", "6367.T": "Daikin", "8316.T": "Sumitomo Mitsui",
+        "8766.T": "Tokio Marine", "2914.T": "Japan Tobacco", "9433.T": "KDDI", "8802.T": "Mitsubishi Estate",
+        "1605.T": "Inpex", "5401.T": "Nippon Steel", "9502.T": "Chubu Electric", "0700.HK": "Tencent", "9988.HK": "Alibaba",
+        "1299.HK": "AIA", "0939.HK": "China Construction Bank", "1398.HK": "ICBC", "3690.HK": "Meituan", "1810.HK": "Xiaomi",
+        "2318.HK": "Ping An", "0941.HK": "China Mobile", "0883.HK": "CNOOC", "0388.HK": "HKEX", "1211.HK": "BYD",
+        "0016.HK": "Sun Hung Kai Properties", "0002.HK": "CLP Holdings", "9618.HK": "JD.com", "2020.HK": "Anta Sports",
+        "1088.HK": "China Shenhua", "RELIANCE.NS": "Reliance Industries", "TCS.NS": "Tata Consultancy",
+        "HDFCBANK.NS": "HDFC Bank", "INFY.NS": "Infosys", "ICICIBANK.NS": "ICICI Bank", "HINDUNILVR.NS": "Hindustan Unilever",
+        "ITC.NS": "ITC", "BHARTIARTL.NS": "Bharti Airtel", "LT.NS": "Larsen & Toubro", "SBIN.NS": "State Bank of India",
+        "BAJFINANCE.NS": "Bajaj Finance", "MARUTI.NS": "Maruti Suzuki", "SUNPHARMA.NS": "Sun Pharma",
+        "ASIANPAINT.NS": "Asian Paints", "NTPC.NS": "NTPC", "ONGC.NS": "ONGC", "ULTRACEMCO.NS": "UltraTech Cement",
+        "TITAN.NS": "Titan", "DLF.NS": "DLF", "005930.KS": "Samsung Electronics", "000660.KS": "SK Hynix",
+        "005380.KS": "Hyundai Motor", "035420.KS": "Naver", "051910.KS": "LG Chem", "105560.KS": "KB Financial",
+        "068270.KS": "Celltrion", "005490.KS": "POSCO Holdings", "2330.TW": "TSMC", "2317.TW": "Hon Hai (Foxconn)",
+        "2454.TW": "MediaTek", "2308.TW": "Delta Electronics", "2881.TW": "Fubon Financial", "2412.TW": "Chunghwa Telecom",
+        "2382.TW": "Quanta Computer", "BHP.AX": "BHP", "CBA.AX": "Commonwealth Bank", "CSL.AX": "CSL",
+        "NAB.AX": "National Australia Bank", "WBC.AX": "Westpac", "WES.AX": "Wesfarmers", "MQG.AX": "Macquarie",
+        "WDS.AX": "Woodside Energy", "FMG.AX": "Fortescue", "TLS.AX": "Telstra", "GMG.AX": "Goodman Group",
+        "WOW.AX": "Woolworths", "D05.SI": "DBS", "O39.SI": "OCBC", "U11.SI": "UOB", "Z74.SI": "Singtel",
+        "C38U.SI": "CapitaLand Integrated", "BBCA.JK": "Bank Central Asia", "BBRI.JK": "Bank Rakyat Indonesia",
+        "TLKM.JK": "Telkom Indonesia", "ASII.JK": "Astra International",
+    },
+    "Canada": {
+        "RY.TO": "Royal Bank of Canada", "TD.TO": "Toronto-Dominion Bank", "SHOP.TO": "Shopify", "ENB.TO": "Enbridge",
+        "CNR.TO": "Canadian National Railway", "CP.TO": "Canadian Pacific Kansas City", "BN.TO": "Brookfield",
+        "BMO.TO": "Bank of Montreal", "BNS.TO": "Scotiabank", "CNQ.TO": "Canadian Natural Resources", "SU.TO": "Suncor",
+        "TRI.TO": "Thomson Reuters", "ATD.TO": "Alimentation Couche-Tard", "CSU.TO": "Constellation Software",
+        "MFC.TO": "Manulife", "NTR.TO": "Nutrien", "ABX.TO": "Barrick", "FTS.TO": "Fortis", "BCE.TO": "BCE",
+        "WCN.TO": "Waste Connections",
+    },
+    "Latin America": {
+        # Brazil, Mexico and Chile on their own exchanges; Argentina, Peru, Colombia and the region's big tech through
+        # their New York listings, since Yahoo's data from those exchanges is thin
+        "PETR4.SA": "Petrobras", "VALE3.SA": "Vale", "ITUB4.SA": "Itau Unibanco", "BBDC4.SA": "Bradesco",
+        "BBAS3.SA": "Banco do Brasil", "ABEV3.SA": "Ambev", "WEGE3.SA": "WEG", "B3SA3.SA": "B3", "SUZB3.SA": "Suzano",
+        "RENT3.SA": "Localiza", "RADL3.SA": "Raia Drogasil", "VIVT3.SA": "Telefonica Brasil", "EQTL3.SA": "Equatorial",
+        "PRIO3.SA": "PRIO", "SBSP3.SA": "Sabesp", "WALMEX.MX": "Walmart de Mexico", "AMXB.MX": "America Movil",
+        "GFNORTEO.MX": "Banorte", "FEMSAUBD.MX": "FEMSA", "CEMEXCPO.MX": "Cemex", "GMEXICOB.MX": "Grupo Mexico",
+        "GAPB.MX": "Grupo Aeroportuario del Pacifico", "SQM-B.SN": "SQM", "CHILE.SN": "Banco de Chile",
+        "FALABELLA.SN": "Falabella", "COPEC.SN": "Empresas Copec", "MELI": "MercadoLibre", "NU": "Nu Holdings",
+        "BAP": "Credicorp", "CIB": "Bancolombia", "YPF": "YPF", "GGAL": "Grupo Financiero Galicia",
+    },
+    "Africa": {
+        # Johannesburg, quoted in cents (ZAc), which the app converts like pence
+        "NPN.JO": "Naspers", "FSR.JO": "FirstRand", "SBK.JO": "Standard Bank", "MTN.JO": "MTN Group", "SOL.JO": "Sasol",
+        "GFI.JO": "Gold Fields", "SHP.JO": "Shoprite", "CPI.JO": "Capitec", "VOD.JO": "Vodacom", "BID.JO": "Bid Corporation",
     },
     "ETFs": {
         "SPY": "S&P 500 ETF", "QQQ": "Nasdaq-100 ETF", "VTI": "Total US Market ETF", "VXUS": "Intl ex-US ETF",
@@ -62,6 +149,8 @@ DEFAULT_TILES = ["^GSPC", "^IXIC", "^STOXX50E", "KSA", "QAT", "^VIX", "^TNX", "G
 REGION_BY_TICKER = {
     "VWCE.DE": "Global", "SPY": "US", "QQQ": "US", "VWO": "Emerging", "VXUS": "International", "EFA": "International",
     "KSA": "Gulf", "QAT": "Gulf",
+    # Latin American companies listed in New York: their business is in the region, not the US
+    "MELI": "Latin America", "NU": "Latin America", "BAP": "Latin America", "CIB": "Latin America", "YPF": "Latin America", "GGAL": "Latin America",
 }
 
 REGION_BY_SUFFIX = {
@@ -70,8 +159,11 @@ REGION_BY_SUFFIX = {
     ".MC": "Europe", ".MI": "Europe", ".BR": "Europe", ".ST": "Europe", ".OL": "Europe", ".HE": "Europe",
     ".AT": "Europe", ".LS": "Europe", ".VI": "Europe", ".IR": "Europe", ".F": "Europe", ".SG": "Europe", ".WA": "Europe",
     ".MU": "Europe", ".DU": "Europe", ".BE": "Europe", ".HM": "Europe", ".HA": "Europe",
-    ".T": "Asia", ".HK": "Asia", ".AX": "Asia", ".NS": "Asia", ".BO": "Asia", ".SS": "Asia", ".SZ": "Asia", ".KS": "Asia",
-    ".KQ": "Asia", ".TW": "Asia", ".SI": "Asia", ".NZ": "Asia", ".TO": "Americas", ".V": "Americas", ".SA": "Americas", ".MX": "Americas",
+    # Regions carry the markets' names, so a stock's region is the market you'd tick to find it
+    ".T": "Asia-Pacific", ".HK": "Asia-Pacific", ".AX": "Asia-Pacific", ".NS": "Asia-Pacific", ".BO": "Asia-Pacific",
+    ".SS": "Asia-Pacific", ".SZ": "Asia-Pacific", ".KS": "Asia-Pacific", ".KQ": "Asia-Pacific", ".TW": "Asia-Pacific",
+    ".SI": "Asia-Pacific", ".NZ": "Asia-Pacific", ".JK": "Asia-Pacific", ".TO": "Canada", ".V": "Canada",
+    ".SA": "Latin America", ".MX": "Latin America", ".SN": "Latin America", ".JO": "Africa",
     ".NYB": "US",
 }
 
@@ -81,6 +173,7 @@ CURRENCY_BY_SUFFIX = {
     ".AT": "EUR", ".LS": "EUR", ".VI": "EUR", ".IR": "EUR", ".SW": "CHF", ".CO": "DKK", ".ST": "SEK",
     ".OL": "NOK", ".F": "EUR", ".SG": "EUR", ".MU": "EUR", ".DU": "EUR", ".BE": "EUR", ".HM": "EUR", ".HA": "EUR", ".WA": "PLN", ".T": "JPY", ".HK": "HKD", ".AX": "AUD", ".NS": "INR", ".BO": "INR", ".SS": "CNY",
     ".SZ": "CNY", ".KS": "KRW", ".KQ": "KRW", ".TW": "TWD", ".SI": "SGD", ".NZ": "NZD", ".TO": "CAD", ".V": "CAD", ".SA": "BRL", ".MX": "MXN",
+    ".SN": "CLP", ".JO": "ZAc", ".JK": "IDR",
     ".NYB": "USD",
 }
 
@@ -111,6 +204,10 @@ FUND_CURRENCIES = {
     **{t: _DEVELOPED for t in ("IWDA.AS", "SWDA.L", "EUNL.DE", "URTH")},
     **{t: _US_ONLY for t in ("SPY", "VOO", "IVV", "CSPX.L", "VUSA.L", "SXR8.DE", "VTI", "BND", "AGG")},
 }
+
+
+# The markets of single stocks, as the Screener, Opportunities and Ask offer them
+STOCK_MARKETS = [m for m in UNIVERSE if m not in ("ETFs", "Crypto")]
 
 
 def default_bucket(ticker):

@@ -15,6 +15,7 @@ import httpx
 from . import ai, data, db, insights, portfolio
 from . import indicators as ind
 from .ai import _f_money, _f_num, _f_pct, _f_x
+from .universe import STOCK_MARKETS
 
 USAGE = []            # token counts the provider reported, newest last (for tuning; kept short)
 MAX_ROUNDS = 4        # model calls that may use tools; one more call then answers with what was found
@@ -106,6 +107,12 @@ def get_stock(ticker):
     d = ai.brief_data(ctx)  # the brief's own facts: in units, banks handled, missing figures left out
     d.pop("Recent headlines naming the company", None)
     d.pop("What the scores mean", None)  # said once in the instructions
+    peers = insights.sector_ranks(t, settings) if inf.get("assetClass") == "Stocks" else None
+    if peers:
+        d["Within its sector"] = {"sector": peers["sector"], "other stocks compared": peers["others"],
+                                  **{f"{k} score beats": f"{_f_pct(v['beats'], 0)} of {v['of']} others (their middle: {_f_num(v['median'], 0)})"
+                                     if v["beats"] is not None else f"not ranked: {v['of']} others with this score" for k, v in peers["ranks"].items()},
+                                  "meaning": "the share of the other stocks in the same sector, from every market in the app's list, that this score beats; 50% is the middle"}
     # The latest day's move, with its date: without it "did it move today" had no answer, and a closed market's
     # last price could be read as today's
     c = full["Close"].dropna()
@@ -125,7 +132,7 @@ def screen(filters=None, question=None):
     for k in ("industry", "exclude_industry"):  # the rules' bank filters, which the model may pass on too
         if isinstance((filters or {}).get(k), str):
             f[k] = filters[k]
-    d = insights.screen({"filters": f, "markets": f.get("markets") or ["US", "Europe", "Gulf"]}, _settings())
+    d = insights.screen({"filters": f, "markets": f.get("markets") or STOCK_MARKETS}, _settings())
     rows = [{"ticker": r["ticker"], "name": r["name"], "sector": r["sector"], "region": r["region"], "score": _f_num(r["composite"], 1), "stance": r["stance"],
              "pe": _f_x(r["pe"]) if r.get("pe") and r["pe"] > 0 else None, "dividend_yield": _f_pct(r["divYield"], 2), "revenue_growth": _f_pct(r["revGrowth"], 1),
              "roe": _f_pct(r["roe"], 1), "return_1y": _f_pct(r["ret1y"], 1), "volatility": _f_pct(r["vol"], 1)} for r in d["rows"][:10]]
@@ -134,7 +141,7 @@ def screen(filters=None, question=None):
 
 
 def get_opportunities(markets=None):
-    o = insights.opportunities(_settings(), markets or ["US", "Europe", "Gulf"])
+    o = insights.opportunities(_settings(), markets or STOCK_MARKETS)
     short = lambda r, extra=(): {"ticker": r["ticker"], "name": r["name"], "sector": r["sector"], "score": _f_num(r["composite"], 1), "stance": r["stance"],
                                  "reasons": r["reasons"], **dict(extra)}
     return {
@@ -170,6 +177,27 @@ def pretrade(ticker, amount):
             "sector_mix_counting_what_funds_hold": {"before": {k: _f_pct(v, 1) for k, v in (r.get("sectorMixBefore") or {}).items()},
                                                     "after": {k: _f_pct(v, 1) for k, v in (r.get("sectorMixAfter") or {}).items()}},
             "moves_with_your_holdings": {c["ticker"]: _f_num(c["correlation"], 2) for c in r["correlations"]}}
+
+
+def get_ownership(ticker):
+    t = ticker.strip().upper()
+    if (unknown := _known(t)):
+        return unknown
+    own = data.ownership(t)
+    if not own:
+        return {"ticker": t, "ownership": "Yahoo has no ownership data for it (it has it mainly for US and Canadian companies)."}
+    s = insights.insider_summary(own)
+    cur = data.main_unit(data.info(t).get("currency"))
+    holder = lambda h: {"holder": h["holder"], "owns": _f_pct(h["pct"], 2), "change_at_last_report": _f_pct(h["change"], 1), "reported": h["reported"]}
+    return {"ticker": t, "held_by_insiders": _f_pct(own.get("insiderPct"), 2), "held_by_institutions": _f_pct(own.get("institutionPct"), 1),
+            "institutions": int(own["institutionCount"]) if own.get("institutionCount") else None,
+            f"insiders_past_{s['months']}_months": {"summary": s["headline"], "market_buys": s["buys"], "bought_shares": _f_num(s["buyShares"], 0),
+                                                     "bought_value": _f_money(s["buyValue"], cur) if s["buys"] else None, "market_sales": s["sells"],
+                                                     "sold_shares": _f_num(s["sellShares"], 0), "sold_value": _f_money(s["sellValue"], cur) if s["sells"] else None,
+                                                     "awards_exercises_gifts": s["other"]},
+            "largest_institutions": [holder(h) for h in own["institutions"][:5]], "largest_funds": [holder(h) for h in own["funds"][:3]],
+            "note": "Only trades at a price on the market count as buying or selling; share awards, option exercises and gifts are pay or "
+                    "planning, not decisions (Yahoo's own summary counts them as purchases). Insider selling is common and often routine."}
 
 
 def get_analysts(ticker):
@@ -497,12 +525,15 @@ TOOLS = {
                   "question": {"type": "string", "description": "e.g. 'cheap European banks'; read by the app's keyword rules"}})),
     "get_opportunities": (get_opportunities, "The Opportunities page: top ranked stocks; fits_your_portfolio, with each stock's measured correlation "
                                               "with what the investor holds (use it for diversification questions); and good companies below their high.",
-                          S({"markets": {"type": "array", "items": {"type": "string", "enum": ["US", "Europe", "Gulf"]}}})),
+                          S({"markets": {"type": "array", "items": {"type": "string", "enum": STOCK_MARKETS}}})),
     "compare": (compare, "Up to 5 assets side by side: return, volatility, drawdown, Sharpe, P/E, and how closely each pair moves together.",
                 S({"tickers": {"type": "array", "items": {"type": "string"}}, "period": {"type": "string", "enum": ["6mo", "1y", "2y", "5y"]}}, ["tickers"])),
     "pretrade": (pretrade, "What buying an amount (in the base currency) of one asset would do to the portfolio: its weight, the whole sector mix "
                            "before and after (counting what funds hold), currency exposure, beta and warnings. Use it for 'what if I bought'. Nothing is saved.",
                  S({"ticker": {"type": "string"}, "amount": {"type": "number"}}, ["ticker", "amount"])),
+    "get_ownership": (get_ownership, "Who owns a company and what its insiders did: the share held by insiders and institutions, insiders' "
+                                     "market buys and sales over the past 6 months, and the largest institutions and funds with their latest change.",
+                      S({"ticker": {"type": "string"}}, ["ticker"])),
     "get_analysts": (get_analysts, "Analysts' price targets and buy/hold/sell counts for one stock, as Yahoo reports them.", S({"ticker": {"type": "string"}}, ["ticker"])),
     "get_earnings": (get_earnings, "Next earnings and ex-dividend dates, and recent quarters' reported against expected earnings per share.", S({"ticker": {"type": "string"}}, ["ticker"])),
     "get_dividends": (get_dividends, "Dividend history: latest payment, total per year, past 12 months and yield.", S({"ticker": {"type": "string"}}, ["ticker"])),

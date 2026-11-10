@@ -20,6 +20,11 @@ const SLOW = 150000;
   let dialogAnswer = null;
   p.on("dialog", (d) => (d.type() === "prompt" ? d.accept(dialogAnswer ?? "") : d.accept()));
   const nav = async (v) => { await p.click(`[data-view="${v}"]`); await p.waitForTimeout(350); };
+  // Saving settings waits for the save itself, not a fixed time: the server may still be loading what the last page asked for
+  const saveSettings = async () => {
+    await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/settings") && r.request().method() === "POST", { timeout: SLOW }), p.click("#btnSaveSettings")]);
+    await p.waitForTimeout(200);
+  };
   const txt = (s) => p.evaluate((x) => document.querySelector(x)?.innerText?.replace(/\s+/g, " ").trim() ?? null, s);
   const shot = (n) => p.screenshot({ path: `${OUT}/${MODE}_${n}.png`, fullPage: true });
   const canvasDrawn = (s) => p.evaluate((x) => { const c = document.querySelector(x); if (!c) return false; const d = c.getContext("2d")?.getImageData(0, 0, c.width, c.height).data; if (!d) return true; for (let i = 3; i < d.length; i += 4) if (d[i]) return true; return false; }, s);
@@ -52,6 +57,19 @@ const SLOW = 150000;
       expect("research: a fund explains its missing factors", gaps.length === 3 && gaps.every((g) => /Doesn't apply to funds/.test(g)) && /momentum and risk/.test(why), gaps[0]);
     }
     expect(`research ${t}`, r.price && r.charts > 0 && r.stats >= 2 && !r.bad, `${r.price} | ${r.stance} | ${r.cov}${r.bad ? " | BAD TEXT" : ""}`);
+    if (["AAPL", "SPY"].includes(t)) {  // a stock is ranked within its sector, after the page; a fund isn't
+      if (t === "AAPL") await p.waitForFunction(() => /In its sector|too few to rank/.test(document.querySelector("#rPeers").innerText), null, { timeout: SLOW });
+      const peers = await p.evaluate(() => ({ line: document.querySelector("#rPeers").innerText, factors: [...document.querySelectorAll(".factor .peer")].map((x) => x.innerText).filter(Boolean) }));
+      expect(`research ${t}: ${t === "AAPL" ? "ranked within its sector" : "no sector rank for a fund"}`, t === "AAPL"
+        ? (/In its sector: the overall score is better than \d+% of \d+ other/.test(peers.line) && peers.factors.length >= 3 && peers.factors.every((x) => /better than \d+% of \d+|too few/.test(x)))
+        : (peers.line === "" && peers.factors.length === 0), `${peers.line} | ${peers.factors[0] || ""}`);
+      // Ownership: a stock's insiders and institutions, each trade named for what it was; a fund has no such card
+      if (t === "AAPL") await p.waitForFunction(() => !/Loading/.test(document.querySelector("#rOwn").innerText), null, { timeout: SLOW });
+      const own = await p.evaluate(() => ({ shown: !document.querySelector("#rOwnCard").classList.contains("hidden"), text: document.querySelector("#rOwn").innerText }));
+      expect(`research ${t}: ${t === "AAPL" ? "ownership card" : "no ownership card for a fund"}`, t === "AAPL"
+        ? (own.shown && /Held by insiders/i.test(own.text) && /Largest institutions/i.test(own.text) && /(Bought|Sold|Award, exercise or gift|No insider trades)/i.test(own.text) && /past 6 months|No insider/.test(own.text) && !/undefined|NaN/.test(own.text))
+        : !own.shown, own.text.slice(0, 140));
+    }
     if (["AAPL", "SPY", "BTC-USD"].includes(t)) {  // company statements and a DCF only for a company; the neighbour fills the row
       const lay = await p.evaluate(() => ({ cls: document.querySelector("#rTags").innerText, fin: !document.querySelector("#finCard").classList.contains("hidden"), dcf: !document.querySelector("#dcfCard").classList.contains("hidden"),
         statsWide: document.querySelector("#statGrid").closest(".card").getBoundingClientRect().width / document.querySelector("#statGrid").closest(".grid2").getBoundingClientRect().width }));
@@ -157,10 +175,15 @@ const SLOW = 150000;
   // ---- Screener
   await nav("screener");
   await p.check('#scrMarkets input[value="Crypto"]');
+  // Live, only the markets the app began with: every run starts with an empty cache, and downloading all 400 symbols
+  // each time gets the computer refused by Yahoo for a while. Demo mode covers every market.
+  const fewer = ["Asia-Pacific", "Canada", "Latin America", "Africa"];
+  if (MODE === "live") for (const m of fewer) await p.uncheck(`#scrMarkets input[value="${m}"]`);
   await p.fill("#fPe", "25"); await p.fill("#fRoe", "10"); await p.click("#btnScr");
   await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: 400000 }); await p.waitForTimeout(400);
   const scr = await p.evaluate(() => [...document.querySelectorAll("#scrTable tbody tr")].map((r) => r.innerText));
-  expect("screener: filters narrow the list", scr.length > 0 && scr.length < 80, `${scr.length} rows | ${await txt("#scrInfo")}`.slice(0, 170));
+  const scanned = Number((/out of (\d+) scanned/.exec(await txt("#scrInfo")) || [])[1] || 0);
+  expect("screener: filters narrow the list", scr.length > 0 && scanned > (MODE === "live" ? 100 : 300) && scr.length < scanned * 0.6, `${scr.length} of ${scanned} | ${await txt("#scrInfo")}`.slice(0, 170));
   await p.click("#scrTable thead th:nth-child(5)"); await p.waitForTimeout(200);
   await p.fill("#fPe", ""); await p.fill("#fRoe", ""); await p.click("#btnScr");
   await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: 400000 }); await p.waitForTimeout(400);
@@ -284,6 +307,7 @@ const SLOW = 150000;
   expect("journal: delete an entry", !/walk test/.test(await txt("#journalList")));
 
   // ---- Opportunities: four charts from one scoring, each bar opening its stock; the dashboard card leads here
+  if (MODE === "live") await p.evaluate(() => localStorage.setItem("oppMarkets", JSON.stringify(["US", "Europe", "Gulf"])));
   await nav("opportunities");
   await p.waitForFunction(() => /stocks scored/.test(document.querySelector("#oppStatus").innerText), null, { timeout: SLOW });
   await p.waitForTimeout(500);
@@ -341,7 +365,13 @@ const SLOW = 150000;
   await p.waitForFunction(() => document.querySelector("#dashOppList .opp-row, #dashOppList div.muted:not(:has(.spinner)):last-child"), null, { timeout: SLOW });
   expect("dashboard: opportunity map card drawn", await canvasDrawn("#dashOppChart"), await txt("#dashOppList"));
   // Hovering a dot names the company; the corner's stocks are named on the map itself
-  const dot = await p.evaluate(() => { const c = state.charts.dashOppChart, m = c.getDatasetMeta(0).data[0], r = c.canvas.getBoundingClientRect(); return { x: r.left + m.x, y: r.top + m.y, t: c.data.datasets[0].data[0].row.ticker }; });
+  // the dot furthest from any other, since with hundreds of stocks a dot can sit under another one
+  const dot = await p.evaluate(() => {
+    const c = state.charts.dashOppChart, pts = c.getDatasetMeta(0).data, r = c.canvas.getBoundingClientRect();
+    let best = 0, far = -1;
+    pts.forEach((m, i) => { const d = Math.min(...pts.map((o, j) => (i === j ? Infinity : Math.hypot(o.x - m.x, o.y - m.y)))); if (d > far) { far = d; best = i; } });
+    return { x: r.left + pts[best].x, y: r.top + pts[best].y, t: c.data.datasets[0].data[best].row.ticker };
+  });
   await p.mouse.move(dot.x, dot.y); await p.waitForTimeout(300);
   const tip = await p.evaluate(() => { const t = state.charts.dashOppChart.tooltip; return { shown: t.opacity > 0, lines: (t.body || []).flatMap((b) => b.lines) }; });
   expect("dashboard: hovering a dot on the map names the company", tip.shown && tip.lines.some((l) => l.includes(dot.t)), tip.lines.join(" | "));
@@ -397,24 +427,24 @@ const SLOW = 150000;
   // ---- Settings
   await nav("settings");
   const startBase = await p.inputValue("#sBase");
-  await p.selectOption("#sBase", startBase === "USD" ? "EUR" : "USD"); await p.locator("[data-w='value']").fill("60"); await p.click("#btnSaveSettings"); await p.waitForTimeout(800);
+  await p.selectOption("#sBase", startBase === "USD" ? "EUR" : "USD"); await p.locator("[data-w='value']").fill("60"); await saveSettings();
   expect("settings: saved and weights normalised", /Saved/.test(await txt("#settingsMsg")));
   const after = await p.evaluate(async () => (await fetch("/api/portfolio")).json());
   expect("settings: base currency applies to the portfolio", after.base !== startBase && after.total > 0, `${Math.round(pf.total)} ${pf.base} -> ${Math.round(after.total)} ${after.base}`);
   await research("AAPL");
   expect("settings: custom weights shown on Research", /V \d+ · Q \d+/.test(await txt("#rStance")), await txt("#rStance"));
-  await nav("settings"); await p.click("#btnBalanced"); await p.selectOption("#sBase", startBase); await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  await nav("settings"); await p.click("#btnBalanced"); await p.selectOption("#sBase", startBase); await saveSettings();
   // Dashboard tiles: pick two, see two, then put the defaults back
   await nav("settings");
   const defaults = await p.evaluate(() => $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile));
   await p.evaluate(() => $$("[data-tile]").forEach((i) => { i.checked = ["^GSPC", "KSA"].includes(i.dataset.tile); }));
-  await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  await saveSettings();
   await nav("dashboard"); await p.waitForFunction(() => document.querySelectorAll("#macroStrip .mcard").length === 2, null, { timeout: SLOW });
   const tiles = await p.evaluate(() => [...document.querySelectorAll("#macroStrip .mcard")].map((c) => c.dataset.t + " " + c.querySelector(".sm").textContent));
   expect("settings: dashboard shows only the chosen tiles", tiles.length === 2 && tiles.every((t) => !/—/.test(t)), tiles.join(" | "));
   await nav("settings");
   await p.evaluate((d) => $$("[data-tile]").forEach((i) => { i.checked = d.includes(i.dataset.tile); }), defaults);
-  await p.click("#btnSaveSettings"); await p.waitForTimeout(600);
+  await saveSettings();
   await p.locator("#ctTicker").pressSequentially("^AEX"); await p.locator("#ctName").pressSequentially("Amsterdam");
   await p.press("#ctName", "Enter");
   await p.waitForFunction(() => /Added|Yahoo/.test(document.querySelector("#ctMsg").textContent) && !document.querySelector("#btnAddTile").disabled, null, { timeout: SLOW });

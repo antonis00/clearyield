@@ -319,6 +319,7 @@ async function openStock(t, period) {
     if (request !== state.stockRequest) return;
     state.stock = s; body.style.opacity = 1;
     renderHeader(s); renderPrice(s); renderFactors(s); renderStats(s); renderFin(s);
+    loadPeers(state.ticker, request);
     $("#briefOut").innerHTML = "Combines scores, price action, fundamentals and headlines into a bull/bear summary.";
     $("#briefOut").classList.add("muted");
     $("#rAbout").textContent = s.info.longBusinessSummary || "No description available.";
@@ -329,7 +330,7 @@ async function openStock(t, period) {
     // The default growth: revenue a year over three years where there are the statements, else the latest quarter
     const g = isNum(s.info.revenueGrowth3y) ? s.info.revenueGrowth3y : s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
     if (hasDcf(s)) runDcf();
-    loadNews(); loadEarnings(); loadFund(s); renderHistory(s);
+    loadNews(); loadEarnings(); loadFund(s); loadOwnership(s); renderHistory(s);
   } catch (e) {
     if (request !== state.stockRequest) return;
     body.style.opacity = 1; body.classList.add("hidden"); $("#researchEmpty").classList.remove("hidden");
@@ -484,10 +485,36 @@ function renderFactors(s) {
     data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: tint("--accent", "33"), borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
-  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}
+  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}<div class="peer" data-peer="${n}"></div>
     <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}"${p.note ? ` title="${esc(p.note)}"` : ""}>${isNum(p.score) ? num(p.score, 0) : p.note ? "not used" : "n/a"}</span></div>${p.note && p === (s.scores.breakdown[n] || []).find((x) => x.note) ? `<div class="part-note">${esc(p.note)}</div>` : ""}`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
   $$(".factor .fh").forEach((h) => h.onclick = (e) => { if (!e.target.closest(".info")) h.parentElement.classList.toggle("open"); });
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
+}
+// Where each score stands among the other stocks of its sector, from every market in the list. It loads after the
+// page, since the first ranking of the hour scores the whole list.
+const PEER_INFO = "Ranks compare a score with the other stocks in the same sector, from every market in StockPilot's list. 50% is the "
+  + "sector's middle. The score itself is on one fixed scale for every stock, so a bank and a software company meet the same limits; "
+  + "the rank says how it compares with its own kind. A sector with fewer than 8 others isn't ranked.";
+async function loadPeers(t, request) {
+  const stock = state.stock?.info?.assetClass === "Stocks";
+  $("#rPeers").innerHTML = stock ? '<span class="muted">Comparing with its sector…</span>' : "";
+  $$(".factor .peer").forEach((el) => { el.textContent = ""; });
+  if (!stock) return;
+  let r;
+  try { r = await api(`/api/stock/${encodeURIComponent(t)}/peers`); } catch { r = null; }
+  if (request !== state.stockRequest) return;
+  if (!r) { $("#rPeers").innerHTML = ""; return; }
+  const where = Object.entries(r.regions).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${v}`).join(", ");
+  const line = (k) => {
+    const x = r.ranks[k];
+    if (x.beats == null) return x.of ? `only ${x.of} other ${esc(r.sector)} stock${x.of === 1 ? " has" : "s have"} this score: too few to rank` : "";
+    return `better than <b>${pct(x.beats, 0, false)}</b> of ${x.of} ${esc(r.sector)} stocks · their middle: ${num(x.median, 0)}`;
+  };
+  const c = r.ranks.composite;
+  $("#rPeers").innerHTML = (c.beats == null
+    ? `<span class="muted">${r.others} other ${esc(r.sector)} stock${r.others === 1 ? "" : "s"} in the list: too few to rank against</span>`
+    : `In its sector: the overall score is better than <b>${pct(c.beats, 0, false)}</b> of ${c.of} other ${esc(r.sector)} stocks <span class="muted">(${where})</span>`) + ` ${infoIcon(PEER_INFO)}`;
+  $$(".factor .peer").forEach((el) => { el.innerHTML = line(el.dataset.peer); });
 }
 function renderStats(s) {
   const i = s.info, st = s.stats, cur = i.currency;
@@ -549,6 +576,41 @@ async function loadEarnings() {
   const e = await api(`/api/stock/${encodeURIComponent(ticker)}/earnings`).catch(() => []);
   if (ticker !== state.ticker || !e.length) return;
   el.innerHTML = `<h4>Earnings against expectations</h4><table><tr><th>Quarter to</th><th class="num">Reported</th><th class="num">Expected</th><th>Result</th></tr>${e.map((q) => `<tr><td>${esc(q.quarter)}</td><td class="num">${num(q.actual)}</td><td class="num">${num(q.estimate)}</td><td class="${cls(q.surprise)}">${isNum(q.surprise) ? `${q.surprise >= 0 ? "Beat" : "Missed"} by ${pct(Math.abs(q.surprise), 1, false)}` : "—"}</td></tr>`).join("")}</table>`;
+}
+// Insiders and institutions. A trade counts as buying or selling only when it was at a price on the market: Yahoo's
+// own "purchases" include share awards and option exercises, which are pay, not a decision to buy.
+const OWN_INFO = "Only trades at a price on the market count as buying or selling. Share awards, option exercises, gifts and conversions are "
+  + "part of pay or planning, so they're listed but not counted (Yahoo's own summary counts them as purchases). Insiders sell far more often "
+  + "than they buy, often for routine reasons; buying with their own money is the rarer and stronger sign. Yahoo has these records mainly "
+  + "for US and Canadian companies.";
+const OWN_KIND = { buy: ["Bought", "up"], sell: ["Sold", "down"], other: ["Award, exercise or gift", "muted"] };
+async function loadOwnership(s) {
+  const ticker = state.ticker, card = $("#rOwnCard"), el = $("#rOwn");
+  card.classList.toggle("hidden", s.info.assetClass !== "Stocks");
+  el.innerHTML = "";
+  if (s.info.assetClass !== "Stocks") return;
+  el.innerHTML = '<span class="muted">Loading…</span>';
+  const o = await api(`/api/stock/${encodeURIComponent(ticker)}/ownership`).catch(() => null);
+  if (ticker !== state.ticker) return;
+  if (!o) { el.innerHTML = '<div class="muted">Yahoo has no ownership data for this company. It has it mainly for US and Canadian companies.</div>'; return; }
+  const cur = o.currency, sm = o.summary;
+  const kpis = [["Held by insiders", pct(o.insiderPct, 2, false)], ["Held by institutions", pct(o.institutionPct, 1, false)],
+    ["Institutions", isNum(o.institutionCount) ? num(o.institutionCount, 0) : "—"],
+    [`Insider buys, ${sm.months} months`, `${sm.buys}${sm.buys ? ` · ${money(sm.buyValue, cur, 0)}` : ""}`],
+    [`Insider sales, ${sm.months} months`, `${sm.sells}${sm.sells ? ` · ${money(sm.sellValue, cur, 0)}` : ""}`]];
+  const trades = o.insiders.slice(0, 12);
+  const holders = (rows, title) => rows.length ? `<h4>${title}</h4><table><tr><th>Holder</th><th class="num">Owns</th><th class="num">Change</th><th>Reported</th></tr>${rows.slice(0, 8).map((h) =>
+    `<tr><td><span class="clip-wide" title="${esc(h.holder)}">${esc(h.holder)}</span></td><td class="num">${pct(h.pct, 2, false)}</td><td class="num">${cpct(h.change)}</td><td class="muted">${esc(h.reported || "")}</td></tr>`).join("")}</table>` : "";
+  el.innerHTML = `<p class="own-head">${esc(sm.headline)} ${infoIcon(OWN_INFO)}</p>
+    <div class="kpis">${kpis.map(([l, v]) => `<div class="kpi"><div class="l">${l}</div><div class="v sm-v">${v}</div></div>`).join("")}</div>
+    <div class="grid2 own-grid">
+      <div>${trades.length ? `<h4>Insider trades, past year</h4><table><tr><th>Date</th><th>Who</th><th>Trade</th><th class="num">Shares</th><th class="num">Value</th></tr>${trades.map((t) => {
+        const [label, tone] = OWN_KIND[t.kind] || OWN_KIND.other;
+        return `<tr><td>${esc(t.date)}</td><td><span class="clip-wide" title="${esc(`${t.insider}, ${t.position}`)}">${esc(t.insider)}</span><span class="sub">${esc(t.position)}</span></td>
+          <td class="${tone}" title="${esc(t.text || "")}">${label}</td><td class="num">${num(t.shares, 0)}</td><td class="num">${isNum(t.value) && t.kind !== "other" ? money(t.value, cur, 0) : "—"}</td></tr>`; }).join("")}</table>`
+        : '<div class="muted">No insider trades reported in the past year.</div>'}</div>
+      <div>${holders(o.institutions, "Largest institutions") || '<div class="muted">Yahoo lists no institutions for this company.</div>'}${holders(o.funds, "Largest funds")}</div>
+    </div>`;
 }
 async function loadFund(s) {
   const ticker = state.ticker, card = $("#rFundCard");
@@ -722,13 +784,15 @@ async function runScreen(body) {
     const kinds = [f.industry ? `${f.industry} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${f.exclude_sector}` : "", f.exclude_industry ? `Not ${f.exclude_industry}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
     $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
-      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region" }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
+      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region", fmt: (v) => `<span class="clip" title="${esc(v)}">${esc(v)}</span>` }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: priceOf }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
       { k: "revGrowth", label: "Rev g.", num: 1, fmt: (v) => cpct(v) }, { k: "roe", label: "ROE", num: 1, fmt: (v) => pct(v, 0, false) },
       { k: "f_value", label: `Val ${factorInfo("value")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "f_quality", label: `Qual ${factorInfo("quality")}`, num: 1, fmt: (v) => num(v, 0) },
       { k: "f_growth", label: `Grow ${factorInfo("growth")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "f_momentum", label: `Mom ${factorInfo("momentum")}`, num: 1, fmt: (v) => num(v, 0) },
-      { k: "f_risk", label: `Risk ${factorInfo("risk")}`, num: 1, fmt: (v) => num(v, 0) }, { k: "composite", label: "Score", num: 1, fmt: (v) => `<b>${num(v, 0)}</b>` },
+      { k: "f_risk", label: `Risk ${factorInfo("risk")}`, num: 1, fmt: (v) => num(v, 0) },
+      { k: "composite", label: `Score ${infoIcon("Below the score: the share of the other stocks in the same sector, from every market in the list, whose overall score this one beats. 50% is the sector's middle; a sector with fewer than 8 others isn't ranked.")}`,
+        num: 1, fmt: (v, r) => `<b>${num(v, 0)}</b>${isNum(r.sectorBeats) ? `<span class="sub" title="Better than ${pct(r.sectorBeats, 0, false)} of ${r.sectorOf} other ${esc(r.sector)} stocks">beats ${pct(r.sectorBeats, 0, false)}</span>` : ""}` },
       { k: "stance", label: "Stance", fmt: (v, r) => `${badge(v)}${r.scoredOn !== "All factors" ? `<span class="sub">${esc(r.scoredOn)}</span>` : ""}` },
     ], d.rows, { stock: (r) => r.ticker, empty: "No matches — loosen the filters." });
   } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; } finally { $$("#btnScr,#btnScrQuery").forEach((b) => b.disabled = false); }
@@ -749,7 +813,7 @@ const ASK_STEP = {
   screen: (a) => `Ran the screener${a.question ? `: "${a.question}"` : a.filters ? ` with ${Object.keys(a.filters).join(", ")}` : ""}`,
   get_opportunities: (a) => `Opened Opportunities${a.markets ? ` (${a.markets.join(", ")})` : ""}`, compare: (a) => `Compared ${(a.tickers || []).join(", ")}`,
   pretrade: (a) => `Pre-trade check: ${a.amount} of ${a.ticker}`, search: (a) => `Searched for "${a.text}"`, get_news: (a) => `Read headlines about ${a.ticker}`,
-  get_analysts: (a) => `Read analysts' views on ${a.ticker}`, get_earnings: (a) => `Checked ${a.ticker}'s earnings`, get_dividends: (a) => `Read ${a.ticker}'s dividend history`,
+  get_analysts: (a) => `Read analysts' views on ${a.ticker}`, get_ownership: (a) => `Looked at who owns ${a.ticker}`, get_earnings: (a) => `Checked ${a.ticker}'s earnings`, get_dividends: (a) => `Read ${a.ticker}'s dividend history`,
   get_price_history: (a) => `Looked at ${a.ticker} from ${a.start} to ${a.end || "today"}`, get_fund: (a) => `Looked inside ${a.ticker}`, get_market: () => "Checked the markets",
   web_search: (a) => `Searched the web: "${a.query}"`,
 };
@@ -789,8 +853,10 @@ $("#askInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault();
 /* ---------------------------------------------------------------- opportunities */
 // One scoring of the stocks feeds the page and the dashboard card. It's kept for five minutes, so moving between
 // them doesn't recalculate; Refresh asks again. The first load of the day downloads every stock, about half a minute.
-const OPP_MARKETS = ["US", "Europe", "Gulf"];
-const oppMarkets = () => { try { const m = JSON.parse(localStorage.getItem("oppMarkets")); return Array.isArray(m) && m.length ? m.filter((x) => OPP_MARKETS.includes(x)) : OPP_MARKETS; } catch { return OPP_MARKETS; } };
+// Every market of single stocks, from the backend's list; until it has arrived, the three the app began with
+const OPP_MARKETS_START = ["US", "Europe", "Gulf"];
+const oppAll = () => state.meta?.stockMarkets || OPP_MARKETS_START;
+const oppMarkets = () => { try { const m = JSON.parse(localStorage.getItem("oppMarkets")); const ok = Array.isArray(m) ? m.filter((x) => oppAll().includes(x)) : []; return ok.length ? ok : oppAll(); } catch { return oppAll(); } };
 async function getOpportunities(force) {
   const key = oppMarkets().join(",");
   if (!force && state.opp?.key === key && Date.now() - state.opp.at < 5 * 60e3) return state.opp.data;
@@ -869,7 +935,7 @@ function oppEmpty(wrap, canvasId, message) {
 }
 async function loadOpportunities(force) {
   const status = $("#oppStatus");
-  $("#oppMarkets").innerHTML = OPP_MARKETS.map((m) => `<label><input type="checkbox" value="${m}" ${oppMarkets().includes(m) ? "checked" : ""}> ${m}</label>`).join("");
+  $("#oppMarkets").innerHTML = oppAll().map((m) => `<label><input type="checkbox" value="${m}" ${oppMarkets().includes(m) ? "checked" : ""}> ${m}</label>`).join("");
   $$("#oppMarkets input").forEach((i) => i.onchange = () => {
     const picked = $$("#oppMarkets input:checked").map((x) => x.value);
     if (!picked.length) { i.checked = true; toast("Pick at least one market."); return; }

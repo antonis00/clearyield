@@ -510,7 +510,7 @@ def brief(ctx):
 
 # ---------------------------------------------------------------- natural-language screener
 FILTER_SPEC = {
-    "markets": "list of any of US, Europe, Gulf, ETFs, Crypto",
+    "markets": "list of any of US, Europe, Gulf, Asia-Pacific, Canada, Latin America, Africa, ETFs, Crypto",
     "max_pe": "number", "min_div_yield": "fraction e.g. 0.03", "min_rev_growth": "fraction", "max_de": "number (x)",
     "min_roe": "fraction", "min_score": "0-100", "min_momentum": "0-100 momentum factor score", "max_vol": "fraction annual volatility",
     "sort": "one of composite, value, quality, growth, momentum, risk, divYield",
@@ -525,7 +525,13 @@ MEANINGS = ("cheap/undervalued/value: max_pe 18. low debt: max_de 0.5. profitabl
             "names an industry. Use a number the request gives in place of these.")
 
 MARKET_WORDS = {"US": ["usa", "u.s.", "u.s", "american", "america"], "Europe": ["europe", "european", "eu"],
-                "Gulf": ["gulf", "qatar", "qatari", "saudi", "uae", "gcc", "dubai", "middle east"],
+                "Gulf": ["gulf", "qatar", "qatari", "saudi", "uae", "gcc", "dubai", "middle east", "kuwait", "kuwaiti"],
+                "Asia-Pacific": ["asia", "asian", "asia-pacific", "apac", "japan", "japanese", "china", "chinese", "hong kong", "india",
+                                 "indian", "korea", "korean", "taiwan", "taiwanese", "australia", "australian", "singapore", "indonesia", "indonesian"],
+                "Canada": ["canada", "canadian"],
+                "Latin America": ["latin america", "latin american", "latam", "brazil", "brazilian", "mexico", "mexican", "chile", "chilean",
+                                  "argentina", "argentine", "argentinian", "peru", "peruvian", "colombia", "colombian"],
+                "Africa": ["africa", "african"],
                 "ETFs": ["etf", "etfs"], "Crypto": ["crypto", "cryptocurrency", "bitcoin"]}
 SECTOR_WORDS = {"Technology": ["tech", "technology", "software", "semiconductor", "semiconductors"],
                 "Financial Services": ["bank", "banks", "financial", "financials"], "Energy": ["energy", "oil"],
@@ -650,7 +656,9 @@ def _parse_rules(t):
     t = re.sub(r"\b(not|non|no|excluding|except|without)[ -](\w+)", rule_out, t)
     t = re.sub(r"\bdividend growth\b", set_aside, t)
 
-    markets = [m for m, words in MARKET_WORDS.items() if _has(t, *words)]
+    # "Latin American" holds "American", which isn't the US here
+    not_latin = re.sub(r"\blatin[ -]americ(?:a|an)\b", " ", t)
+    markets = [m for m, words in MARKET_WORDS.items() if _has(not_latin if m == "US" else t, *words)]
     # "us" on its own is usually the pronoun, as in "show us"
     # ...but before "stocks" or a sector ("US banks", "US tech") it's the country
     nouns = "|".join(["stocks?", "shares", "companies", "market", "equities", "listed", "names"] + [re.escape(w) for ws in SECTOR_WORDS.values() for w in ws])

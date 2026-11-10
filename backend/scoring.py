@@ -104,13 +104,18 @@ def stance(score):
     return "Weak"
 
 
-def evaluate(info, close, weights=None):
+def combine(scores, weights=None):
+    """The overall score: the weighted average of the factors that have a score, or None when none do."""
     weights = weights or {k: 0.2 for k in FACTORS}
-    bd = factor_breakdown(info, close)
-    scores = {k: _avg(v) for k, v in bd.items()}
     used = {k: weights.get(k, 0) for k, s in scores.items() if s is not None and weights.get(k, 0) > 0}
     total_w = sum(used.values())
-    composite = round(sum(scores[k] * w for k, w in used.items()) / total_w, 1) if total_w else None
+    return round(sum(scores[k] * w for k, w in used.items()) / total_w, 1) if total_w else None
+
+
+def evaluate(info, close, weights=None):
+    bd = factor_breakdown(info, close)
+    scores = {k: _avg(v) for k, v in bd.items()}
+    composite = combine(scores, weights)
     if info.get("assetClass") == "Other":  # an index, currency or future: its trend is shown, but it isn't a holding to rate
         composite = None
     parts = [p for v in bd.values() for p in v if "note" not in p]  # a metric that doesn't apply isn't missing data
