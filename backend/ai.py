@@ -348,7 +348,7 @@ BRIEF_RULES = (
 
 
 # ---------------------------------------------------------------- checking the brief's figures against the data
-_NUM = re.compile(r"(?<![\w.])([-+−]?)(?:[$€£]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s?(%|x\b|×|times\b|bn\b|[TBMk]\b|trillion\b|billion\b|million\b|thousand\b)?", re.I)
+_NUM = re.compile(r"(?<![\w.])([-+−]?)(?:[$€£]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s?(%|pp\b|percentage points?\b|x\b|×|times\b|bn\b|[TBMk]\b|trillion\b|billion\b|million\b|thousand\b)?", re.I)
 _SCALE = {"t": 1e12, "trillion": 1e12, "b": 1e9, "bn": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6, "k": 1e3, "thousand": 1e3}
 # Numbers that are names or periods, not figures: "S&P 500", "50-day", "12-1 month", dates, list markers
 # An index's name with its number ("S&P 500", "Nikkei 225"), but not a level written after the name ("Nasdaq 24,579.43")
@@ -372,7 +372,7 @@ def _figures(text, at=None):
         sign, whole, frac, unit = m.groups()
         value = float(whole.replace(",", "") + ("." + frac if frac else "")) * (-1 if sign in ("-", "−") else 1)
         u = (unit or "").lower()
-        u = "%" if u == "%" else "x" if u in ("x", "×", "times") else "money" if u in _SCALE else ""
+        u = "%" if u == "%" else "pp" if u.startswith("p") else "x" if u in ("x", "×", "times") else "money" if u in _SCALE else ""
         if u == "money":
             value *= _SCALE[unit.lower()]
         out.append((value, u, len(frac or ""), m.group(0).strip()))
@@ -416,10 +416,12 @@ def check_figures(text, facts):
     """Which figures in the brief can be found in the data, allowing for rounding. A figure must match one with the same
     unit (a ROE of 142.1% doesn't make "1.42" right); a bare number may match any. Years and small counts are skipped."""
     known = _figures(facts)
-    checked, unmatched, verified = 0, [], []
+    checked, unmatched, verified, wrong_way = 0, [], [], []
     at = []
     for n, (value, unit, dec, written) in enumerate(_figures(text, at)):
         skip = not unit and (1900 <= value <= 2100 and dec == 0 or (abs(value) <= 12 and dec == 0))  # a year, or a count like "3 risks"
+        if unit == "money" and re.fullmatch(r"\d{1,2}\s?m", written):  # "12 m" in "cash flow (12 m)" is twelve months, not 12 million
+            continue
         if not skip:
             checked += 1
         scale = 1e12 if abs(value) >= 1e12 else 1e9 if abs(value) >= 1e9 else 1e6 if abs(value) >= 1e6 else 1e3 if abs(value) >= 1e3 and unit == "money" else 1
@@ -428,11 +430,19 @@ def check_figures(text, facts):
             # Rounded to the coarser of the two precisions, and without the sign, since "fell 13.8%" is how -13.8% reads
             kv, ku, kdec, _ = k
             # An amount written with a scale ("8.5k") may match one written in full ("8,454.00 EUR")
-            if unit and ku != unit and not (unit == "money" and ku == ""):
+            if unit and ku != unit and not (unit == "money" and ku == "") and not (unit == "pp" and ku == "%"):
                 return False
             tol = 0.5 * 10 ** -min(dec, kdec) * (scale if unit == "money" else 1) + 1e-9
             return abs(abs(value) - abs(kv)) <= tol
         found = any(same(k) for k in known)
+        if found and unit in ("%", "pp") and value > 0:
+            # "rose 6.6%" when the data has the figure only as -6.6%: the right number in the wrong direction
+            says = _direction(text, at[n], len(written))
+            signs = {k[0] > 0 for k in known if same(k) and k[0]}
+            if says and signs and signs == {says == "down"}:
+                wrong_way.append({"figure": written, "says": says, "data": "positive" if says == "down" else "negative"})
+                unmatched.append(((value, unit, dec, written), at[n]))
+                continue
         if found:
             verified.append(((value, unit, dec, written), at[n]))  # a part a worked-out figure may use, even one not checked ("2,000")
         elif not skip:
@@ -442,11 +452,30 @@ def check_figures(text, facts):
     # all the data's numbers can't pass off a slip like "7 + 31 = 40" as worked out; and only those written near it,
     # since among forty figures across an answer two unrelated ones multiplied to an invented fund cost ("10.1% of 2.2%").
     derived, still = [], []
+    wrong = {w["figure"] for w in wrong_way}
     for fig, pos in unmatched:
-        how = _worked_out(fig, [f for f, p in verified if _near(text, pos, p)])
+        how = None if fig[3] in wrong else _worked_out(fig, [f for f, p in verified if _near(text, pos, p)])
         (derived if how else still).append((fig[3], how))
     return {"checked": checked, "unmatched": list(dict.fromkeys(w for w, _ in still)),
-            "derived": [{"figure": w, "how": h} for w, h in dict(derived).items()]}
+            "derived": [{"figure": w, "how": h} for w, h in dict(derived).items()], "direction": wrong_way}
+
+
+_UP = r"rose|rise[sn]?|rising|gain(?:ed|s)?|up|increas(?:ed|es|e)|climb(?:ed|s)?|jump(?:ed|s)?|grew|grow(?:s|n)?|higher|rall(?:ied|ies|y)|surg(?:ed|es|e)|advanc(?:ed|es)"
+_DOWN = r"fell|fall(?:s|en)?|falling|drop(?:ped|s)?|down|declin(?:ed|es|e)|lost|los(?:s|es)|lower|slid|slip(?:ped|s)?|sank|sink|plung(?:ed|es|e)|tumbl(?:ed|es)|shed"
+
+
+def _direction(text, pos, length):
+    """'up' or 'down' when the words right before a figure ("rose 6.6%", "down 6.6%") or right after it ("a 6.6% drop")
+    say which way it went, within its sentence; None otherwise."""
+    before = re.split(r"[.;:\n|]", text[max(0, pos - 30):pos])[-1].lower()
+    after = re.split(r"[.;:\n|,]", text[pos + length:pos + length + 14])[0].lower()
+    for words, way in ((_UP, "up"), (_DOWN, "down")):
+        if re.search(rf"\b(?:{words})\b(?:\s+(?:by|of|about|nearly|almost|around|some|roughly|over|more than))?\s*[\u2248~]?\s*$", before):
+            return way
+    for words, way in ((r"gain|rise|jump|increase|climb|rally|surge|advance", "up"), (r"drop|fall|decline|loss|slide|plunge|slip", "down")):
+        if re.match(rf"\s*(?:{words})", after):
+            return way
+    return None
 
 
 def _worked_out(fig, parts):
@@ -456,14 +485,17 @@ def _worked_out(fig, parts):
     scale = 1e12 if target >= 1e12 else 1e9 if target >= 1e9 else 1e6 if target >= 1e6 else 1e3 if target >= 1e3 and unit == "money" else 1
     tol = 0.5 * 10 ** -dec * scale + 1e-9
     near = lambda x: abs(abs(x) - target) <= max(tol, target * 1e-4)
-    vals = list({(abs(p[0]), p[3], p[1]) for p in parts if p[0]})[:40]
+    # The parts keep their signs as written: "12.3%" and "-4.5%" are 16.8 points apart, not 7.8 (dropping the signs let
+    # a wrong gap pass as worked out); a sum only of parts on the same side of zero
+    vals = list({(p[0], p[3], p[1]) for p in parts if p[0]})[:40]
     for i, (a, wa, ua) in enumerate(vals):
         if unit == "%" and ua == "%" and near(100 - a):
             return f"100% − {wa}"
         for b, wb, ub in vals[i + 1:] + vals[:i]:
-            # a sum or a difference keeps the unit: percentages from percentages, amounts from amounts
-            keeps = ua == ub and (ua == unit or {ua, unit} <= {"", "money"})
-            if keeps and near(a + b):
+            # a sum or a difference keeps the unit: percentages from percentages, amounts from amounts; a gap between
+            # two percentages may be written in percentage points
+            keeps = ua == ub and (ua == unit or {ua, unit} <= {"", "money"} or (unit == "pp" and ua == "%"))
+            if keeps and unit != "pp" and (a > 0) == (b > 0) and near(a + b):
                 return f"{wa} + {wb}"
             if keeps and near(a - b):
                 return f"{wa} − {wb}" if a >= b else f"{wb} − {wa}"

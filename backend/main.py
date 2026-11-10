@@ -101,7 +101,7 @@ from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, se
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stockpilot")
 # The page checks /api/progress every second or two while data downloads; those checks stay out of the request log
-logging.getLogger("uvicorn.access").addFilter(lambda r: "/api/progress" not in r.getMessage())
+logging.getLogger("uvicorn.access").addFilter(lambda r: "/api/progress" not in r.getMessage() and "/api/ask/job/" not in r.getMessage())
 ALERT_INTERVAL = int(os.getenv("ALERT_CHECK_MINUTES", "15")) * 60
 
 
@@ -463,16 +463,68 @@ def stock_brief(ticker: str):
     return ok(ai.brief(ctx))
 
 
+def _ask_error(e):
+    """(status, message) for what stopped a question."""
+    if isinstance(e, ValueError):
+        return 400, str(e)
+    if isinstance(e, httpx.TimeoutException):
+        return 504, "The AI model didn't answer in time. Try again, perhaps with a narrower question."
+    if isinstance(e, (RuntimeError, httpx.HTTPError)):
+        return 503, str(e)[:300]
+    log.exception("Ask failed", exc_info=e)
+    return 500, "Something went wrong while answering. Try again."
+
+
+def _follow(body):
+    """The ids of earlier answers a question follows up, as the page sends them."""
+    f = body.get("follow") or []
+    return [str(x) for x in f if isinstance(x, str)][:agent.FOLLOW_MAX] if isinstance(f, list) else []
+
+
 @app.post("/api/ask")  # a POST because it spends the AI allowance
 def ask(body: dict = Body(...)):
     try:
-        return ok(agent.ask(str(body.get("question") or "")))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except httpx.TimeoutException:
-        raise HTTPException(504, "The AI model didn't answer in time. Try again, perhaps with a narrower question.")
-    except (RuntimeError, httpx.HTTPError) as e:
-        raise HTTPException(503, str(e)[:300])
+        return ok(agent.ask(str(body.get("question") or ""), _follow(body)))
+    except Exception as e:
+        raise HTTPException(*_ask_error(e))
+
+
+# A question runs in the background and the page checks on it twice a second, showing each look-up, wait and check as
+# it happens (a question can take half a minute on a free plan, and one spinner line said nothing about why)
+ASK_JOBS = {}       # id -> {"status", "events", "result" | "error", "at"}
+ASK_JOBS_KEEP = 20
+
+
+@app.post("/api/ask/start")
+def ask_start(body: dict = Body(...)):
+    question, follow = str(body.get("question") or "").strip(), _follow(body)
+    if not question:
+        raise HTTPException(400, "Ask a question.")
+    if not ai.available():
+        raise HTTPException(503, ai.config()["problem"] or "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example).")
+    jid = __import__("uuid").uuid4().hex[:12]
+    job = ASK_JOBS[jid] = {"status": "running", "events": [], "at": time.time()}
+    while len(ASK_JOBS) > ASK_JOBS_KEEP:
+        ASK_JOBS.pop(next(iter(ASK_JOBS)))
+
+    def run():
+        try:
+            job["result"] = agent.ask(question, follow, lambda ev: job["events"].append({**ev, "t": round(time.time() - job["at"], 1)}))
+            job["status"] = "done"
+        except Exception as e:
+            job["code"], job["error"] = _ask_error(e)
+            job["status"] = "error"
+    __import__("threading").Thread(target=run, daemon=True).start()
+    return ok({"id": jid})
+
+
+@app.get("/api/ask/job/{jid}")
+def ask_job(jid: str):
+    job = ASK_JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "That question isn't running any more. Ask it again.")
+    return ok({"status": job["status"], "events": job["events"], "elapsed": round(time.time() - job["at"], 1),
+               **({"result": job["result"]} if "result" in job else {}), **({"error": job["error"], "code": job["code"]} if "error" in job else {})})
 
 
 @app.get("/api/dcf/{ticker}")
