@@ -1577,7 +1577,6 @@ const QUOTES = [
   "“Endless money is the sinews of war.” Cicero",
   "“Money amassed either serves us or rules us.” Horace",
   "“The love of money grows as the money itself grows.” Juvenal",
-  "“Pecunia non olet” (money doesn’t stink). Vespasian",
   "“Money alone rules all things.” Publilius Syrus",
   "“Time is money.” Benjamin Franklin",
   "“That man is the richest whose pleasures are the cheapest.” Thoreau",
@@ -1592,10 +1591,10 @@ const nextQuote = (el) => {
 function renderModeBadge() {
   const m = state.meta, cur = m.settings.base_currency;
   $("#modeBadge").innerHTML = `<div class="status">
-    ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", `${m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance."} Click to open Yahoo Finance (the stock's page when you're on one).`).replace('class="st ', 'class="st yahoo ').replace('role="img"', 'role="link" tabindex="0"')}
-    ${aiStatus(m.aiInfo)}
+    ${statusIcon(!m.demo, "column.svg", "Yahoo Finance", `${m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance."} Click to open Yahoo Finance (the stock's page when you're on one).`).replace('class="st ', 'class="st yahoo ').replace('role="img"', 'role="link" tabindex="0"')}
     <span class="st cur" role="button" tabindex="0" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}. Opens the currency converter." data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings. Click to convert between currencies.">${esc(currencySymbol(cur))}</span>
-    <span class="st quote" tabindex="0" aria-label="${esc(QUOTE)}" data-tip="${esc(QUOTE)}"><i style="--icon: url('/static/icons/column.svg')"></i></span>
+    ${aiStatus(m.aiInfo)}
+    <span class="st quote" tabindex="0" aria-label="${esc(QUOTE)}" data-tip="${esc(QUOTE)}"><i style="--icon: url('/static/icons/owl.svg')"></i></span>
   </div>`;
   const icon = $("#modeBadge .st.cur");
   icon.onclick = openConverter;

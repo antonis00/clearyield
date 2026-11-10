@@ -97,7 +97,7 @@ label.block { margin: 8px 0; }
 .st.off { opacity: .55; }
 .st.txt { font: 600 11px var(--mono); letter-spacing: .3px; }
 .st.ai, .st.yahoo { cursor: pointer; } /* open Ask AI, and Yahoo Finance in a new tab */
-.st.cur { font: 500 13px var(--mono); color: var(--up); cursor: pointer; } /* a base currency is always in use; it opens the converter */
+.st.cur { font: 500 16px var(--mono); color: var(--up); cursor: pointer; } /* a base currency is always in use; it opens the converter */
 /* The currency converter */
 .conv { align-items: flex-end; }
 .conv label input, .conv label select { min-width: 0; width: 120px; }
