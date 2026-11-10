@@ -204,6 +204,11 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 .px .price { font: 600 28px var(--mono); }
 .px div:last-child { font: 14px var(--mono); }
 .stance-box { display: flex; align-items: center; gap: 12px; }
+#rScoreBox { cursor: pointer; border-radius: 12px; }
+#rScoreBox:hover .score-ring, #rScoreBox:focus-visible .score-ring { filter: brightness(1.15); }
+#rFactorsCard { scroll-margin-top: 90px; } /* lands below the sticky search bar */
+#rFactorsCard.flash { animation: card-flash 1.4s ease-out; }
+@keyframes card-flash { 0%, 30% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
 .score-ring { width: 62px; height: 62px; border-radius: 50%; display: grid; place-items: center; font: 600 18px var(--mono); }
 .stance { font-weight: 600; font-size: 16px; }
 .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -270,7 +275,6 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .opp-chart { position: relative; height: 340px; }
 .card-h-sub { flex-direction: column; align-items: flex-start; gap: 4px; } /* the subtitle on its own line under the title */
 .opp-map-card .opp-chart { height: 440px; } /* the map has the page's width: taller to match */
-#oppStatus .dl-loader { max-width: none; } /* the page's loader takes the card's width */
 .opp-map-tools { display: flex; align-items: center; gap: 10px; min-height: 32px; } /* as tall with the button as without, so the map doesn't jump: Reset zoom (shown while zoomed in) sits beside the note, off the map */
 #oppMap { touch-action: none; } /* a drag moves the zoomed map, not the page */
 .opp-empty { padding: 30px 0; text-align: center; }
@@ -329,7 +333,7 @@ nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu
 .cv-cur { min-width: 210px; }
 
 /* The day's first downloads: real progress, region by region (dlLoader), and the background badge in the top bar */
-.dl-loader { max-width: 720px; margin: 8px 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); font: 13px var(--sans);
+.dl-loader { margin: 8px 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); font: 13px var(--sans);
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--panel2)), var(--panel2) 60%); }
 .dl-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .dl-count { margin-left: auto; font: 500 12px var(--mono); color: var(--muted); }

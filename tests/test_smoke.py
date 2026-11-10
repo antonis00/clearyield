@@ -3440,6 +3440,10 @@ def test_long_scorings_report_their_progress():
         europe = len(tickers_for(["Europe"]))  # the list's European stocks come first, so the 60 done are all European
         assert job["regions"] == {"Europe": [60, europe], "Asia-Pacific": [0, len(tickers) - europe]}, job["regions"]
         assert job["elapsed"] >= 0 and seen["pause"] == 0
+        # Funds count as ETFs and coins as Crypto, not under the regions of what they hold (Global, Emerging)
+        groups = {insights._group(t) for t in tickers_for(["North America", "ETFs", "Crypto"])}
+        assert groups == {"North America", "ETFs", "Crypto"}, groups
+        assert insights._group("VWCE.DE") == "ETFs" and insights._group("BTC-USD") == "Crypto" and insights._group("AAPL") == "North America"
         assert c.get("/api/progress").json()["jobs"] == [], "a finished job is gone"
         # A short list is quick: nothing kept; a failed run still clears its entry
         insights.rows_for(tickers[:5], _db.get_settings())
