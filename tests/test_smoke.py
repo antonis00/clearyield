@@ -2270,6 +2270,14 @@ def test_search_finds_what_yahoo_lists():
             # With Yahoo down or nothing found, a typed symbol can still be tried
             assert c.get("/api/search?q=down").json() == [{"ticker": "DOWN", "name": "Look up this symbol on Yahoo Finance", "market": "Any"}]
             assert not db.cache_get_stale("search:down")
+            # A Screener word is offered as a screen, in any case, and first, so it isn't taken for a symbol
+            screen = {"ticker": "CHEAP", "name": "Ask the Screener", "market": "Screener", "screen": True}
+            assert c.get("/api/search?q=CHEAP").json()[0] == screen
+            assert c.get("/api/search?q=cheap").json()[0] == {**screen, "ticker": "cheap"}
+            assert c.get("/api/search?q=CHEAP European BANKS").json()[0]["screen"]
+            # With a word the rules don't know in there too, any stocks found come first and the screen last
+            assert c.get("/api/search?q=apple dividend").json()[-1]["screen"]
+            assert not any(h.get("screen") for h in c.get("/api/search?q=apple").json())
             assert c.get("/api/search?q=").json() == []
             # One letter is too broad to send to Yahoo
             before = len(calls)
