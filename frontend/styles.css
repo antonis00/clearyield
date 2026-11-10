@@ -28,13 +28,13 @@ a { color: var(--accent2); cursor: pointer; text-decoration: none; }
 
 /* sidebar */
 .side { width: 172px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
-.brand { display: block; font: 600 18px var(--mono); padding: 20px 12px; letter-spacing: .5px; color: var(--text); }
+.brand { display: flex; align-items: center; gap: 4px; white-space: nowrap; font: 600 18px var(--mono); padding: 24px 12px 16px 7px; letter-spacing: .5px; color: var(--text); }
 .brand:hover .logo { filter: brightness(1.2); }
-.logo { color: var(--accent); }
+.logo { width: 22px; height: 22px; flex-shrink: 0; border-radius: 5px; }
 nav a { display: block; padding: 10px 12px; color: var(--muted); border-left: 3px solid transparent; font-weight: 500; }
 nav a:hover { color: var(--text); background: var(--panel); }
 nav a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel); }
-.side-foot { margin-top: auto; padding: 14px 12px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+.side-foot { margin-top: auto; padding: 14px 12px 14px 15px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font: 500 11px var(--mono); border: 1px solid var(--line); margin: 2px 4px 2px 0; }
 .pill.on { border-color: var(--up); color: var(--up); } .pill.warn { border-color: var(--accent); color: var(--accent); }
 
@@ -283,9 +283,6 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .ask-row { align-items: flex-end; }
 .ask-row label.grow { flex: 1; }
 .ask-row label.grow input { width: 100%; }
-.ask-examples { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
-.ask-ex { cursor: pointer; background: transparent; color: var(--muted); border: 1px solid var(--line); font: 12px var(--sans); }
-.ask-ex:hover { color: var(--text); border-color: var(--accent2); }
 .ask-q { font-weight: 600; margin-bottom: 8px; }
 .ask-steps { margin: 10px 0 4px; font-size: 12px; color: var(--muted); }
 .ask-steps summary { cursor: pointer; }
@@ -313,7 +310,11 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 #rOwn td .sub { display: block; font-size: 11px; color: var(--muted); }
 .st.quote { color: var(--up); cursor: default; }
 #nav { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
-nav a.nav-ask { margin-top: auto; }
-.nav-ico { width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
-@media (max-width: 1100px) { nav a.nav-ask .nav-ico { margin-right: 0; } }
+nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu text, like the logo */
+.nav-ico { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
+.nav-mark { width: auto; margin-right: 2px; color: var(--accent); line-height: 16px; vertical-align: 0; } /* the glyph sits low in its box; level with the text */
+/* Sidebar alignment: the menu text, Ask's mark and the status icons start 15px in (12px padding + the
+   3px active border; the logo sits further left, at 7px), the icons leave the same space on both sides, and
+   the logo is level with the search box */
+@media (max-width: 1100px) { nav a.nav-ask .nav-ico { margin-right: 0; font-size: 14px; } .brand span:not(.logo) { display: none; } }
 .cv-cur { min-width: 210px; }

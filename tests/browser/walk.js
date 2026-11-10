@@ -43,7 +43,7 @@ const SLOW = 150000;
   const frame = await p.evaluate(() => {
     const links = [...document.querySelectorAll("nav a")], ask = document.querySelector('nav a[data-view="ask"]');
     const top = document.querySelector("header.top").getBoundingClientRect().width, box = document.querySelector(".searchbox").getBoundingClientRect().width;
-    return { ask: ask.innerText.trim(), icon: !!ask.querySelector("img.nav-ico"), last: links[links.length - 1] === ask, gap: ask.getBoundingClientRect().top - links[links.length - 2].getBoundingClientRect().bottom,
+    return { ask: ask.innerText.replace("◆", "").trim(), icon: !!ask.querySelector(".nav-mark") && /favicon\.svg$/.test(document.querySelector(".brand img.logo")?.src || ""), last: links[links.length - 1] === ask, gap: ask.getBoundingClientRect().top - links[links.length - 2].getBoundingClientRect().bottom,
              toLine: document.querySelector("#modeBadge").getBoundingClientRect().top - ask.getBoundingClientRect().bottom,
              quote: document.querySelector("#modeBadge .st.quote")?.dataset.tip || "", oldQuote: !!document.querySelector("header .disclaimer"), share: box / top };
   });
@@ -370,9 +370,9 @@ const SLOW = 150000;
   expect("sidebar: the Yahoo mark opens Yahoo Finance in a new tab, the stock's page on Research",
     front === "https://finance.yahoo.com/ _blank noopener,noreferrer" && quote === "https://finance.yahoo.com/quote/AAPL/ _blank noopener,noreferrer", `${front} | ${quote}`);
   await nav("ask"); await p.waitForTimeout(300);
-  const askInfo = await p.evaluate(() => ({ examples: document.querySelectorAll("#askExamples .ask-ex").length, status: document.querySelector("#askStatus").innerText }));
+  const askInfo = await p.evaluate(() => ({ examples: document.querySelectorAll("#askExamples, .ask-ex").length, intro: document.querySelector("#view-ask .card p").innerText }));
   await p.fill("#askInput", "How is my portfolio doing?"); await p.press("#askInput", "Enter"); await p.waitForTimeout(300);
-  expect("ask: page shows examples and explains when AI is off", askInfo.examples >= 4 && /AI_PROVIDER|isn't set up/.test(await txt("#askStatus")) && !(await p.locator("#askAnswers .ask-answer").count()), await txt("#askStatus"));
+  expect("ask: a short explanation, no example questions, and it says when AI is off", askInfo.examples === 0 && askInfo.intro.length < 250 && /AI_PROVIDER|isn't set up/.test(await txt("#askStatus")) && !(await p.locator("#askAnswers .ask-answer").count()), await txt("#askStatus"));
   // Figures in an answer are marked: unsupported ones highlighted wherever they appear (however the thousands are
   // separated), worked-out ones underlined with how, and never inside a longer number
   const marked_ = await p.evaluate(() => {
