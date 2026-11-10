@@ -151,24 +151,31 @@ document.addEventListener("click", (e) => {
 /* ---------------------------------------------------------------- search */
 (() => {
   const inp = $("#globalSearch"), dd = $("#searchResults");
-  let hits = [], sel = 0, timer;
+  let hits = [], hitsFor = "", sel = 0, timer;
   const render = () => {
-    dd.innerHTML = hits.map((h, i) => `<div data-i="${i}" class="${i === sel ? "sel" : ""}"><b>${esc(h.ticker)}</b><span>${esc(h.name)}</span><span class="muted sm" style="margin-left:auto">${esc(h.market)}</span></div>`).join("");
+    dd.innerHTML = hits.map((h, i) => `<div data-i="${i}" class="${i === sel ? "sel" : ""}">${h.screen ? `<b>${esc(h.name)}</b><span>“${esc(h.ticker)}”</span>` : `<b>${esc(h.ticker)}</b><span>${esc(h.name)}</span>`}<span class="muted sm" style="margin-left:auto">${esc(h.market)}</span></div>`).join("");
     dd.classList.toggle("hidden", !hits.length);
     $$("div", dd).forEach((d) => d.onmousedown = (e) => {
       const h = hits[+d.dataset.i];
-      if (e.button === 1 || e.ctrlKey || e.metaKey) { e.preventDefault(); if (h) openInNewTab(h.ticker); return; }
+      if (e.button === 1 || e.ctrlKey || e.metaKey) { e.preventDefault(); if (h && !h.screen) openInNewTab(h.ticker); return; }
       if (e.button === 0) pick(h);
     });
   };
-  const pick = (h) => { if (!h) return; inp.value = ""; hits = []; render(); openStock(h.ticker); };
+  const screen = (text) => { show("screener"); $("#scrQuery").value = text; $("#btnScrQuery").click(); };
+  const pick = (h) => { if (!h) return; inp.value = ""; hits = []; hitsFor = ""; render(); h.screen ? screen(h.ticker) : openStock(h.ticker); };
+  // Enter takes the chosen result; a sentence that matches no stock is a screener question, run there instead of
+  // asking Yahoo for a symbol
+  const enter = (text) => {
+    if (hits[sel] || !/\s/.test(text)) { pick(hits[sel] || { ticker: text.toUpperCase() }); return; }
+    inp.value = ""; hits = []; hitsFor = ""; render(); screen(text);
+  };
   inp.oninput = () => {
     clearTimeout(timer);
     timer = setTimeout(async () => {
       const text = inp.value.trim();
       const found = text ? await api(`/api/search?q=${encodeURIComponent(text)}`) : [];
       if (text !== inp.value.trim()) return; // Yahoo can take a moment, and you may have typed more by now
-      hits = found; sel = 0; render();
+      hits = found; hitsFor = text; sel = 0; render();
     }, 250);
   };
   inp.onkeydown = (e) => {
@@ -176,14 +183,18 @@ document.addEventListener("click", (e) => {
     else if (e.key === "ArrowUp") { sel = Math.max(sel - 1, 0); render(); e.preventDefault(); }
     else if (e.key === "Enter") {
       const text = inp.value.trim();
-      if (hits[sel] || !/\s/.test(text)) { pick(hits[sel] || { ticker: text.toUpperCase() }); return; }
-      // A sentence that matches no stock is a screener question: run it there instead of asking Yahoo for a symbol
-      inp.value = ""; hits = []; render();
-      show("screener"); $("#scrQuery").value = text; $("#btnScrQuery").click();
+      if (!text) return;
+      // Results shown for shorter text (Enter pressed before the search caught up) are fetched afresh, so "CHEAP" typed
+      // fast isn't taken for the symbol the first letters matched
+      if (hitsFor !== text) { clearTimeout(timer); api(`/api/search?q=${encodeURIComponent(text)}`).then((found) => {
+        if (text !== inp.value.trim()) return;
+        hits = found; hitsFor = text; sel = 0; enter(text);
+      }); return; }
+      enter(text);
     }
-    else if (e.key === "Escape") { hits = []; render(); }
+    else if (e.key === "Escape") { hits = []; hitsFor = ""; render(); }
   };
-  inp.onblur = () => setTimeout(() => { hits = []; render(); }, 150);
+  inp.onblur = () => setTimeout(() => { hits = []; hitsFor = ""; render(); }, 150);
 })();
 
 // Anything that fails without its own handling still tells you

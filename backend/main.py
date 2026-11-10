@@ -283,7 +283,13 @@ def search(q: str = ""):
     known = {h["ticker"] for h in hits}
     hits += [h for h in data.search_symbols(q) if h["ticker"] not in known]
     raw = T(q)
-    if raw and not hits and " " not in raw:
+    # Words the Screener's keyword rules read ("cheap", "banks", "dividend", in any case) are offered as a screen; first
+    # when every word was understood, so "CHEAP" isn't taken for a symbol, and after the stocks when some weren't
+    rules = ai._parse_rules(q.strip().lower()) if q.strip() else {}
+    if any(k != "ignored" for k in rules):
+        row = {"ticker": q.strip(), "name": "Ask the Screener", "market": "Screener", "screen": True}
+        hits = [row, *hits] if not rules.get("ignored") else [*hits[:11], row]
+    elif raw and not hits and " " not in raw:
         hits.append({"ticker": raw, "name": "Look up this symbol on Yahoo Finance", "market": "Any"})
     return ok(hits[:12])
 

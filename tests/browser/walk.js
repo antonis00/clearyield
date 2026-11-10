@@ -110,6 +110,13 @@ const SLOW = 150000;
   await p.waitForFunction(() => !document.querySelector("#view-screener").classList.contains("hidden") && /matches out of/.test(document.querySelector("#scrInfo").innerText), null, { timeout: SLOW });
   expect("search: a question runs in the Screener", (await p.inputValue("#scrQuery")) === "gulf dividend payers yielding over 4%" && /Min yield: 4(\.0)?%/.test(await txt("#scrInfo")), (await txt("#scrInfo")).slice(0, 80));
   await p.reload(); await p.waitForTimeout(500);  // the question filled the screener's filters; later steps start clean
+  // One Screener word in capitals, Enter pressed at once (before the search caught up): still a screen, not a symbol
+  await p.fill("#globalSearch", "CHEAP"); await p.press("#globalSearch", "Enter");
+  await p.waitForFunction(() => !document.querySelector("#view-screener").classList.contains("hidden") && /matches out of/.test(document.querySelector("#scrInfo").innerText), null, { timeout: SLOW });
+  expect("search: a Screener word in capitals runs in the Screener", (await p.inputValue("#scrQuery")) === "CHEAP" && /Max P\/E: 18/.test(await txt("#scrInfo")), (await txt("#scrInfo")).slice(0, 80));
+  await p.fill("#globalSearch", "cheap"); await p.waitForFunction(() => /Ask the Screener/.test(document.querySelector("#searchResults").textContent), null, { timeout: 15000 });
+  expect("search: the dropdown offers the screen first", /^Ask the Screener/.test(await txt("#searchResults div")), await txt("#searchResults div"));
+  await p.fill("#globalSearch", ""); await p.reload(); await p.waitForTimeout(500);
   await research("^GSPC");
   // The mouse wheel scrolls the page over a chart; only Ctrl + wheel zooms it (and the RSI and MACD follow)
   const span = () => p.evaluate(() => state.lw.map((c) => { const r = c.timeScale().getVisibleLogicalRange(); return r ? Math.round((r.to - r.from) * 100) / 100 : null; }));
