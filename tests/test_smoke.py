@@ -3413,6 +3413,63 @@ def test_portfolio_backtest_matches_independent_sums():
     _reset()
 
 
+def test_long_scorings_report_their_progress():
+    import logging
+    import threading
+    from backend import insights
+    from backend.universe import tickers_for
+    _reset()
+    tickers = tickers_for(["Europe", "Asia-Pacific"])
+    seen, real = {}, insights._quick_row
+    with TestClient(app) as c:
+        assert c.get("/api/progress").json() == {"jobs": [], "pause": 0.0}, "nothing under way"
+
+        def slow(t, settings):  # look at the progress from the page's side partway through
+            r = real(t, settings)
+            if t == tickers[60]:
+                seen.update(c.get("/api/progress").json())
+            return r
+        insights._quick_row = slow
+        try:
+            rows = insights.rows_for(tickers, _db.get_settings(), workers=1, kind="screener")
+        finally:
+            insights._quick_row = real
+        assert len(rows) == len(tickers)
+        [job] = seen["jobs"]
+        assert job["kind"] == "screener" and job["total"] == len(tickers) and job["done"] == 60, "counted as each one finishes"
+        europe = len(tickers_for(["Europe"]))  # the list's European stocks come first, so the 60 done are all European
+        assert job["regions"] == {"Europe": [60, europe], "Asia-Pacific": [0, len(tickers) - europe]}, job["regions"]
+        assert job["elapsed"] >= 0 and seen["pause"] == 0
+        assert c.get("/api/progress").json()["jobs"] == [], "a finished job is gone"
+        # A short list is quick: nothing kept; a failed run still clears its entry
+        insights.rows_for(tickers[:5], _db.get_settings())
+        assert insights.progress()["jobs"] == []
+        insights._quick_row = lambda t, s: 1 / 0
+        try:
+            try:
+                insights.rows_for(tickers[:30], _db.get_settings())
+            except ZeroDivisionError:
+                pass
+        finally:
+            insights._quick_row = real
+        assert insights.progress()["jobs"] == []
+        # The three kinds the page names, from the three places that score long lists
+        kinds = []
+        orig = insights.rows_for
+        insights.rows_for = lambda tk, st, *a, kind="scoring", **k: kinds.append(kind) or orig(tk[:3], st, *a, kind=kind, **k)
+        try:
+            c.post("/api/screener", json={"markets": ["Europe"]})
+            c.get("/api/opportunities?markets=Europe")
+            insights.peer_table(_db.get_settings(), fresh=True)
+        finally:
+            insights.rows_for = orig
+        assert {"screener", "opportunities", "ranks"} <= set(kinds), kinds
+    # The page's frequent checks stay out of the request log
+    rec = lambda path: logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "GET %s HTTP/1.1" 200', ("127.0.0.1", path), None)
+    access = logging.getLogger("uvicorn.access")
+    assert not access.filter(rec("/api/progress")) and access.filter(rec("/api/meta"))
+
+
 def test_digest_news_and_every_currency():
     from backend import data, insights
     _reset()

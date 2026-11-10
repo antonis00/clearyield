@@ -47,6 +47,7 @@
       <input id="globalSearch" placeholder="Research a stock, e.g. Apple or AAPL, or ask the Screener, e.g. cheap European banks" autocomplete="off">
       <div id="searchResults" class="dropdown hidden"></div>
     </div>
+    <div id="bgProgress" class="bg-progress hidden" tabindex="0" role="status"></div>
   </header>
 
   <!-- DASHBOARD -->
@@ -225,20 +226,18 @@
   <section id="view-opportunities" class="view hidden">
     <div class="card">
       <div class="card-h"><h3>Opportunities</h3><button class="btn ghost sm" id="oppRefresh">Refresh</button></div>
-      <p class="muted sm" style="margin:0 0 8px">Stocks in the app's built-in list, scored on today's data with the same transparent rules as everywhere else. Hover a point or bar for its reasons, click it to research the stock. Decision support, not financial advice: the scores rate current figures against fixed thresholds and don't predict prices. The list is today's large companies, so ones that shrank or failed aren't in it, which flatters how well "good scores" look in hindsight.</p>
+      <p class="muted sm" style="margin:0 0 8px">Today's scores for the stocks in the app's list. Hover a dot or bar for its reasons, click it to research the stock. Scores rate current figures, not future prices, and the list holds today's large companies only, so past winners look better than they were.</p>
       <div class="markets" id="oppMarkets"></div>
       <div id="oppStatus" class="muted sm"></div>
     </div>
-    <div class="grid2">
-      <div class="card"><div class="card-h"><h3>Opportunity map</h3><span id="oppMapNote" class="muted sm"></span></div>
+    <div class="card opp-map-card"><div class="card-h"><h3>Opportunity map</h3><span class="opp-map-tools"><button class="btn ghost sm hidden" id="oppMapReset">Reset zoom</button><span id="oppMapNote" class="muted sm"></span></span></div>
         <div class="opp-chart"><canvas id="oppMap"></canvas></div><p class="muted sm" id="oppMapHelp"></p></div>
-      <div class="card"><div class="card-h"><h3>Top ranked</h3><span class="muted sm">Highest overall score</span></div>
+    <div class="grid3">
+      <div class="card"><div class="card-h card-h-sub"><h3>Top ranked</h3><span id="oppTopNote" class="muted sm">The highest overall scores</span></div>
         <div class="opp-chart"><canvas id="oppTop"></canvas></div><p class="muted sm" id="oppTopHelp"></p></div>
-    </div>
-    <div class="grid2">
-      <div class="card"><div class="card-h"><h3>Fits your portfolio</h3><span id="oppFitNote" class="muted sm"></span></div>
+      <div class="card"><div class="card-h card-h-sub"><h3>Fits your portfolio</h3><span id="oppFitNote" class="muted sm"></span></div>
         <div class="opp-chart" id="oppFitWrap"><canvas id="oppFit"></canvas></div><p class="muted sm" id="oppFitHelp"></p></div>
-      <div class="card"><div class="card-h"><h3>Quality on sale</h3><span class="muted sm">Good companies below their 52-week high</span></div>
+      <div class="card"><div class="card-h card-h-sub"><h3>Quality on sale</h3><span class="muted sm">Good companies below their 52-week high</span></div>
         <div class="opp-chart" id="oppSaleWrap"><canvas id="oppSale"></canvas></div><p class="muted sm" id="oppSaleHelp"></p></div>
     </div>
   </section>
