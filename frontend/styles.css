@@ -180,6 +180,7 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 #scrTable th, #scrTable td { padding-left: 6px; padding-right: 6px; }
 #scrTable td .sub { max-width: 106px; }
 #scrTable .clip { display: block; max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
+#scrTable td:nth-child(2) .clip { max-width: 72px; }
 
 .alertbar { border: 1px solid var(--down); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
 
@@ -301,3 +302,12 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .pm-row .pm-w { width: 90px; }
 #pmKpis, #mcKpis { margin-bottom: 14px; }
 #pmPastOut .grid2 { margin-top: 14px; }
+.peer-line { margin: -4px 0 10px; color: var(--text); }
+.factor .peer { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.factor .peer b, .peer-line b { color: var(--text); }
+.own-head { margin: 0 0 12px; }
+#rOwn .kpis { margin-bottom: 14px; }
+#rOwn .kpi .v.sm-v { font-size: 15px; }
+#rOwn h4 { margin: 10px 0 6px; }
+.clip-wide { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+#rOwn td .sub { display: block; font-size: 11px; color: var(--muted); }

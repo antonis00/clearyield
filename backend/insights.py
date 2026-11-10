@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import data, db, ledger, scoring
 from . import indicators as ind
-from .universe import CORE_FUNDS, tickers_for
+from .universe import CORE_FUNDS, STOCK_MARKETS, tickers_for
 
 log = logging.getLogger("stockpilot.insights")
 
@@ -80,9 +80,125 @@ def _quick_row(t, settings):
     }
 
 
-def rows_for(tickers, settings, workers=8):
+BATCH = 40           # a long list is scored this many at a time...
+GENTLE_FROM = 100    # ...when it has more than this many
+
+
+def rows_for(tickers, settings, workers=8, patience=60):
+    """Each ticker's quick row. A long list goes in batches, and when Yahoo has just refused for asking too much, the
+    next batch waits for the pause to end (up to `patience` seconds in all) rather than asking hundreds more times."""
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(lambda t: _quick_row(t, settings), tickers))
+        if len(tickers) <= GENTLE_FROM:
+            return list(ex.map(lambda t: _quick_row(t, settings), tickers))
+        out, waited = [], 0.0
+        for i in range(0, len(tickers), BATCH):
+            while (pause := data.rate_limited_for()) > 0 and waited < patience:
+                step = min(pause, 15.0, patience - waited)
+                time.sleep(step)
+                waited += step
+            out.extend(ex.map(lambda t: _quick_row(t, settings), tickers[i:i + BATCH]))
+        return out
+
+
+# ---------------------------------------------------------------- ownership
+INSIDER_MONTHS = 6  # the window the insider summary covers
+
+
+def insider_summary(own, months=INSIDER_MONTHS, today=None):
+    """Insiders' buying and selling on the market over the past months, from the trades' kinds: awards, option
+    exercises and gifts are counted apart, never as buying. With a plain sentence that doesn't overstate a sale."""
+    today = pd.Timestamp(today or dt.date.today())
+    since = (today - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
+    recent = [x for x in (own or {}).get("insiders") or [] if x["date"] >= since]
+    side = lambda k: [x for x in recent if x["kind"] == k]
+    buys, sells = side("buy"), side("sell")
+    total = lambda xs, f: sum(x[f] for x in xs if x.get(f) is not None)
+    out = {"months": months, "since": since, "buys": len(buys), "buyers": len({x["insider"] for x in buys}), "buyShares": total(buys, "shares"),
+           "buyValue": total(buys, "value"), "sells": len(sells), "sellers": len({x["insider"] for x in sells}), "sellShares": total(sells, "shares"),
+           "sellValue": total(sells, "value"), "other": len(side("other"))}
+    people = lambda n: f"{n} {'person' if n == 1 else 'people'}"
+    if not recent:
+        out["headline"] = f"No insider trades reported in the past {months} months."
+    elif not buys and not sells:
+        out["headline"] = f"No insider bought or sold on the market in the past {months} months ({out['other']} awards, option exercises or gifts, which aren't decisions to buy or sell)."
+    elif buys and not sells:
+        out["headline"] = f"Insiders only bought: {out['buys']} purchase{'s' if out['buys'] > 1 else ''} by {people(out['buyers'])} in the past {months} months."
+    elif sells and not buys:
+        out["headline"] = (f"Insiders only sold: {out['sells']} sale{'s' if out['sells'] > 1 else ''} by {people(out['sellers'])} in the past {months} months. "
+                           "Selling is common and often routine (taxes, planned sales, spreading their wealth), so it says less than buying.")
+    else:
+        out["headline"] = (f"Both: {out['buys']} purchase{'s' if out['buys'] > 1 else ''} by {people(out['buyers'])} and {out['sells']} sale{'s' if out['sells'] > 1 else ''} "
+                           f"by {people(out['sellers'])} in the past {months} months.")
+    return out
+
+
+# ---------------------------------------------------------------- ranks within a sector
+MIN_PEERS = 8          # fewer other companies than this in a sector, and a rank says too little to show
+PEERS_FOR = 7 * 3600   # seconds the table of every stock's scores is kept: the background scoring renews it every six hours
+RANKED = ("composite", "value", "quality", "growth", "momentum", "risk")
+
+
+def _peer_markets():
+    """Every market, unless STOCKPILOT_PEER_MARKETS names fewer: the live browser checks start with an empty cache, and
+    ranking against all 400 symbols on every run would get the computer refused by Yahoo."""
+    import os
+    named = [m.strip() for m in (os.environ.get("STOCKPILOT_PEER_MARKETS") or "").split(",") if m.strip() in STOCK_MARKETS]
+    return named or STOCK_MARKETS
+
+
+def peer_table(settings, fresh=False, patience=60):
+    """Every stock in the built-in list with its sector and scores, kept seven hours. Funds and crypto have no sector.
+    `fresh` scores again even when a table is kept (the background scoring does, so the table is never old).
+    The factors are kept and the overall score worked out with the weights in Settings now, so changing the weights
+    doesn't mean scoring every stock again."""
+    key = "peers:v2"
+    table = None if fresh else db.cache_get(key, PEERS_FOR)
+    if table is None:
+        table = {}
+        for r in rows_for(tickers_for(_peer_markets()), settings, 6, patience):
+            if "error" in r or r.get("assetClass") != "Stocks" or not r.get("sector"):
+                continue
+            table[r["ticker"]] = {"sector": r["sector"], "region": r.get("region"), **{k: r.get(f"f_{k}") for k in RANKED[1:]}}
+        db.cache_set(key, table)
+    weights = settings.get("weights")
+    return {t: {**r, "composite": scoring.combine({k: r[k] for k in RANKED[1:]}, weights)} for t, r in table.items()}
+
+
+def sector_ranks(ticker, settings, own=None):
+    """Where a stock's overall and factor scores stand among the other stocks in its sector, from every market in the
+    list: the share of them it beats (a tie counts half), how many there are, and their middle score. A score with
+    fewer than MIN_PEERS others to compare with gets no rank. `own` is the stock's quick row, if already worked out."""
+    table = peer_table(settings)
+    row = table.get(ticker)
+    if row is None:  # a stock outside the list, ranked against it
+        own = own or rows_for([ticker], settings)[0]
+        if "error" in own or own.get("assetClass") != "Stocks" or not own.get("sector"):
+            return None
+        row = {"sector": own["sector"], "composite": own.get("composite"), **{k: own.get(f"f_{k}") for k in RANKED[1:]}}
+    others = [r for t, r in table.items() if r["sector"] == row["sector"] and t != ticker]
+    ranks = {}
+    for k in RANKED:
+        mine, vals = row.get(k), sorted(r[k] for r in others if r.get(k) is not None)
+        if mine is None or len(vals) < MIN_PEERS:
+            ranks[k] = {"beats": None, "of": len(vals)}
+            continue
+        beats = (sum(v < mine for v in vals) + 0.5 * sum(v == mine for v in vals)) / len(vals)
+        mid = len(vals) // 2
+        ranks[k] = {"beats": beats, "of": len(vals), "median": vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2}
+    regions = {}
+    for r in others:
+        regions[r.get("region") or "Other"] = regions.get(r.get("region") or "Other", 0) + 1
+    return {"sector": row["sector"], "others": len(others), "regions": regions, "ranks": ranks, "minPeers": MIN_PEERS}
+
+
+def _beats(row, table):
+    """(share of the other stocks in its sector whose overall score it beats, how many), or (None, how many)."""
+    if row.get("assetClass") != "Stocks" or not row.get("sector") or row.get("composite") is None:
+        return None, 0
+    vals = [r["composite"] for t, r in table.items() if r["sector"] == row["sector"] and t != row["ticker"] and r.get("composite") is not None]
+    if len(vals) < MIN_PEERS:
+        return None, len(vals)
+    return (sum(v < row["composite"] for v in vals) + 0.5 * sum(v == row["composite"] for v in vals)) / len(vals), len(vals)
 
 
 # ---------------------------------------------------------------- opportunities
@@ -129,7 +245,7 @@ def opportunities(settings, markets):
     ranked, the best fit for your portfolio's satellite part, and good companies well below their high.
     Stocks only: funds and crypto are scored on trend and risk alone, so they can't be compared on value."""
     from . import portfolio
-    markets = [m for m in (markets or ["US", "Europe", "Gulf"]) if m in ("US", "Europe", "Gulf")] or ["US", "Europe", "Gulf"]
+    markets = [m for m in (markets or STOCK_MARKETS) if m in STOCK_MARKETS] or STOCK_MARKETS
     rows = rows_for(tickers_for(markets), settings)
     failed = [r["ticker"] for r in rows if "error" in r]
     stocks = [r for r in rows if "error" not in r and r.get("assetClass") == "Stocks" and r.get("composite") is not None]
@@ -187,7 +303,7 @@ def opportunities(settings, markets):
 
 def screen(body, settings):
     f = dict(body.get("filters") or {})
-    markets = f.pop("markets", None) or body.get("markets") or ["US", "Europe", "Gulf", "ETFs", "Crypto"]
+    markets = f.pop("markets", None) or body.get("markets") or [*STOCK_MARKETS, "ETFs", "Crypto"]
     tickers = tickers_for(markets) + [t.strip().upper() for t in (body.get("extra") or []) if t.strip()]
     rows = rows_for(list(dict.fromkeys(tickers)), settings)
     ok, failed = [r for r in rows if "error" not in r], [r["ticker"] for r in rows if "error" in r]
@@ -220,6 +336,10 @@ def screen(body, settings):
                 and lt(r["vol"], f.get("max_vol")))
 
     out = [r for r in ok if keep(r)]
+    # Each stock's overall score against the rest of its sector, from every market in the list
+    table = peer_table(settings) if any(r.get("assetClass") == "Stocks" for r in out) else {}
+    for r in out:
+        r["sectorBeats"], r["sectorOf"] = _beats(r, table)
     sort = f.get("sort", "composite")
     key = {"divYield": "divYield"}.get(sort, "composite" if sort == "composite" else f"f_{sort}")
     out.sort(key=lambda r: -(r.get(key) if r.get(key) is not None else -1))

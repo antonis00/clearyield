@@ -195,7 +195,10 @@ const CHECKS = {
 
     // The sidebar follows the base currency
     await page.evaluate(() => { location.hash = "#settings"; }); await page.waitForTimeout(300);
-    await page.selectOption("#sBase", "EUR"); await page.click("#btnSaveSettings"); await page.waitForTimeout(500);
+    await page.selectOption("#sBase", "EUR");
+    // wait for the save itself: the Research page opened above may still be ranking AAPL's sector in the background
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith("/api/settings") && r.request().method() === "POST", { timeout: 60000 }), page.click("#btnSaveSettings")]);
+    await page.waitForTimeout(300);
     const cur = await page.evaluate(() => { const c = document.querySelector("#modeBadge [data-currency]"); return `${c.dataset.currency} ${c.textContent}`; });
     expect("sidebar shows the new base", cur === "EUR €", cur);
     // A blank rate doesn't quietly become 0%, and all-zero weights are refused

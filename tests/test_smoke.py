@@ -146,9 +146,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v8:EMPTY.X") is None
-        db.cache_set("info:v8:OLD.X", {"trailingPE": 12.0})
-        db.cache_expire("info:v8:OLD.X")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v9:EMPTY.X") is None
+        db.cache_set("info:v9:OLD.X", {"trailingPE": 12.0})
+        db.cache_expire("info:v9:OLD.X")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -1099,8 +1099,10 @@ def test_etfs_are_not_called_a_concentrated_sector():
 def test_other_exchanges_are_not_treated_as_us_dollars():
     from backend import data, db, portfolio
     from backend.universe import currency_guess, region_of
-    for t, cur, region in (("7203.T", "JPY", "Asia"), ("0700.HK", "HKD", "Asia"), ("SHOP.TO", "CAD", "Americas"), ("BHP.AX", "AUD", "Asia"),
-                           ("RELIANCE.NS", "INR", "Asia"), ("VOW3.F", "EUR", "Europe"), ("AAPL", "USD", "US"), ("BRK-B", "USD", "US")):
+    for t, cur, region in (("7203.T", "JPY", "Asia-Pacific"), ("0700.HK", "HKD", "Asia-Pacific"), ("SHOP.TO", "CAD", "Canada"), ("BHP.AX", "AUD", "Asia-Pacific"),
+                           ("RELIANCE.NS", "INR", "Asia-Pacific"), ("VOW3.F", "EUR", "Europe"), ("AAPL", "USD", "US"), ("BRK-B", "USD", "US"),
+                           ("PETR4.SA", "BRL", "Latin America"), ("SQM-B.SN", "CLP", "Latin America"), ("NPN.JO", "ZAc", "Africa"),
+                           ("BBCA.JK", "IDR", "Asia-Pacific"), ("MELI", "USD", "Latin America"), ("NBK.KW", "KWF", "Gulf")):
         assert currency_guess(t) == cur and region_of(t) == region, t
     assert currency_guess("ABC.ZZ") is None and region_of("ABC.ZZ") == "Other"
     assert region_of("^GSPC") == "US" and region_of("EURUSD=X") == "US"
@@ -3400,6 +3402,125 @@ def test_portfolio_backtest_matches_independent_sums():
     _reset()
 
 
+def test_insider_trades_count_only_market_buys_and_sales():
+    from backend import data, insights
+    # Yahoo's descriptions, as they come: only a trade at a price on the market is buying or selling
+    kinds = {"Purchase at price 210.15 per share.": "buy", "Acquisition in the public market at price 41.20 per share.": "buy",
+             "Sale at price 325.75 per share.": "sell", "Sale at price 342.66 - 347.46 per share.": "sell",
+             "Disposition in the public market at price 150.10 per share.": "sell", "": "other", None: "other",
+             "Stock Award(Grant) at price 0.00 per share.": "other", "Exercise of options at price 98.00 per share.": "other",
+             "Stock Gift at price 0.00 per share.": "other", "Redemption, retraction, cancelation, repurchase at price 1.00 per share.": "other",
+             "Buy Back at price 12.00 per share.": "other"}
+    assert {t: data.insider_kind(t) for t in kinds} == kinds
+    day = lambda n: (pd.Timestamp("2026-11-10") - pd.Timedelta(days=n)).strftime("%Y-%m-%d")
+    import pandas as pd
+    own = {"insiders": [
+        {"date": day(5), "insider": "A", "kind": "sell", "shares": 1000.0, "value": 300000.0},
+        {"date": day(20), "insider": "A", "kind": "sell", "shares": 500.0, "value": None},   # no value given: shares still count
+        {"date": day(30), "insider": "B", "kind": "sell", "shares": 200.0, "value": 60000.0},
+        {"date": day(40), "insider": "C", "kind": "other", "shares": 9000.0, "value": None},  # an award: never buying
+        {"date": day(200), "insider": "D", "kind": "buy", "shares": 50.0, "value": 9000.0},   # outside six months
+    ]}
+    s = insights.insider_summary(own, today="2026-11-10")
+    assert (s["buys"], s["sells"], s["sellers"], s["sellShares"], s["sellValue"], s["other"]) == (0, 3, 2, 1700.0, 360000.0, 1)
+    assert s["headline"].startswith("Insiders only sold: 3 sales by 2 people") and "routine" in s["headline"]
+    only_awards = insights.insider_summary({"insiders": [own["insiders"][3]]}, today="2026-11-10")
+    assert "No insider bought or sold on the market" in only_awards["headline"] and "aren't decisions" in only_awards["headline"]
+    bought = insights.insider_summary({"insiders": [{**own["insiders"][4], "date": day(3)}]}, today="2026-11-10")
+    assert bought["headline"] == "Insiders only bought: 1 purchase by 1 person in the past 6 months."
+    assert insights.insider_summary(None)["headline"].startswith("No insider trades reported")
+    _reset()
+    with TestClient(app) as c:
+        o = c.get("/api/stock/AAPL/ownership").json()
+        assert o["summary"]["headline"] and o["currency"] == "USD" and o["institutions"] and all(x["kind"] in ("buy", "sell", "other") for x in o["insiders"])
+        assert c.get("/api/stock/SPY/ownership").json() is None and c.get("/api/stock/BTC-USD/ownership").json() is None
+    from backend import agent
+    a = agent.get_ownership("AAPL")
+    assert a["insiders_past_6_months"]["summary"] == o["summary"]["headline"] and "awards" in a["note"]
+    assert "no ownership data" in agent.get_ownership("SPY")["ownership"] and "get_ownership" in agent.TOOLS
+
+
+def test_yahoo_refusals_pause_long_lists():
+    import logging
+
+    from backend import data, insights
+    # yfinance only logs a refusal; the log line starts the pause
+    logging.disable(logging.NOTSET)
+    try:
+        data._limited["until"] = 0.0
+        logging.getLogger("yfinance").error("HTTP Error 429: Too Many Requests. Rate limited. Try after a while.")
+        assert 100 < data.rate_limited_for() <= data.RATE_PAUSE
+        logging.getLogger("stockpilot.data").warning("prices failed for X: timed out")  # other trouble doesn't pause anything
+        data._limited["until"] = 0.0
+        assert data.rate_limited_for() == 0
+    finally:
+        logging.disable(logging.WARNING)
+    # A long list waits out the pause between batches, within its patience; a short one doesn't batch at all
+    calls, slept = [], []
+    real = (insights._quick_row, insights.time.sleep, insights.data.rate_limited_for)
+    clock = {"left": 30.0}
+    insights._quick_row = lambda t, s: calls.append(t) or {"ticker": t}
+    insights.time.sleep = lambda s: (slept.append(s), clock.__setitem__("left", max(0.0, clock["left"] - s)))
+    insights.data.rate_limited_for = lambda: clock["left"] if len(calls) >= insights.BATCH else 0.0
+    try:
+        rows = insights.rows_for([f"T{i}" for i in range(120)], {}, patience=60)
+        assert len(rows) == 120 and sum(slept) == 30.0 and all(s <= 15 for s in slept)  # paused once, after the first batch
+        clock["left"], calls[:], slept[:] = 1000.0, [], []
+        insights.rows_for([f"T{i}" for i in range(120)], {}, patience=20)
+        assert sum(slept) == 20.0  # gives up waiting at its patience, and carries on
+        clock["left"], calls[:], slept[:] = 1000.0, [], []
+        insights.rows_for([f"T{i}" for i in range(50)], {})
+        assert slept == []
+    finally:
+        insights._quick_row, insights.time.sleep, insights.data.rate_limited_for = real
+
+
+def test_sector_ranks_count_the_peers_beaten():
+    from backend import insights
+    table = {f"T{i}": {"sector": "Tech", "region": "US" if i % 2 else "Asia-Pacific", "composite": 10.0 * i, "value": 10.0 * i,
+                       "quality": None, "growth": 50.0, "momentum": 10.0 * i, "risk": 10.0 * i} for i in range(1, 11)}
+    table.update({f"E{i}": {"sector": "Energy", "region": "Europe", "composite": 50.0, "value": 50.0, "quality": 50.0, "growth": 50.0,
+                            "momentum": 50.0, "risk": 50.0} for i in range(5)})
+    real = insights.peer_table
+    insights.peer_table = lambda settings: table
+    try:
+        # T6 scores 60: the other nine Tech stocks score 10..50 and 70..100, so it beats five of nine
+        r = insights.sector_ranks("T6", {})
+        assert r["sector"] == "Tech" and r["others"] == 9 and r["regions"] == {"US": 5, "Asia-Pacific": 4}
+        assert abs(r["ranks"]["composite"]["beats"] - 5 / 9) < 1e-12 and r["ranks"]["composite"]["of"] == 9 and r["ranks"]["composite"]["median"] == 50.0
+        # a tie counts half: every other growth score is 50 like its own
+        assert abs(r["ranks"]["growth"]["beats"] - 0.5) < 1e-12
+        # no score of its own, or too few peers with one: no rank, but how many there were
+        assert r["ranks"]["quality"] == {"beats": None, "of": 0}
+        e = insights.sector_ranks("E0", {})
+        assert e["others"] == 4 and all(v["beats"] is None and v["of"] == 4 for v in e["ranks"].values())
+        # a stock outside the list is ranked against it, from its own scores
+        out = insights.sector_ranks("NEW", {}, own={"ticker": "NEW", "assetClass": "Stocks", "sector": "Tech", "composite": 95.0,
+                                                   "f_value": 5.0, "f_quality": None, "f_growth": 50, "f_momentum": 100.0, "f_risk": 0.0})
+        assert out["others"] == 10 and out["ranks"]["composite"]["beats"] == 0.9 and out["ranks"]["value"]["beats"] == 0.0 and out["ranks"]["momentum"]["beats"] == 0.95
+        # funds and crypto have no sector to rank in
+        assert insights.sector_ranks("FUND", {}, own={"ticker": "FUND", "assetClass": "ETFs", "sector": None}) is None
+    finally:
+        insights.peer_table = real
+    _reset()
+    with TestClient(app) as c:
+        r = c.get("/api/stock/AAPL/peers").json()
+        assert r["sector"] and r["others"] >= 1 and set(r["ranks"]) == set(insights.RANKED) and r["minPeers"] == insights.MIN_PEERS
+        assert c.get("/api/stock/SPY/peers").json() is None
+        # The Screener shows each stock's overall rank in its sector; funds and crypto have none
+        rows = c.post("/api/screener", json={"markets": ["US", "ETFs"]}).json()["rows"]
+        stock = next(x for x in rows if x["ticker"] == "AAPL")
+        assert stock["sectorOf"] == r["ranks"]["composite"]["of"] and (stock["sectorBeats"] is None or abs(stock["sectorBeats"] - r["ranks"]["composite"]["beats"]) < 1e-12)
+        assert all(x["sectorBeats"] is None for x in rows if x["assetClass"] != "Stocks")
+    # Other weights: the overall score is worked out from the kept factors, the same as scoring the stock afresh
+    tilted = {"weights": {"value": 0.5, "quality": 0.1, "growth": 0.1, "momentum": 0.2, "risk": 0.1}}
+    for t in ("AAPL", "QNBK.QA"):
+        assert insights.peer_table(tilted)[t]["composite"] == insights.rows_for([t], tilted)[0]["composite"], t
+    # Ask's stock look-up says where the scores stand in the sector
+    from backend import agent
+    assert "Within its sector" in agent.get_stock("AAPL") and "Within its sector" not in agent.get_stock("SPY")
+
+
 def test_monte_carlo_matches_formulas():
     import numpy as np
 
@@ -3515,7 +3636,7 @@ def test_ai_keys_take_turns_at_limits():
             assert agent.ask("Anything?")["answer"] == "Fine."
             assert [s[1]["authorization"] for s in llm.seen] == ["Bearer gsk_one", "Bearer gsk_two"]
             # ...and the next call starts with the second; the key is never stored, only a fingerprint
-            assert ai.config()["key"] == "gsk_two" and not db.q("SELECT key FROM cache WHERE key LIKE '%gsk_%' OR value LIKE '%gsk_%'")
+            assert ai.config()["key"] == "gsk_two" and not db.q("SELECT key FROM cache WHERE instr(key, 'gsk_') OR instr(value, 'gsk_')")  # exact: LIKE's _ would match GSK.L
             # Briefs and screener questions (ai.complete) switch the same way; Groq's "blocked" refusal counts as a limit
             llm.seen.clear()
             llm.replies = [(403, {"error": {"message": "The model `m` is blocked at the organization level."}}, 0)]
@@ -3605,7 +3726,7 @@ def test_ask_searches_the_web():
             agent.web_search("b")  # straight to the second key
             assert web.seen[-1][1]["authorization"] == "Bearer tvly-two" and len(web.seen) == 3
             # the key itself is never stored, only a fingerprint
-            assert not db.q("SELECT key FROM cache WHERE key LIKE '%tvly-%' OR value LIKE '%tvly-%'")
+            assert not db.q("SELECT key FROM cache WHERE instr(key, 'tvly-') OR instr(value, 'tvly-')")
             # A minute's limit on the last key: every key is spent for now, said so without another request
             web.replies = [(429, {"detail": "slow down"}, 0)]
             assert "every key" in agent.web_search("c")["error"]

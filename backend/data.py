@@ -25,6 +25,31 @@ class DataError(Exception):
     pass
 
 
+# Yahoo's free access refuses a computer that asks too much at once ("Too Many Requests. Rate limited."). yfinance
+# often only logs it, so the log is watched: after a refusal, big batches pause instead of asking hundreds more times.
+RATE_PAUSE = 120  # seconds a refusal pauses big batches
+_limited = {"until": 0.0}
+
+
+class _RateLimitWatch(logging.Handler):
+    def emit(self, record):
+        try:
+            text = record.getMessage()
+        except Exception:
+            return
+        if "Too Many Requests" in text or "Rate limited" in text:
+            _limited["until"] = time.time() + RATE_PAUSE
+
+
+for _name in ("yfinance", "stockpilot.data"):
+    logging.getLogger(_name).addHandler(_RateLimitWatch())
+
+
+def rate_limited_for():
+    """Seconds left of the pause after Yahoo last refused for asking too much; 0 when there's none."""
+    return max(0.0, _limited["until"] - time.time())
+
+
 # What's currently being served from old data because Yahoo failed
 _stale, _stale_fx = set(), set()
 
@@ -212,7 +237,7 @@ def info(ticker):
 
 
 def _info(ticker):
-    key = f"info:v8:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v9:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -457,6 +482,57 @@ def analysts(ticker):
         return db.cache_get_stale(key) or None
     out = out if (out["targets"] or out["ratings"]) else {}
     db.cache_set(key, out, ts=None if out else time.time() - 24 * 3600 + 3600)  # nothing is kept an hour, in case it was a rate limit
+    return out or None
+
+
+# Insider trades by what they are. Yahoo's own "purchases" count share awards and option exercises as buying, which
+# is pay, not a decision to buy: Apple's insiders showed 11 "purchases" and no buy at a market price. Only a trade at a
+# price on the market counts as buying or selling; awards, exercises, gifts, conversions and buy-backs are other.
+_BUY = re.compile(r"^\s*(purchase at price|acquisition in the public market)", re.I)
+_SELL = re.compile(r"^\s*(sale at price|disposition in the public market)", re.I)
+
+
+def insider_kind(text):
+    """'buy', 'sell' or 'other' (awards, option exercises, gifts, conversions, buy-backs, blank)."""
+    return "buy" if _BUY.match(text or "") else "sell" if _SELL.match(text or "") else "other"
+
+
+def ownership(ticker):
+    """Who owns the company and what its insiders did, as Yahoo reports it: the share held by insiders and by
+    institutions, the largest institutions and funds with their latest change, and insider trades of the past year,
+    each with its kind. None when Yahoo has nothing (funds, coins, and many companies outside North America).
+    Cached a day; nothing found is kept an hour, since a rate limit looks the same."""
+    if DEMO:
+        return _demo_ownership(ticker)
+    key = f"own:v1:{ticker}"
+    cached = db.cache_get(key, 24 * 3600)
+    if cached is not None:
+        return cached or None
+    try:
+        t = _yf().Ticker(ticker)
+        major = t.major_holders
+        held = {} if major is None or major.empty else {k: _num(v) for k, v in major["Value"].items()}
+        holders = lambda df: [] if df is None or df.empty else [
+            {"holder": str(r["Holder"]), "pct": _num(r.get("pctHeld")), "shares": _num(r.get("Shares")), "change": _num(r.get("pctChange")),
+             "reported": pd.Timestamp(r["Date Reported"]).strftime("%Y-%m-%d") if pd.notna(r.get("Date Reported")) else None}
+            for r in df.to_dict("records")]
+        institutions, funds = holders(t.institutional_holders), holders(t.mutualfund_holders)
+        trades = t.insider_transactions
+        year_ago = pd.Timestamp.today().normalize() - pd.DateOffset(years=1)
+        insiders = [] if trades is None or trades.empty else [
+            {"date": pd.Timestamp(r["Start Date"]).strftime("%Y-%m-%d"), "insider": str(r.get("Insider") or "").title(),
+             "position": str(r.get("Position") or ""), "kind": insider_kind(r.get("Text")), "shares": _num(r.get("Shares")),
+             "value": _num(r.get("Value")), "text": str(r.get("Text") or "")}
+            for r in trades.to_dict("records") if pd.notna(r.get("Start Date")) and pd.Timestamp(r["Start Date"]) >= year_ago]
+        out = {"insiderPct": held.get("insidersPercentHeld"), "institutionPct": held.get("institutionsPercentHeld"),
+               "institutionCount": held.get("institutionsCount"), "institutions": institutions, "funds": funds,
+               "insiders": sorted(insiders, key=lambda x: x["date"], reverse=True)}
+    except Exception as e:
+        log.warning("ownership failed for %s: %s", ticker, e)
+        return db.cache_get_stale(key) or None
+    empty = not (out["insiders"] or out["institutions"] or out["funds"] or out["insiderPct"] is not None or out["institutionPct"] is not None)
+    out = {} if empty else out
+    db.cache_set(key, out, ts=None if out else time.time() - 24 * 3600 + 3600)
     return out or None
 
 
@@ -804,6 +880,27 @@ def _demo_analysts(ticker):
     ratings = {k: int(rng.integers(0, n)) for k, n in (("strongBuy", 8), ("buy", 15), ("hold", 12), ("sell", 4), ("strongSell", 2))}
     return {"targets": {"low": round(mean * 0.75, 2), "mean": round(mean, 2), "median": round(mean * 1.01, 2), "high": round(mean * 1.3, 2)},
             "ratings": ratings, "ratingsMonthAgo": {**ratings, "buy": max(0, ratings["buy"] - 1)}}
+
+
+def _demo_ownership(ticker):
+    if ticker.endswith("-USD") or ticker in _etfs() or ticker in MACRO:
+        return None
+    rng = np.random.default_rng(_seed(ticker) + 6)
+    price = float(_demo_history(ticker)["Close"].iloc[-1])
+    today = pd.Timestamp.today().normalize()
+    texts = {"buy": "Purchase at price {p:.2f} per share.", "sell": "Sale at price {p:.2f} per share.", "other": "Stock Award(Grant) at price 0.00 per share."}
+    insiders = []
+    for i in range(int(rng.integers(3, 12))):
+        kind = str(rng.choice(["buy", "sell", "sell", "other"]))
+        shares = float(rng.integers(500, 50000))
+        insiders.append({"date": (today - pd.Timedelta(days=int(rng.integers(1, 360)))).strftime("%Y-%m-%d"),
+                         "insider": str(rng.choice(["Smith Jane", "Lee Ken", "Garcia Ana", "Novak Petr"])), "position": str(rng.choice(["Director", "Chief Financial Officer", "Officer"])),
+                         "kind": kind, "shares": shares, "value": None if kind == "other" else round(shares * price, 0), "text": texts[kind].format(p=price)})
+    holder = lambda n: {"holder": n, "pct": round(float(rng.uniform(0.005, 0.08)), 4), "shares": float(rng.integers(1_000_000, 90_000_000)),
+                        "change": round(float(rng.uniform(-0.05, 0.05)), 4), "reported": (today - pd.Timedelta(days=40)).strftime("%Y-%m-%d")}
+    return {"insiderPct": round(float(rng.uniform(0.001, 0.15)), 4), "institutionPct": round(float(rng.uniform(0.2, 0.8)), 4),
+            "institutionCount": float(rng.integers(200, 5000)), "institutions": [holder(n) for n in ("Index House", "Pension Trust", "Global Advisors")],
+            "funds": [holder(n) for n in ("World Index Fund", "Dividend Fund")], "insiders": sorted(insiders, key=lambda x: x["date"], reverse=True)}
 
 
 def _demo_fund(ticker):
