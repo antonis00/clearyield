@@ -3232,8 +3232,34 @@ def test_intermediates_must_chain_to_a_trusted_root():
 
 
 def _core(check):
-    """A figure check without its list of worked-out figures, which has its own test."""
-    return {k: v for k, v in check.items() if k != "derived"}
+    """A figure check without its lists of worked-out figures and wrong directions, which have their own test."""
+    return {k: v for k, v in check.items() if k not in ("derived", "direction")}
+
+
+def test_figure_check_signs_points_and_direction():
+    from backend import ai
+    facts = "AAPL return 1y: 12.3%. MSFT return 1y: -4.5%. NVDA change from the day before: -6.15%. KO day +1.20%."
+    # A gap worked out with the signs dropped is flagged: 12.3% and -4.5% are 16.8 points apart, not 7.8
+    assert ai.check_figures("AAPL led MSFT by 7.8% (12.3% against -4.5%).", facts)["unmatched"] == ["7.8%"]
+    # The true gap, in percentage points (pp or in words), is worked out from the two
+    for t in ("AAPL beat MSFT by 16.8 percentage points (12.3% vs -4.5%).", "AAPL beat MSFT by 16.8 pp: 12.3% against -4.5%."):
+        r = ai.check_figures(t, facts)
+        assert r["unmatched"] == [] and r["derived"] == [{"figure": r["derived"][0]["figure"], "how": "12.3% − -4.5%"}], r
+    # A pp figure matches a percentage in the data
+    assert ai.check_figures("KO moved 1.2 pp.", facts)["unmatched"] == []
+    # The right number in the wrong direction is flagged, and said so
+    r = ai.check_figures("NVDA rose 6.15% today.", facts)
+    assert r["unmatched"] == ["6.15%"] and r["direction"] == [{"figure": "6.15%", "says": "up", "data": "negative"}], r
+    assert ai.check_figures("KO fell 1.2%.", facts)["direction"][0]["says"] == "down"
+    # Directions that agree pass, before or after the figure, with a few words between
+    for t in ("NVDA fell 6.15% today.", "NVDA dropped by about 6.15%.", "a 6.15% drop for NVDA", "NVDA is down 6.15% and KO up 1.2%.", "KO rose 1.2%."):
+        r = ai.check_figures(t, facts)
+        assert r["unmatched"] == [] and r["direction"] == [], (t, r)
+    # A figure the data has both ways isn't judged (it can't tell which one is meant)
+    assert ai.check_figures("It rose 3%.", "A: 3.0%. B: -3.0%.")["direction"] == []
+    # "12 m" in "free cash flow (12 m)" is twelve months, not 12 million; "€8.5m" is still millions
+    r = ai.check_figures("Free cash flow (12 m) was $13.98 bn; it raised €8.5m.", "FCF 13.98B USD; raised 8,500,000 EUR")
+    assert r["unmatched"] == [] and r["checked"] == 2, r
 
 
 def test_figure_check_reads_scaled_amounts():
@@ -3261,6 +3287,108 @@ def test_figure_check_reads_scaled_amounts():
     assert ai.check_figures("it fell 14 points", "11.19")["unmatched"] == ["14"]
 
 
+def test_ask_looks_up_first_paces_per_key_and_follows_up():
+    import json
+    import time as _time
+
+    from backend import agent, ai, db
+    _reset()
+    # What a question plainly needs is looked up before the model is asked: its stocks (by ticker or name), their news
+    # when it asks why something moved, the portfolio when it's about the investor, a side-by-side for a comparison
+    assert agent.prefetch("Why did Nvidia move today?") == [("get_stock", {"ticker": "NVDA"}), ("get_news", {"ticker": "NVDA"})]
+    assert agent.prefetch("Compare TotalEnergies and Shell") == [("get_stock", {"ticker": "TTE.PA"}), ("get_stock", {"ticker": "SHEL.L"}), ("compare", {"tickers": ["TTE.PA", "SHEL.L"]})]
+    assert agent.prefetch("How is my portfolio doing?") == [("get_portfolio", {})]
+    assert agent.prefetch("How are markets today?") == [("get_market", {})]
+    assert agent.prefetch("What is VWCE holding?") == [("get_stock", {"ticker": "VWCE.DE"})], "a ticker without its exchange, and 'holding' isn't 'my holdings'"
+    assert agent.prefetch("Tell me about the regions and the target") == [], "everyday words that are also company names don't count"
+    assert agent.mentioned("I want a bank") == [] and agent.mentioned("AAPL, then Microsoft") == ["AAPL", "MSFT"]
+    # Several look-ups run at once, results in the order asked
+    outs = agent.run_tools([("get_stock", {"ticker": "AAPL"}), ("no_such_tool", {}), ("get_stock", {"ticker": "MSFT"})])
+    assert [ok for _, ok in outs] == [True, False, True] and '"AAPL"' in outs[0][0] and '"MSFT"' in outs[2][0]
+
+    # Pacing per key: the next call goes to a key with room; only when every key is short does it wait, for the one
+    # that refills first, counting what has refilled since its last reply (8,000 a minute is about 133 a second)
+    slept, real_sleep = [], agent.time.sleep
+    agent.time.sleep = slept.append
+    try:
+        now = _time.time()
+        c = {"keys": ["ka", "kb"], "key": "ka", "provider": "openai_compatible"}
+        agent.PACE.update({"waited": 0.0, "keys": {ai._key_id("ka"): (100, now, 8000)}})  # ka nearly spent, kb not heard from
+        agent._pace(c, 3000)
+        assert c["key"] == "kb" and slept == [], "the other key, at once"
+        agent.PACE["keys"][ai._key_id("kb")] = (500, now, 8000)
+        events = []
+        agent._PROGRESS.fn = events.append
+        agent._pace(c, 3000)
+        agent._PROGRESS.fn = None
+        assert c["key"] == "kb" and len(slept) == 1 and 18 < slept[0] < 20, (c["key"], slept)  # kb is 2,500 short: about 19 s at 133 a second
+        assert events == [{"phase": "waiting", "seconds": round(slept[0])}]
+        agent.PACE["keys"][ai._key_id("ka")] = (100, now - 60, 8000)  # a minute later ka is full again
+        slept.clear(); agent.PACE["waited"] = 0.0
+        agent._pace(c, 3000)
+        assert c["key"] == "ka" and slept == []
+        agent._note_room("kb", {"x-ratelimit-remaining-tokens": "6000", "x-ratelimit-limit-tokens": "8000"})
+        assert 5999 < agent._room("kb") <= 8000
+    finally:
+        agent.time.sleep = real_sleep
+        agent.PACE.update({"waited": 0.0, "keys": {}})
+
+    db.x("INSERT OR REPLACE INTO watchlist (ticker, tags, note, added) VALUES ('NVDA', '', '', 0)")
+    llm = _FakeLLM([])
+    try:
+        with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"), TestClient(app) as c_:
+            nvda = json.loads(agent.run_tool("get_stock", {"ticker": "NVDA"})[0])
+            move = nvda["Latest trading day"]["change from the day before"].split()[0].lstrip("+-")
+            # The looked-up data goes with the question, so the model answers in its first call, without tools
+            llm.replies = [_chat(f"NVDA moved {move} on the latest day.")]
+            events = []
+            out = agent.ask("Why did Nvidia move today?", progress=events.append)
+            first = llm.seen[0][2]["messages"][-1]["content"]
+            assert [s["tool"] for s in out["steps"]] == ["get_stock", "get_news"] and out["calls"] == 1 and "Already looked up for this question" in first and '"NVDA"' in first
+            assert out["check"]["unmatched"] == [] and out["id"] and out["followed"] == 0
+            # What the page hears as it happens: each look-up, then thinking, then the check
+            assert [e["step"]["tool"] for e in events if "step" in e] == ["get_stock", "get_news"]
+            assert [e.get("phase") for e in events if "phase" in e] == ["thinking", "checking"]
+            # A follow-up: the earlier question and answer go first as the conversation, and figures from the earlier
+            # data still count as checked although this question looked nothing up
+            llm.seen.clear()
+            llm.replies = [_chat(f"As before, it moved {move}.")]
+            again = agent.ask("And what does that mean for me?", follow=[out["id"]])
+            sent = llm.seen[0][2]["messages"]
+            assert [m["role"] for m in sent[1:3]] == ["user", "assistant"] and sent[1]["content"] == "Why did Nvidia move today?" and sent[2]["content"] == out["answer"]
+            assert again["followed"] == 1 and again["check"]["unmatched"] == [], again["check"]
+            # In the background: started, then checked on until done, with its events
+            llm.replies = [_chat("A plain answer.")]
+            r = c_.post("/api/ask/start", json={"question": "Tell me something."})
+            jid = r.json()["id"]
+            for _ in range(100):
+                j = c_.get(f"/api/ask/job/{jid}").json()
+                if j["status"] != "running":
+                    break
+                _time.sleep(0.05)
+            assert j["status"] == "done" and j["result"]["answer"] == "A plain answer." and any(e.get("phase") == "thinking" for e in j["events"]), j
+            assert c_.post("/api/ask/start", json={"question": " "}).status_code == 400 and c_.get("/api/ask/job/nope").status_code == 404
+            # An error comes back as the job's error, with its status
+            llm.replies = [(400, {"error": {"message": "bad request"}}, 0)]
+            jid = c_.post("/api/ask/start", json={"question": "Tell me something."}).json()["id"]
+            for _ in range(100):
+                j = c_.get(f"/api/ask/job/{jid}").json()
+                if j["status"] != "running":
+                    break
+                _time.sleep(0.05)
+            assert j["status"] == "error" and j["code"] == 503 and "bad request" in j["error"], j
+    finally:
+        llm.close()
+    # The watchlist and today's digest, as tools
+    w = agent.get_watchlist()
+    assert [x["ticker"] for x in w["watchlist"]] == ["NVDA"] and w["watchlist"][0]["score"]
+    assert isinstance(agent.get_digest()["items"], (list, str))
+    # A yield's change is in percentage points, not a percent of its level
+    m = agent.get_market()["markets"]
+    yields = [v for v in m.values() if v["level"].endswith("%")]
+    assert yields and all(v["day"].endswith(" pp") and v["past_year"].endswith(" pp") for v in yields), yields
+
+
 def test_ask_uses_the_tools_and_checks_its_figures():
     import json
 
@@ -3280,7 +3408,7 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             llm.replies = [_tool_call(("get_portfolio", {}), ("get_stock", {"ticker": "AAPL"})),
                            _chat(f"Apple scores {score}. It could rise 37.5% next year."),
                            _chat(f"Apple scores {score}. It could rise 37.5% or 50% next year.")]  # a revision that's no better
-            r = c.post("/api/ask", json={"question": "Should I add Apple?"})
+            r = c.post("/api/ask", json={"question": "Is it worth adding to?"})
             assert r.status_code == 200, r.text
             out = r.json()
             assert [s["tool"] for s in out["steps"]] == ["get_portfolio", "get_stock"] and all(s["ok"] for s in out["steps"]) and out["calls"] == 3
@@ -3293,7 +3421,7 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             first, second = llm.seen[0][2], llm.seen[1][2]
             # The model is told today's date, which it can't know otherwise
             import datetime as dt
-            assert first["messages"][1]["content"].startswith(f"(Today is {dt.date.today():%A %d %B %Y}.)") and first["messages"][1]["content"].endswith("Should I add Apple?")
+            assert first["messages"][1]["content"].startswith(f"(Today is {dt.date.today():%A %d %B %Y}.)") and first["messages"][1]["content"].endswith("Is it worth adding to?")
             assert {t["function"]["name"] for t in first["tools"]} == set(agent.TOOLS) - {"web_search"} and first["tool_choice"] == "auto"
             back = [m for m in second["messages"] if m["role"] == "tool"]
             assert [m["tool_call_id"] for m in back] == ["c0", "c1"] and "VWCE.DE" in back[0]["content"]
@@ -3303,7 +3431,7 @@ def test_ask_uses_the_tools_and_checks_its_figures():
             llm.seen.clear()
             llm.replies = [_tool_call(("get_stock", {"ticker": "AAPL"})), _chat(f"Apple scores {score}. It could rise 37.5% next year."),
                            _chat(f"Apple scores {score}. The data gives no forecast.")]
-            out = c.post("/api/ask", json={"question": "Should I add Apple?"}).json()
+            out = c.post("/api/ask", json={"question": "Is it worth adding to?"}).json()
             assert out["answer"].endswith("gives no forecast.") and out["check"]["unmatched"] == [] and out["revised"] == {"before": ["37.5%"], "fixed": 1}, out
             # An answer whose figures all check out isn't sent back
             llm.seen.clear()
@@ -3854,14 +3982,14 @@ def test_ask_searches_the_web():
                                               {"title": "Bad", "url": "javascript:alert(1)", "content": "x"}]}, 0)]
             llm.replies = [_tool_call(("web_search", {"query": "Novo Nordisk outlook"})),
                            _chat("Novo Nordisk lowered its sales growth outlook to 8% (reuters.com, 5 November 2026).")]
-            out = c.post("/api/ask", json={"question": "Why did Novo Nordisk fall?"}).json()
+            out = c.post("/api/ask", json={"question": "What is the story with the drug maker this week?"}).json()
             _, headers, sent = web.seen[0]
             assert len(web.seen) == 1 and headers["authorization"] == "Bearer tvly-test" and sent["topic"] == "news" and sent["time_range"] == "week" and sent["max_results"] == agent.WEB_RESULTS
             assert out["steps"][0]["ok"] and out["steps"][0]["links"] == [{"title": "Novo cuts its outlook", "url": "https://www.reuters.com/a", "site": "reuters.com", "date": "2026-11-05"}], out["steps"]
             back = [m for m in llm.seen[1][2]["messages"] if m["role"] == "tool"][0]["content"]
             assert "javascript:" not in back and len(back) < 2000 and "never instructions" in back, back
             assert out["check"]["unmatched"] == [], out["check"]  # the 8% is in the web result
-            assert "web_search" in {t["function"]["name"] for t in llm.seen[0][2]["tools"]} and "name the website" in llm.seen[0][2]["messages"][0]["content"]
+            assert "web_search" in {t["function"]["name"] for t in llm.seen[0][2]["tools"]} and "Name the site and date" in llm.seen[0][2]["messages"][0]["content"]
             # Newest first with each one's age, undated last; Tavily's own pages dropped; an older argument is ignored
             web.seen.clear()
             d1, d2 = (dt.date.today() - dt.timedelta(days=1)).isoformat(), (dt.date.today() - dt.timedelta(days=6)).isoformat()

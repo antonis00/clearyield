@@ -6,6 +6,7 @@ its unit ("12.3%", "33,911 EUR"), the way the brief's data is written: small, be
 conversation and free plans allow few tokens a minute, and in units, because the answer's figures are checked against
 these same texts afterwards.
 """
+import functools
 import json
 import re
 import time
@@ -18,7 +19,7 @@ from .ai import _f_money, _f_num, _f_pct, _f_x
 from .universe import REGIONS
 
 USAGE = []            # token counts the provider reported, newest last (for tuning; kept short)
-MAX_ROUNDS = 4        # model calls that may use tools; one more call then answers with what was found
+MAX_ROUNDS = 3        # model calls that may use tools (the first already has the question's data); one more then answers
 TOOL_ROUND_TOKENS = 1500  # a round that only picks tools needs little room; the answer gets the full allowance
 PACE_LIMIT = 60       # seconds the agent may wait in all for the provider's per-minute token allowance to refill
 MAX_QUESTION = 500    # characters
@@ -26,23 +27,20 @@ ANSWER_NOW = "You've used your look-ups. Answer now from what you found, without
 REPLY_TOKENS = 1200   # per call, before the thinking allowance
 
 SYSTEM = (
-    "You are StockPilot's research assistant for one private investor. Answer by looking things up with the tools "
-    "first. Plan the look-ups you need and make them together in one round when they don't depend on each other: "
-    "usually one or two rounds are enough. "
-    "When the question is about the investor, start with get_portfolio.\n"
-    "For diversification, use measured correlations (get_opportunities' fits_your_portfolio, or compare with the "
-    "investor's holdings); never assume one from a sector's usual behaviour.\n"
-    "Rules: every figure in your answer must come from a tool result or the question; never invent or estimate one, "
-    "and don't bring in outside benchmarks or averages (a sector median, a 'typical' range, the market's long-run return): "
-    "to compare, look the peers up (screen a sector, or compare with an index fund such as SPY or VWCE.DE). When you "
-    "work a figure out from others (a sum, a difference), say so. Never describe what an article says beyond the "
-    "lines the tools give (a headline, a summary, a search result's text), and put only a source's exact words in "
-    "quotation marks. To compare funds, get_fund gives each one's yearly cost and holdings and compare how closely "
-    "they move together. "
-    "Scores run 0-100 and higher is better; a higher risk score means calmer, LOWER risk. Explain trade-offs and say "
-    "what would change the picture; never give a bare buy or sell instruction: this is decision support, not financial "
-    "advice. If the tools can't answer, say what's missing.\n"
-    "Answer in markdown, under about 250 words: a direct answer first, then the reasons with their figures, then caveats."
+    "You are StockPilot's research assistant for one private investor. Some data is already looked up with the question; "
+    "look up anything else you need with the tools, all in one round where you can (symbols as Yahoo writes them: AAPL, "
+    "SAP.DE, VWCE.DE, BTC-USD).\n"
+    "Rules:\n"
+    "- Every figure must come from the data or the question. Never invent, estimate or bring in outside benchmarks "
+    "(a sector median, a 'typical' range); look peers up instead (screen, or compare with SPY or VWCE.DE). Say when you "
+    "work a figure out; a difference of two percentages is in percentage points.\n"
+    "- Rose or fell, beat or missed: as the data's sign says. Scores run 0-100, higher is better: a high risk score "
+    "means calm, LOW risk.\n"
+    "- Diversification: use measured correlations (fits_your_portfolio, or compare with the holdings), never a "
+    "sector's reputation.\n"
+    "- Never describe an article beyond the lines given; quotation marks only for a source's exact words.\n"
+    "- Trade-offs and what would change the view, never a bare buy or sell. If the data can't answer, say what's missing.\n"
+    "Answer in markdown, under about 250 words: the direct answer first, then the reasons with their figures, then caveats."
 )
 
 
@@ -114,7 +112,8 @@ def get_stock(ticker):
         d["Within its sector"] = {"sector": peers["sector"], "other stocks compared": peers["others"],
                                   **{f"{k} score beats": f"{_f_pct(v['beats'], 0)} of {v['of']} others (their middle: {_f_num(v['median'], 0)})"
                                      if v["beats"] is not None else f"not ranked: {v['of']} others with this score" for k, v in peers["ranks"].items()},
-                                  "meaning": "the share of the other stocks in the same sector, from every market in the app's list, that this score beats; 50% is the middle"}
+                                  "meaning": "the share of the other stocks in the same sector, from every market in the app's list, that this score beats; 50% is the middle. "
+                                             "Every score is better when higher: a risk score that beats most means calmer than most"}
     # The latest day's move, with its date: without it "did it move today" had no answer, and a closed market's
     # last price could be read as today's
     c = full["Close"].dropna()
@@ -158,7 +157,7 @@ def get_opportunities(markets=None):
 def compare(tickers, period="1y"):
     ts = [t.strip().upper() for t in tickers][:5]
     d = insights.compare(ts, period if period in ("6mo", "1y", "2y", "5y") else "1y", _settings().get("risk_free_rate", 0.04))
-    rows = [{"ticker": m["ticker"], "name": m["name"], f"return_{period}": _f_pct(m["periodReturn"], 1), "volatility": _f_pct(m.get("vol1y"), 1),
+    rows = [{"ticker": m["ticker"], "name": m["name"], f"return_{period}": _f_pct(m["periodReturn"], 1), "volatility_1y": _f_pct(m.get("vol1y"), 1),
              "max_drawdown_1y": _f_pct(m.get("maxDD1y"), 1), "sharpe_1y": _f_num(m.get("sharpe1y"), 2), "pe": _f_x(m["pe"]) if m.get("pe") else None} for m in d["meta"]]
     corr = d.get("correlation")
     pairs = {f"{a}-{b}": _f_num(corr["matrix"][i][j], 2) for i, a in enumerate(corr["tickers"]) for j, b in enumerate(corr["tickers"]) if i < j} if corr else {}
@@ -245,7 +244,7 @@ def get_dividends(ticker):
     since = (pd.Timestamp.today().normalize() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
     last_year = sum(v for d, v in paid if d > since)
     return {"ticker": t, "per_share_currency": data.info(t).get("currency"), "latest_payment": f"{paid[-1][1]:,.4f} on {paid[-1][0]}",
-            "total_per_year": {y: f"{by_year[y]:,.4f}" + (" (year so far)" if y == years[-1] else "") for y in years},
+            "total_per_year": {y: f"{by_year[y]:,.4f}" + (" (year so far)" if y == str(pd.Timestamp.today().year) else "") for y in years},
             "paid_in_past_12_months": f"{last_year:,.4f}", "yield_on_past_12_months": _f_pct(last_year / price, 2) if price else None,
             "payments_listed": len(paid)}
 
@@ -296,10 +295,36 @@ def get_market():
         if len(c) < 2:
             continue
         unit = data.price_unit(t, None)
-        out[name] = {"level": f"{c.iloc[-1]:,.2f}" + ("%" if unit == "%" else ""), "day": _f_pct(ind.ret_over(c, 1), 2), "month": _f_pct(ind.ret_over(c, 21), 1),
+        if unit == "%":  # a yield's change in percentage points: 4.0% to 4.2% is +0.20 pp, not "+5%"
+            pts = lambda n: f"{c.iloc[-1] - c.iloc[max(0, len(c) - 1 - n)]:+.2f} pp"  # n trading days back, as ret_over counts
+            out[name] = {"level": f"{c.iloc[-1]:,.2f}%", "day": pts(1), "month": pts(21), "past_year": pts(252), "as_of": f"{c.index[-1]:%Y-%m-%d}"}
+            continue
+        out[name] = {"level": f"{c.iloc[-1]:,.2f}", "day": _f_pct(ind.ret_over(c, 1), 2), "month": _f_pct(ind.ret_over(c, 21), 1),
                      "past_year": _f_pct(ind.ret_over(c, 252), 1), "as_of": f"{c.index[-1]:%Y-%m-%d}"}
-    return {"markets": out, "note": "day, month (past 21 trading days) and past_year (the last 12 months, not year to date). Indexes in points, "
-                                    "yields in percent (their changes are relative, not in percentage points), the rest in their own units."}
+    return {"markets": out, "note": "day, month (past 21 trading days) and past_year (the last 12 months, not year to date). Indexes in points; "
+                                    "yields in percent, their changes in percentage points (pp); the rest change in percent of their level."}
+
+
+def get_watchlist():
+    """The stocks the investor watches, each with its latest day, past year and score."""
+    items = db.q("SELECT ticker FROM watchlist ORDER BY added")
+    if not items:
+        return {"watchlist": "empty"}
+    rows = insights.rows_for([i["ticker"] for i in items], _settings())
+    out = [{"ticker": r["ticker"], "name": r.get("name"), "kind": r.get("assetClass"), "price": f"{_f_num(r['price'])} {r.get('currency') or ''}".strip(),
+            "latest_day": _f_pct(r["day"], 2) + f" ({r.get('asOf')})", "past_year": _f_pct(r["ret1y"], 1), "score": _f_num(r["composite"], 1), "stance": r["stance"]}
+           for r in rows if "error" not in r]
+    return {"watchlist": out, "no_data": [r["ticker"] for r in rows if "error" in r] or None}
+
+
+def get_digest():
+    """Today's digest, as on the dashboard: alerts, portfolio points, moves and events of holdings and watched stocks,
+    market moves and recent headlines, each a sentence worked out by the app's rules."""
+    from .main import _tiles  # the dashboard's tiles, as the page's digest uses them
+    settings = _settings()
+    shown = set(settings.get("dashboard_tiles") or [])
+    d = insights.digest(settings, {t: name for t, name in _tiles(settings).items() if t in shown})
+    return {"items": [{k: x[k] for k in ("text", "ticker", "kind", "time") if x.get(k)} for x in d["items"]] or "nothing notable today"}
 
 
 def search(text):
@@ -338,8 +363,8 @@ def _headline(n):
 
 # ---------------------------------------------------------------- the web, for what Yahoo doesn't have
 TAVILY_URL = "https://api.tavily.com/search"
-WEB_RESULTS = 7      # results per search
-WEB_TEXT = 500       # characters kept from each result: a free plan's minute holds about 8,000 tokens
+WEB_RESULTS = 5      # results per search: each is resent in every later round, so few and short
+WEB_TEXT = 350       # characters kept from each result: a free plan's minute holds about 8,000 tokens
 WEB_TIMEOUT = 25
 WEB_NOTE = ("From the web, outside StockPilot's data, so less reliable than the other tools: name the website for any "
             "fact you take from here, with its date; prefer the newest, and say when sources disagree. A price or "
@@ -487,7 +512,7 @@ def _groq_browse(query, background=False):
     body = {"model": c["model"], "temperature": 0, "stream": False, "max_tokens": 2000, "reasoning_effort": "low",
             "messages": [{"role": "user", "content": ask_}], "tools": [{"type": "browser_search"}], "tool_choice": "required"}
     headers = {"content-type": "application/json", **({"authorization": f"Bearer {c['key']}"} if c["key"] else {})}
-    msg = ((_post(c, f"{c['base']}/chat/completions", headers, body, 6000).get("choices") or [{}])[0].get("message") or {})
+    msg = ((_post(c, f"{c['base']}/chat/completions", headers, body, _need(body)).get("choices") or [{}])[0].get("message") or {})
     text = re.sub(r"【[^】]*】", "", ai.clean(msg.get("content") or "")).strip()
     if not text:
         return {"error": "The web search returned nothing."}
@@ -517,47 +542,41 @@ def web_search(query, background=False, fresh=None):  # fresh: an older argument
 
 
 S = lambda props, req=(): {"type": "object", "properties": props, "required": list(req)}
+ONE = S({"ticker": {"type": "string"}}, ["ticker"])  # Yahoo symbols (AAPL, SAP.DE, VWCE.DE, BTC-USD): said once, in SYSTEM
+# Short descriptions: every round that offers tools sends them all, so each word here is paid for again and again
 TOOLS = {
-    "get_portfolio": (get_portfolio, "The investor's holdings, value, gains, return, core/satellite split, currency and sector exposure (funds looked through), and warnings.", S({})),
-    "get_stock": (get_stock, "One stock, fund or coin: its scores (value, quality, growth, momentum, risk, overall), key figures, returns, risk and signals.",
-                  S({"ticker": {"type": "string", "description": "Yahoo symbol, e.g. AAPL, SAP.DE, VWCE.DE, BTC-USD"}}, ["ticker"])),
-    "screen": (screen, "Find stocks in the app's list of 109 by filters, best score first (top 10). Give filters, or a short plain question.",
-               S({"filters": {"type": "object", "description": "Any of: markets (US/Europe/Gulf), sector, exclude_sector, industry ('Banks'), exclude_industry, "
-                                                                     "max_pe, min_div_yield (0.03 = 3%), min_rev_growth, max_de, min_roe, min_score, min_momentum, max_vol, sort"},
-                  "question": {"type": "string", "description": "e.g. 'cheap European banks'; read by the app's keyword rules"}})),
-    "get_opportunities": (get_opportunities, "The Opportunities page: top ranked stocks; fits_your_portfolio, with each stock's measured correlation "
-                                              "with what the investor holds (use it for diversification questions); and good companies below their high.",
+    "get_portfolio": (get_portfolio, "The investor's holdings, value, gains, return, core/satellite split, currency and sector exposure (funds looked through), warnings.", S({})),
+    "get_watchlist": (get_watchlist, "The stocks the investor watches: latest day, past year, score.", S({})),
+    "get_digest": (get_digest, "Today's digest: alerts, portfolio points, moves and events of holdings and watched stocks, market moves, recent headlines.", S({})),
+    "get_stock": (get_stock, "One stock, fund or coin: scores, key figures, returns, risk, signals, rank in its sector, latest day.", ONE),
+    "screen": (screen, "Find stocks in the app's list (about 400, in the regions followed) by filters, best score first (top 10).",
+               S({"filters": {"type": "object", "description": "Any of: markets (" + "/".join(REGIONS) + "), countries, sector, exclude_sector, "
+                                                                     "industry ('Banks'), exclude_industry, max_pe, min_div_yield (0.03 = 3%), min_rev_growth, max_de, "
+                                                                     "min_roe, min_score, max_vol, sort"},
+                  "question": {"type": "string", "description": "or a short plain question: 'cheap European banks'"}})),
+    "get_opportunities": (get_opportunities, "Top ranked stocks; fits_your_portfolio (measured correlation with the holdings: use for diversification); quality on sale.",
                           S({"markets": {"type": "array", "items": {"type": "string", "enum": REGIONS}}})),
-    "compare": (compare, "Up to 5 assets side by side: return, volatility, drawdown, Sharpe, P/E, and how closely each pair moves together.",
+    "compare": (compare, "Up to 5 assets side by side: return, volatility, drawdown, Sharpe, P/E, correlation of each pair.",
                 S({"tickers": {"type": "array", "items": {"type": "string"}}, "period": {"type": "string", "enum": ["6mo", "1y", "2y", "5y"]}}, ["tickers"])),
-    "pretrade": (pretrade, "What buying an amount (in the base currency) of one asset would do to the portfolio: its weight, the whole sector mix "
-                           "before and after (counting what funds hold), currency exposure, beta and warnings. Use it for 'what if I bought'. Nothing is saved.",
+    "pretrade": (pretrade, "What buying an amount (base currency) of one asset would do to the portfolio: weight, sectors and currencies before/after, beta, warnings.",
                  S({"ticker": {"type": "string"}, "amount": {"type": "number"}}, ["ticker", "amount"])),
-    "get_ownership": (get_ownership, "Who owns a company and what its insiders did: the share held by insiders and institutions, insiders' "
-                                     "market buys and sales over the past 6 months, and the largest institutions and funds with their latest change.",
-                      S({"ticker": {"type": "string"}}, ["ticker"])),
-    "get_analysts": (get_analysts, "Analysts' price targets and buy/hold/sell counts for one stock, as Yahoo reports them.", S({"ticker": {"type": "string"}}, ["ticker"])),
-    "get_earnings": (get_earnings, "Next earnings and ex-dividend dates, and recent quarters' reported against expected earnings per share.", S({"ticker": {"type": "string"}}, ["ticker"])),
-    "get_dividends": (get_dividends, "Dividend history: latest payment, total per year, past 12 months and yield.", S({"ticker": {"type": "string"}}, ["ticker"])),
-    "get_price_history": (get_price_history, "Price over any dates: start and end, return, high, low, largest fall, volatility.",
-                          S({"ticker": {"type": "string"}, "start": {"type": "string", "description": "YYYY-MM-DD"}, "end": {"type": "string", "description": "YYYY-MM-DD; omit for today"}}, ["ticker", "start"])),
-    "get_fund": (get_fund, "What a fund holds: yearly cost, sectors, top 10 holdings, and currencies for broad index funds.", S({"ticker": {"type": "string"}}, ["ticker"])),
-    "get_market": (get_market, "Markets today: main indexes, the VIX, yields, gold, oil, bitcoin, currencies: level and day, month and year change.", S({})),
+    "get_ownership": (get_ownership, "Insiders' and institutions' share, insiders' market buys and sales (6 months), largest holders.", ONE),
+    "get_analysts": (get_analysts, "Analysts' price targets and buy/hold/sell counts.", ONE),
+    "get_earnings": (get_earnings, "Next earnings and ex-dividend dates; recent quarters' earnings per share against expected.", ONE),
+    "get_dividends": (get_dividends, "Dividend history: latest payment, per year, past 12 months, yield.", ONE),
+    "get_price_history": (get_price_history, "Price between two dates: return, high, low, largest fall, volatility.",
+                          S({"ticker": {"type": "string"}, "start": {"type": "string", "description": "YYYY-MM-DD"}, "end": {"type": "string", "description": "YYYY-MM-DD, or omit for today"}}, ["ticker", "start"])),
+    "get_fund": (get_fund, "What a fund holds: yearly cost, sectors, top 10 holdings, currencies.", ONE),
+    "get_market": (get_market, "Markets: indexes, VIX, yields, gold, oil, bitcoin, currencies: level, day, month, year.", S({})),
     "search": (search, "Find a symbol by company or fund name.", S({"text": {"type": "string"}}, ["text"])),
-    "get_news": (get_news, "The latest Yahoo headlines naming a company, newest first with the hour (often from today), with Yahoo's "
-                           "one-line summaries. The freshest news there is; for the full story, web_search.",
-                 S({"ticker": {"type": "string"}}, ["ticker"])),
-    "web_search": (web_search, "Search the web for what the other tools don't have: events, why something moved, company announcements, "
-                               "a fund's or company's own facts, economic news. Not for prices or scores: the other tools have those.",
-                   S({"query": {"type": "string", "description": "search words, e.g. 'Novo Nordisk Wegovy sales'; no dates needed, the search knows today's"},
-                      "background": {"type": "boolean", "description": "true only for facts that don't date (what a fund tracks, a "
-                                                                       "company's history): searches any date. Otherwise it searches the past week's news, newest first."}}, ["query"])),
+    "get_news": (get_news, "A company's latest Yahoo headlines, newest first, with the hour and a one-line summary.", ONE),
+    "web_search": (web_search, "The web, for what the other tools lack: events, why something moved, announcements, economic news. Not for prices or scores.",
+                   S({"query": {"type": "string", "description": "search words; no dates needed"},
+                      "background": {"type": "boolean", "description": "true only for facts that don't date (what a fund tracks); otherwise the past week's news"}}, ["query"])),
 }
-SYSTEM_WEB = ("\nweb_search reaches the web for what the other tools don't have. Use the app's tools for prices, returns "
-              "and scores. For anything from the web, name the website (with its link when there is one) and its date. "
-              "For why a stock or market moved, or what's new: get_stock or get_market for the actual move (never say "
-              "something rose or fell without it), get_news for today's headlines, and web_search for the past week's "
-              "stories behind them; lead with the newest. If they don't explain a move, say so rather than guess.")
+SYSTEM_WEB = ("\n- web_search: for what the app's tools lack, never prices or scores. Name the site and date of anything from "
+              "it. Why something moved: the actual move from get_stock or get_market (never say rose or fell without it), "
+              "then get_news and web_search for the stories, newest first; if they don't explain it, say so.")
 
 
 def _tools():
@@ -567,6 +586,88 @@ def _tools():
 
 def _system():
     return SYSTEM + (SYSTEM_WEB if web_source() else "")
+
+
+# ---------------------------------------------------------------- what the question plainly needs, looked up first
+# Most questions name what they need: "my portfolio", a company, "why did it move". Looking those up before the first
+# model call (in parallel, no model involved) saves the round in which the model would only have asked for them, and
+# that round resent the whole conversation and every tool's description. The model can still look up more.
+NAME_STOP = {"target", "regions", "discover", "progressive", "public", "southern", "general", "national", "united", "first",
+             "american", "international", "global", "booking", "equity", "energy", "capital", "health", "power", "orange",
+             "realty", "digital", "truist", "fortune", "reliance", "unicredit", "advanced", "applied", "analog", "texas",
+             "royal", "banco", "bank", "china", "india", "japan", "saudi", "emirates", "qatar", "kuwait", "industrial", "commercial"}
+MENTIONS_MAX = 3   # stocks looked up first; more than this and the model asks for what it needs
+PREFETCH = {
+    "portfolio": re.compile(r"\b(my|mine|portfolio|holdings|should i|i own|i hold|i have|new money|rebalanc\w*|core|satellite)\b", re.I),
+    "news": re.compile(r"\b(why|news|today|move[sd]?|moving|fell|fall(ing)?|rose|rise|rising|drop(ped)?|jump(ed)?|surge[sd]?|plunge[sd]?|happen\w*|announce\w*)\b", re.I),
+    "compare": re.compile(r"\b(compare[sd]?|comparison|vs\.?|versus|or|better|between|against)\b", re.I),
+    "market": re.compile(r"\b(markets?|indexes|indices|s&p|nasdaq|dow|vix|economy|yields?|rates)\b", re.I),
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _name_index():
+    """Words that name a stock in the app's list: its ticker (and the ticker before an exchange suffix, when only one
+    listing has it) and its name (in full, and its first word when that's distinctive)."""
+    from .universe import UNIVERSE
+    tickers, bases, names = {}, {}, {}
+    for group in UNIVERSE.values():
+        for t, n in group.items():
+            tickers[t] = t
+            base = re.split(r"[.]", t)[0]
+            bases.setdefault(base, set()).add(t)
+            full = n.lower()
+            names.setdefault(full, t)
+            first = re.split(r"[\s,]", full)[0]
+            if len(first) >= 5 and first not in NAME_STOP and first not in ai.GENERIC_WORDS:
+                names.setdefault(first, t)
+    tickers.update({b: next(iter(ts)) for b, ts in bases.items() if len(ts) == 1 and b not in tickers})
+    return tickers, names
+
+
+def mentioned(question):
+    """The stocks a question names, in the order it names them: tickers written as tickers (NVDA, SAP.DE, VWCE), then
+    company names (Nvidia, TotalEnergies, Shell). Single letters and words that are also everyday words are left out."""
+    tickers, names = _name_index()
+    found = []
+    for m in re.finditer(r"(?<![\w.^-])([A-Z][A-Z0-9]{1,5}(?:[.-][A-Z]{1,3})?)(?![\w-])", question):
+        t = tickers.get(m.group(1))
+        if t and (m.start(), t) not in found:
+            found.append((m.start(), t))
+    low = question.lower()
+    for n, t in names.items():
+        for m in re.finditer(rf"(?<![\w-]){re.escape(n)}(?![\w-])", low):
+            found.append((m.start(), t))
+    out = []
+    for _, t in sorted(found):
+        if t not in out:
+            out.append(t)
+    return out[:MENTIONS_MAX]
+
+
+
+def prefetch(question):
+    """The look-ups a question plainly needs, as (tool, args): the portfolio when it's about the investor, each stock it
+    names, their news when it asks why something moved or what's new, and the markets when it's about them."""
+    stocks = mentioned(question)
+    plan = [("get_portfolio", {})] if PREFETCH["portfolio"].search(question) else []
+    plan += [("get_stock", {"ticker": t}) for t in stocks]
+    if len(stocks) >= 2 and PREFETCH["compare"].search(question):  # side by side, with how closely they move together
+        plan.append(("compare", {"tickers": stocks}))
+    if stocks and len(stocks) <= 2 and PREFETCH["news"].search(question):
+        plan += [("get_news", {"ticker": t}) for t in stocks]
+    if not stocks and PREFETCH["market"].search(question):
+        plan.append(("get_market", {}))
+    return plan
+
+
+def run_tools(calls):
+    """Several look-ups at once (Yahoo downloads overlap rather than add up), results in the order asked."""
+    from concurrent.futures import ThreadPoolExecutor
+    if len(calls) <= 1:
+        return [run_tool(n, a) for n, a in calls]
+    with ThreadPoolExecutor(max_workers=min(6, len(calls))) as ex:
+        return list(ex.map(lambda c: run_tool(*c), calls))
 
 
 def run_tool(name, args):
@@ -585,7 +686,26 @@ def run_tool(name, args):
 
 
 # ---------------------------------------------------------------- the conversation, in each provider's format
-PACE = {"remaining": None, "reset": 0.0, "waited": 0.0}
+PACE = {"waited": 0.0, "keys": {}}  # per key fingerprint: (tokens left, when that was read, the minute's limit)
+
+
+def _room(key, now=None):
+    """Tokens a key has now: what its last reply said was left, plus what has refilled since (a minute's limit refills
+    evenly over the minute: Groq's 8,000 come back at about 133 a second), up to the limit. None if not known yet."""
+    seen = PACE["keys"].get(ai._key_id(key)) if key else None
+    if not seen:
+        return None
+    left, at, limit = seen
+    return min(limit, left + ((now or time.time()) - at) * limit / 60)
+
+
+def _wait_for(key, need, now=None):
+    """Seconds until a key has room for `need` tokens (0 when it has, or isn't known yet)."""
+    room = _room(key, now)
+    if room is None or room >= need:
+        return 0.0
+    limit = PACE["keys"][ai._key_id(key)][2]
+    return (min(need, limit) - room) / (limit / 60)
 
 
 def _reset_seconds(v):
@@ -597,17 +717,48 @@ def _reset_seconds(v):
     return total
 
 
-def _pace(need):
-    """Free plans allow a few thousand tokens a minute. When the next round won't fit in what's left, wait for the
-    allowance to refill (within PACE_LIMIT in all) rather than fail."""
-    left, reset = PACE["remaining"], PACE["reset"]
-    if left is None or left >= need or reset <= 0:
+def _pace(c, need):
+    """Free plans allow a few thousand tokens a minute, per key. Each key's room is kept from its own replies: the next
+    call goes to a key with room for it (the one in use first), and only when every key is short does it wait, for the
+    one that refills first (within PACE_LIMIT in all). It used to wait on the key in use while the others sat idle:
+    three questions in four spent about a minute asleep. Sets c["key"] to the key to use."""
+    keys = [k for k in (c.get("keys") or [c.get("key")]) if k and not ai.key_resting(k)] or [c.get("key")]
+    now = time.time()
+    waits = {k: _wait_for(k, need, now) for k in keys}
+    ready = [k for k in keys if waits[k] <= 0]
+    if ready:
+        c["key"] = c["key"] if c.get("key") in ready else ready[0]
         return
-    wait = min(reset + 0.5, PACE_LIMIT - PACE["waited"])
+    soonest = min(keys, key=waits.get)
+    wait = min(waits[soonest] + 0.3, PACE_LIMIT - PACE["waited"])
+    c["key"] = soonest
     if wait > 0:
+        _say(phase="waiting", seconds=round(wait))
         time.sleep(wait)
         PACE["waited"] += wait
-        PACE["remaining"] = None
+
+
+def _note_room(key, headers):
+    """Record what a key has left this minute, from the reply's x-ratelimit headers (Groq, OpenAI-style servers)."""
+    try:
+        left, limit = int(float(headers["x-ratelimit-remaining-tokens"])), int(float(headers["x-ratelimit-limit-tokens"]))
+    except (KeyError, TypeError, ValueError):
+        return
+    if key and limit > 0:
+        PACE["keys"][ai._key_id(key)] = (left, time.time(), limit)
+
+
+def _need(body):
+    """Roughly what a call counts against the minute: its prompt (about 4.5 characters a token in these JSON requests,
+    measured) and part of its reply allowance, which Groq counts up front."""
+    return int(len(json.dumps(body)) / 4.5 + body.get("max_tokens", 0) / 2)
+
+
+def _auth(c, headers):
+    """The headers with the key in use: it can change between calls (pacing) and within one (a limit)."""
+    if not c.get("key"):
+        return headers
+    return {**headers, **({"x-api-key": c["key"]} if c["provider"] == "anthropic" else {"authorization": f"Bearer {c['key']}"})}
 
 
 def _limit_message(r, wait, keys=1):
@@ -625,25 +776,20 @@ def _limit_message(r, wait, keys=1):
 
 
 def _post(c, url, headers, body, need=0):
-    """One call, paced to the provider's per-minute allowance, waiting once if it says it's rate-limited briefly."""
-    _pace(need)
+    """One call, paced to the provider's per-minute allowance (the key with room, see _pace), waiting once if it
+    says it's rate-limited briefly."""
+    _pace(c, need)
     attempt = 0
     while attempt < 2:
-        r = httpx.post(url, headers=headers, json=body, timeout=c["timeout"])
+        used = c.get("key")
+        r = httpx.post(url, headers=_auth(c, headers), json=body, timeout=c["timeout"])
+        _note_room(used, r.headers)
         if ai.is_limit(r.status_code, r.text) and len(c.get("keys") or []) > 1:
             # Another key gets past this key's limit at once: rest this one for as long as the provider said
             wait = _reset_seconds(r.headers.get("retry-after")) or _reset_seconds(r.headers.get("x-ratelimit-reset-tokens"))
             if ai.switch_key(c, wait if re.search(r"per day|\bTPD\b|\bRPD\b", r.text) or wait > 60 else max(wait, 60)):
-                headers = {**headers, **({"x-api-key": c["key"]} if c["provider"] == "anthropic" else {"authorization": f"Bearer {c['key']}"})}
-                PACE["remaining"] = None  # the new key has its own allowance
                 continue
         attempt += 1
-        if r.headers.get("x-ratelimit-remaining-tokens"):
-            try:
-                PACE["remaining"] = int(float(r.headers["x-ratelimit-remaining-tokens"]))
-                PACE["reset"] = _reset_seconds(r.headers.get("x-ratelimit-reset-tokens"))
-            except ValueError:
-                pass
         if r.status_code == 429 and re.search(r"per day|\bTPD\b|\bRPD\b", r.text):
             raise RuntimeError(_limit_message(r, _reset_seconds(r.headers.get("retry-after")), len(c.get("keys") or [])))  # a day's limit isn't waited out
         if r.status_code == 429 and attempt == 1:
@@ -651,6 +797,7 @@ def _post(c, url, headers, body, need=0):
             # used to fail at once although the allowance was back within the minute
             wait = _reset_seconds(r.headers.get("retry-after")) or _reset_seconds(r.headers.get("x-ratelimit-reset-tokens")) or 10.0
             if 0 < wait <= PACE_LIMIT - PACE["waited"]:
+                _say(phase="waiting", seconds=round(wait))
                 time.sleep(wait)
                 PACE["waited"] += wait
                 continue
@@ -676,7 +823,7 @@ def _call(c, messages, use_tools):
                 "tools": [{"name": n, "description": d, "input_schema": s} for n, (_, d, s) in _tools().items()]}
         if not use_tools:
             body["tool_choice"] = {"type": "none"}
-        j = _post(c, f"{c['base']}/messages", {"x-api-key": c["key"], "anthropic-version": "2023-06-01", "content-type": "application/json"}, body)
+        j = _post(c, f"{c['base']}/messages", {"x-api-key": c["key"], "anthropic-version": "2023-06-01", "content-type": "application/json"}, body, _need(body))
         blocks = j.get("content", [])
         messages.append({"role": "assistant", "content": blocks})
         text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
@@ -694,11 +841,12 @@ def _call(c, messages, use_tools):
         body["reasoning_effort"] = "none"
     elif c["thinking"] in ("low", "medium", "high"):
         body["reasoning_effort"] = c["thinking"]
-    if c["thinking"] not in ("off", "default") and not use_tools:
+    # Every round may be the one that answers (the first already has the question's data, so it often does): each gets
+    # the configured reasoning and room to answer. Tool rounds used to think "low" in 1,500 tokens, and answers written
+    # there contradicted themselves ("3.12% vs 4.57%? — actually..."). A round that only picks tools writes little anyway.
+    if c["thinking"] not in ("off", "default"):
         body["max_tokens"] = REPLY_TOKENS * 3  # room to think before answering, within a free plan's minute
-    if use_tools and c["thinking"] in ("on", "low", "medium", "high"):  # only where a thinking model is configured
-        body["reasoning_effort"] = "low"  # choosing look-ups needs little reasoning; the answer gets the configured effort
-    need = len(json.dumps(body)) // 3 + body["max_tokens"] // 4  # a rough count of what this round will use
+    need = _need(body)  # roughly what this round counts against the minute
     msg = ((_post(c, f"{c['base']}/chat/completions", headers, body, need).get("choices") or [{}])[0].get("message") or {})
     calls = msg.get("tool_calls") or []
     messages.append({"role": "assistant", "content": msg.get("content") or "", **({"tool_calls": calls} if calls else {})})
@@ -730,8 +878,48 @@ def _answer_from_findings(c, question, findings):
     return answer
 
 
-def ask(question):
-    """Answer a question with the tools. Returns the answer, the steps taken, and the check of its figures."""
+def _step(name, args, out, ok):
+    """A look-up as the page lists it; a web search with the pages behind the answer, to open and check."""
+    step = {"tool": name, "args": args, "ok": ok, **({} if ok else {"error": json.loads(out).get("error")})}
+    if name == "web_search" and ok:
+        found = json.loads(out)
+        step["links"] = ([{"title": x["title"], "url": x["url"], "site": x["site"], "date": x["date"]} for x in found["results"]]
+                         if isinstance(found.get("results"), list) else [{"title": _site(u), "url": u, "site": _site(u)} for u in found.get("links_seen", [])])
+        step["source"] = found.get("source")
+    return step
+
+
+# What a running question is doing, for the page to show as it happens: set by ask() for its own thread
+_PROGRESS = __import__("threading").local()
+
+
+def _say(**event):
+    fn = getattr(_PROGRESS, "fn", None)
+    if fn:
+        try:
+            fn(event)
+        except Exception:  # showing progress never stops the answer
+            pass
+
+
+RECENT = {}          # id -> a recent answer with the data behind it, so a follow-up can build on it
+RECENT_KEEP = 30     # answers kept for follow-ups (in memory: a restart starts a new conversation)
+FOLLOW_MAX = 3       # earlier questions and answers a follow-up carries
+FOLLOW_TEXT = 1500   # characters of each earlier answer resent with a follow-up
+
+
+def ask(question, follow=(), progress=None):
+    """Answer a question with the tools. Returns the answer, the steps taken, and the check of its figures.
+    `follow`: the ids of earlier answers this one follows up (newest last): their questions and answers go to the model
+    as the conversation so far, and their data counts for the figure check. `progress(event)` hears each step."""
+    _PROGRESS.fn = progress
+    try:
+        return _ask(question, follow)
+    finally:
+        _PROGRESS.fn = None
+
+
+def _ask(question, follow):
     q = (question or "").strip()[:MAX_QUESTION]
     if not q:
         raise ValueError("Ask a question.")
@@ -740,13 +928,30 @@ def ask(question):
         raise RuntimeError(c["problem"] or "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example).")
     import datetime as dt
     today = dt.date.today()
+    earlier = [RECENT[i] for i in follow if i in RECENT][-FOLLOW_MAX:]
     # The model doesn't know today's date, and without it read an earnings date eleven weeks away as "over a year"
     dated = f"(Today is {today:%A %d %B %Y}.)\n{q}"
-    messages, steps, facts, calls = [{"role": "user", "content": dated}], [], [q], 0
+    steps, facts, calls = [], [q], 0
     PACE["waited"] = 0.0
+    # What the question plainly needs, looked up at once and handed over with it: often the model can answer in its
+    # first call, and otherwise it asks only for what's still missing
+    plan = prefetch(q)
+    if plan:
+        found = []
+        for (name, args), (out, ok) in zip(plan, run_tools(plan)):
+            facts.append(out)
+            steps.append(_step(name, args, out, ok))
+            _say(step=steps[-1])
+            found.append(f"{name}({json.dumps(args, ensure_ascii=False) if args else ''}): {out}")
+        dated += "\n\nAlready looked up for this question (use these; look up anything else you need):\n" + "\n".join(found)
+    # A follow-up: the earlier questions and answers as the conversation so far. Their data isn't resent (it's long);
+    # the model looks again what it needs, and figures from it still count as checked
+    messages = [m for e in earlier for m in ({"role": "user", "content": e["question"]}, {"role": "assistant", "content": e["answer"][:FOLLOW_TEXT]})]
+    messages.append({"role": "user", "content": dated})
     text = ""
     for rnd in range(MAX_ROUNDS + 1):
         use_tools = rnd < MAX_ROUNDS
+        _say(phase="thinking", round=rnd + 1)
         try:
             text, tool_calls = _call(c, messages, use_tools)
         except RuntimeError as e:
@@ -767,21 +972,17 @@ def ask(question):
         if not tool_calls or not use_tools:
             break
         results = []
-        for cid, name, args in tool_calls:
-            out, ok = run_tool(name, args)
+        _say(looking=[{"tool": n, "args": a} for _, n, a in tool_calls])
+        for (cid, name, args), (out, ok) in zip(tool_calls, run_tools([(n, a) for _, n, a in tool_calls])):
             facts.append(out)
-            step = {"tool": name, "args": args, "ok": ok, **({} if ok else {"error": json.loads(out).get("error")})}
-            if name == "web_search" and ok:  # the pages behind the answer, to open and check
-                found = json.loads(out)
-                step["links"] = ([{"title": x["title"], "url": x["url"], "site": x["site"], "date": x["date"]} for x in found["results"]]
-                                 if isinstance(found.get("results"), list) else [{"title": _site(u), "url": u, "site": _site(u)} for u in found.get("links_seen", [])])
-                step["source"] = found.get("source")
-            steps.append(step)
+            steps.append(_step(name, args, out, ok))
+            _say(step=steps[-1])
             results.append((cid, out))
         _add_results(c, messages, results)
     if not text:
         raise RuntimeError("The model returned no answer. Try asking again, perhaps more specifically.")
-    known = "\n".join(facts)
+    _say(phase="checking")
+    known = "\n".join(facts + [f for e in earlier for f in e["facts"]])
     checked = lambda t: {**ai.check_figures(t, known), "quotes": ai.check_quotes(t, known)}
     problems = lambda ch: len(ch["unmatched"]) + len(ch["quotes"])
     check, revised = checked(text), None
@@ -789,8 +990,9 @@ def ask(question):
         # Figures neither in the data nor worked out from it, and quotes the sources don't have word for word: the
         # model gets one chance to correct or drop them. The revision is kept only if it really has fewer; what's
         # left is marked in the answer.
+        _say(phase="revising", problems=problems(check))
         try:
-            draft = _revise(c, q, facts[1:], text, check["unmatched"], check["quotes"])
+            draft = _revise(c, f"(Today is {today:%A %d %B %Y}.)\n{q}", facts[1:] + [f for e in earlier for f in e["facts"]], text, check["unmatched"], check["quotes"], check.get("direction") or ())
             calls += 1
             again = checked(draft) if draft else None
             if again and problems(again) < problems(check):
@@ -798,15 +1000,24 @@ def ask(question):
                 text, check = draft, again
         except (RuntimeError, httpx.HTTPError):
             pass  # the first answer stands, with its problems marked
-    return {"answer": text, "steps": steps, "calls": calls, "by": f"{c['model']} via {c['server']}", "waited": round(PACE["waited"]),
-            "check": check, "revised": revised}
+    rid = __import__("uuid").uuid4().hex[:12]
+    RECENT[rid] = {"question": q, "answer": text, "facts": facts[1:]}
+    while len(RECENT) > RECENT_KEEP:
+        RECENT.pop(next(iter(RECENT)))
+    return {"id": rid, "answer": text, "steps": steps, "calls": calls, "by": f"{c['model']} via {c['server']}", "waited": round(PACE["waited"]),
+            "check": check, "revised": revised, "followed": len(earlier)}
 
 
-def _revise(c, question, findings, draft, figures, quotes=()):
+def _revise(c, question, findings, draft, figures, quotes=(), direction=()):
     """The draft with the listed figures corrected from the data or removed, and misquotes quoted exactly or taken out
     of quotation marks, from a fresh conversation."""
     text = "\n".join(findings)[:FINDINGS_LIMIT]
     wrong = []
+    turned = {d["figure"] for d in direction}
+    figures = [f for f in figures if f not in turned]
+    if direction:
+        wrong.append("These figures go the wrong way: " + "; ".join(f"{d['figure']} is described as going {d['says']}, but in the data it's {d['data']}" for d in direction)
+                     + ". Describe each the way the data's sign says.")
     if figures:
         wrong.append(f"These figures in the draft aren't in the data and can't be worked out from figures in it: {', '.join(figures)}. "
                      "Replace each with the right figure from the data, or remove it (with any claim that rests on it).")

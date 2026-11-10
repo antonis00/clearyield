@@ -447,6 +447,47 @@ const SLOW = 150000;
     box.innerHTML = markFigures("<p>Zacks wrote “Novo shares jumped on strong sales” today.</p>", { unmatched: [], derived: [], quotes: ["Novo shares jumped on strong sales"] });
     return [...box.querySelectorAll("mark.fig-bad")].map((m) => `${m.textContent}|${m.title}`); });
   expect("ask: misquotes are marked", quoted_.join() === "Novo shares jumped on strong sales|Not in the sources word for word", JSON.stringify(quoted_));
+  // A question runs in the background: the page shows each step and what it's doing as it happens, then the answer
+  // with its tickers linked to Research; a follow-up carries the earlier answer, "New conversation" starts afresh.
+  // The AI and the job are stood in for (demo mode has no AI).
+  {
+    const sent = [];
+    let polls = 0;
+    const step = { tool: "get_stock", args: { ticker: "NVDA" }, ok: true };
+    const answer = { id: "a1", answer: "NVDA fell 6.6% on the latest day.", steps: [step], calls: 2, waited: 3, by: "m via Groq", check: { checked: 1, unmatched: [], derived: [], quotes: [] }, revised: null, followed: 0 };
+    const startAsk = (r) => { sent.push(r.request().postDataJSON()); r.fulfill({ contentType: "application/json", body: JSON.stringify({ id: `j${sent.length}` }) }); };
+    const jobAsk = (r) => {
+      polls += 1;
+      const events = [{ step, t: 0.4 }, { phase: "thinking", round: 1, t: 0.5 }, ...(polls > 1 ? [{ phase: "waiting", seconds: 3, t: 1 }] : [])];
+      const done = polls > 3;
+      r.fulfill({ contentType: "application/json", body: JSON.stringify({ status: done ? "done" : "running", events, elapsed: polls, ...(done ? { result: { ...answer, id: `a${sent.length}`, followed: sent.length - 1 } } : {}) }) });
+    };
+    await p.route("**/api/ask/start", startAsk); await p.route("**/api/ask/job/*", jobAsk);
+    await p.evaluate(() => { state.meta.aiInfo = { ...(state.meta.aiInfo || {}), on: true }; });
+    await p.fill("#askInput", "Why did Nvidia move today?"); await p.press("#askInput", "Enter");
+    await p.waitForFunction(() => /Waiting 3 s for the AI/.test(document.querySelector(".ask-live .ask-now-text")?.textContent || ""), null, { timeout: 10000 });
+    const live = await p.evaluate(() => ({ steps: [...document.querySelectorAll(".ask-live-steps li")].map((li) => li.textContent), now: document.querySelector(".ask-now-text").textContent }));
+    expect("ask: while it works, the page shows each step and what it's waiting for", live.steps.join() === "Looked up NVDA" && /Waiting 3 s/.test(live.now), JSON.stringify(live));
+    await p.waitForSelector(".ask-thread .ask-answer", { timeout: 10000 });
+    const done1 = await p.evaluate(() => ({ live: !!document.querySelector(".ask-live"), link: document.querySelector(".ask-answer .ask-stock")?.dataset.stock, how: document.querySelector(".ask-answer .ask-steps summary").textContent,
+      newBtn: !document.querySelector("#askNew").classList.contains("hidden") }));
+    expect("ask: the answer replaces the progress, its tickers link to Research, and says how long it took", !done1.live && done1.link === "NVDA" && /1 look-up, 2 model calls, \d+ s, 3 s of it waiting/.test(done1.how) && done1.newBtn, JSON.stringify(done1));
+    polls = 0;
+    await p.fill("#askInput", "And its dividend?"); await p.press("#askInput", "Enter");
+    await p.waitForFunction(() => document.querySelectorAll(".ask-thread.current .ask-answer").length === 2, null, { timeout: 10000 });
+    const follow = await p.evaluate(() => ({ pill: document.querySelectorAll(".ask-thread.current .ask-answer")[1].querySelector(".ask-q .pill")?.textContent, threads: document.querySelectorAll(".ask-thread").length }));
+    expect("ask: a follow-up carries the earlier answer and joins its conversation", JSON.stringify(sent[1].follow) === '["a1"]' && follow.pill === "Follow-up" && follow.threads === 1, JSON.stringify({ follow, sent }));
+    await p.click("#askNew"); polls = 0;
+    await p.fill("#askInput", "How are markets?"); await p.press("#askInput", "Enter");
+    await p.waitForFunction(() => document.querySelectorAll(".ask-thread").length === 2 && document.querySelector(".ask-thread.current .ask-answer"), null, { timeout: 10000 });
+    expect("ask: New conversation starts afresh, on top", JSON.stringify(sent[2].follow) === "[]" && (await p.evaluate(() => document.querySelector("#askAnswers").firstElementChild.classList.contains("current"))), JSON.stringify(sent[2]));
+    // A ticker link opens the stock
+    await p.click(".ask-thread:not(.current) .ask-answer .ask-stock");
+    await p.waitForFunction(() => location.hash === "#research/NVDA", null, { timeout: SLOW });
+    expect("ask: a ticker in an answer opens it in Research", true);
+    await p.unroute("**/api/ask/start", startAsk); await p.unroute("**/api/ask/job/*", jobAsk);
+    await nav("ask");
+  }
   // A web search step lists its pages as links that open in a new tab; a link that isn't http(s) is dropped
   const links_ = await p.evaluate(() => { const box = document.createElement("div");
     box.innerHTML = webLinks({ tool: "web_search", ok: true, links: [{ title: "Novo cuts its outlook", url: "https://www.reuters.com/a", site: "reuters.com", date: "2026-11-05" }, { title: "x", url: "javascript:alert(1)" }] }) +

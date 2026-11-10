@@ -757,7 +757,12 @@ function briefFooter(r) {
   const quotes = c.quotes?.length ? ` ${c.quotes.length === 1 ? "A quotation isn't" : `${c.quotes.length} quotations aren't`} in the sources word for word (marked).` : "";
   if (!c.unmatched.length && !quotes) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${how}${fixed}${own} ${by}</p>`;
   if (!c.unmatched.length) return `<p class="brief-check warn">All ${facts} figures match the data.${quotes}${how}${fixed}${own} ${by}</p>`;
-  return `<p class="brief-check warn">${c.unmatched.length} of ${facts} figures aren't in the data and can't be worked out from it (marked): <b>${c.unmatched.map(esc).join(", ")}</b>. Check them before relying on them.${quotes}${how}${fixed}${own} ${by}</p>`;
+  // A figure that's in the data but described going the wrong way ("rose 6.6%" when it fell) is told apart
+  const turned = (c.direction || []).filter((d) => c.unmatched.includes(d.figure));
+  const missing = c.unmatched.filter((f) => !turned.some((d) => d.figure === f));
+  const wrongWay = turned.length ? ` ${turned.length === 1 ? "A figure goes" : `${turned.length} figures go`} the wrong way (marked): ${turned.map((d) => `<b>${esc(d.figure)}</b> is said to go ${d.says}, but the data has it ${d.data}`).join("; ")}.` : "";
+  const notIn = missing.length ? `${missing.length} of ${facts} figures aren't in the data and can't be worked out from it (marked): <b>${missing.map(esc).join(", ")}</b>.` : "";
+  return `<p class="brief-check warn">${notIn}${wrongWay} Check ${c.unmatched.length === 1 ? "it" : "them"} before relying on ${c.unmatched.length === 1 ? "it" : "them"}.${quotes}${how}${fixed}${own} ${by}</p>`;
 }
 // Marks figures inside rendered text: unsupported ones highlighted, worked-out ones underlined with how. A figure is
 // matched however the model wrote its separators (a narrow space or a comma between thousands, a typographic minus).
@@ -929,22 +934,92 @@ function renderAskSetup() {
   const a = state.meta?.aiInfo;
   if (!a?.on) $("#askStatus").textContent = a?.problem ? `AI isn't set up: ${a.problem}` : "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example), then restart the app.";
 }
+// A step as the page lists it, with its pages for a web search
+const askStepLi = (s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}${webLinks(s)}</li>`;
+// What a running question is doing now, from its latest event
+function askPhase(ev) {
+  if (!ev) return "Starting…";
+  if (ev.phase === "waiting") return `Waiting ${ev.seconds} s for the AI's per-minute allowance (free plan)…`;
+  if (ev.phase === "checking") return "Checking every figure against the data…";
+  if (ev.phase === "revising") return `Correcting ${ev.problems === 1 ? "a figure" : `${ev.problems} figures`} that the data doesn't have…`;
+  if (ev.looking) return `Looking up: ${ev.looking.map((s) => esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {})).replace(/^Looked up /, "")).join(", ")}…`;
+  if (ev.phase === "thinking") return ev.round === 1 ? "Reading the data and working out the answer…" : "Working out the answer with what it found…";
+  return "Looking things up…";
+}
+// Tickers the answer's look-ups used become links to Research (a middle click opens a new tab), outside links and code
+function linkTickers(root, steps) {
+  const tickers = [...new Set(steps.flatMap((s) => [s.args?.ticker, ...(s.args?.tickers || [])]).filter(Boolean).map((t) => String(t).toUpperCase()))];
+  if (!tickers.length) return;
+  const re = new RegExp(`(?<![\\w.^-])(${tickers.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\w-])`, "g");
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => n.parentElement.closest("a, code, pre, mark, .fig, .ask-stock") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT });
+  const nodes = []; while (walk.nextNode()) nodes.push(walk.currentNode);
+  for (const n of nodes) {
+    if (!re.test(n.data)) continue;
+    re.lastIndex = 0;
+    const span = document.createElement("span");
+    span.innerHTML = esc(n.data).replace(re, (t) => `<span class="ask-stock" role="link" tabindex="0" data-stock="${t}" title="Open ${t} in Research">${t}</span>`);
+    n.replaceWith(...span.childNodes);
+  }
+}
+// The conversation: follow-ups carry the earlier answers (by their ids, kept on the server with their data); "New
+// conversation" starts afresh. Answers of one conversation stack in order, the newest conversation on top.
+state.askThread = [];
+function askCard(q, r) {
+  const card = document.createElement("div"); card.className = "card ask-answer";
+  const secs = r.seconds != null ? `${r.seconds} s, ` : "";
+  card.innerHTML = `<div class="ask-q">${r.followed ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><div class="brief">${markFigures(DOMPurify.sanitize(marked.parse(r.answer)), r.check)}</div>
+    <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}, ${secs}${r.waited ? `${r.waited} s of it waiting for the AI's allowance` : "no waiting"}</summary><ol>${r.steps.map(askStepLi).join("") || "<li>Answered without looking anything up.</li>"}</ol></details>
+    ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
+  linkTickers($(".brief", card), r.steps);
+  return card;
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches?.(".ask-stock")) openStock(e.target.dataset.stock); });
+function askThreadEl() {
+  let t = $("#askAnswers .ask-thread.current");
+  if (!t) { t = document.createElement("div"); t.className = "ask-thread current"; $("#askAnswers").prepend(t); }
+  return t;
+}
+function newAskConversation() {
+  state.askThread = [];
+  $$("#askAnswers .ask-thread.current").forEach((t) => t.classList.remove("current"));
+  $("#askNew").classList.add("hidden"); $("#askInput").placeholder = ASK_PLACEHOLDER; $("#askInput").focus();
+}
+const ASK_PLACEHOLDER = "e.g. Which European stock would add the most diversification to my portfolio without much risk?";
 async function runAsk() {
   const q = $("#askInput").value.trim(), btn = $("#askGo"), status = $("#askStatus");
   if (!q) return toast("Type a question first.");
   if (!state.meta?.aiInfo?.on) return renderAskSetup();
-  btn.disabled = true; status.innerHTML = `<span class="spinner"></span>Investigating… the AI looks things up first, which can take up to a minute.`;
+  btn.disabled = true; status.textContent = "";
+  const thread = askThreadEl(), live = document.createElement("div");
+  live.className = "card ask-live";
+  live.innerHTML = `<div class="ask-q">${state.askThread.length ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><ol class="ask-live-steps"></ol><div class="ask-now"><span class="spinner"></span><span class="ask-now-text">Starting…</span><span class="muted sm ask-clock"></span></div>`;
+  thread.append(live); $("#askInput").value = "";
+  live.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const show = (j) => {
+    const evs = j.events || [], done = evs.filter((e) => e.step), list = $(".ask-live-steps", live);
+    // only the new steps are added, so each fades in once (redrawing the list restarted it and kept them all faint)
+    done.slice(list.children.length).forEach((e) => list.insertAdjacentHTML("beforeend", askStepLi(e.step)));
+    $(".ask-now-text", live).innerHTML = askPhase([...evs].reverse().find((e) => !e.step));
+    $(".ask-clock", live).textContent = `${Math.round(j.elapsed || 0)} s`;
+  };
   try {
-    const r = await api("/api/ask", { method: "POST", body: { question: q } });
-    const steps = r.steps.map((s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}${webLinks(s)}</li>`).join("");
-    const card = document.createElement("div"); card.className = "card ask-answer";
-    card.innerHTML = `<div class="ask-q">${esc(q)}</div><div class="brief">${markFigures(DOMPurify.sanitize(marked.parse(r.answer)), r.check)}</div>
-      <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}</summary><ol>${steps || "<li>Answered without looking anything up.</li>"}</ol></details>
-      ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
-    $("#askAnswers").prepend(card); status.textContent = ""; $("#askInput").value = "";
-  } catch (e) { status.textContent = e.message; } finally { btn.disabled = false; }
+    const { id } = await api("/api/ask/start", { method: "POST", body: { question: q, follow: state.askThread } });
+    let j;
+    for (;;) {
+      await new Promise((res) => setTimeout(res, 500));
+      j = await api(`/api/ask/job/${id}`);
+      show(j);
+      if (j.status !== "running") break;
+    }
+    if (j.status === "error") throw new Error(j.error);
+    const r = { ...j.result, seconds: Math.round(j.elapsed) };
+    live.replaceWith(askCard(q, r));
+    state.askThread = [...state.askThread, r.id].slice(-3);
+    $("#askNew").classList.remove("hidden"); $("#askInput").placeholder = "Ask a follow-up, or start a new conversation";
+  } catch (e) { live.remove(); if (!thread.children.length) thread.remove(); status.textContent = e.message; $("#askInput").value = q; } finally { btn.disabled = false; }
 }
 $("#askGo").onclick = runAsk;
+$("#askNew").onclick = newAskConversation;
 $("#askInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); runAsk(); } };
 
 /* ---------------------------------------------------------------- opportunities */
