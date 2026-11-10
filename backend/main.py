@@ -273,7 +273,7 @@ def meta():
     settings = db.get_settings()
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
                "settings": settings, "markets": [*insights.followed(settings), "ETFs", "Crypto"], "stockMarkets": insights.followed(settings), "regions": REGIONS,
-               "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "alertKinds": insights.ALERT_KINDS,
+               "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "currencies": data.CURRENCIES, "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
 
@@ -490,20 +490,19 @@ def compare(tickers: str, period: str = "1y"):
 
 
 # ---------------------------------------------------------------- screener
-FX_CODES = ("EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "CNY", "HKD", "INR", "QAR", "SAR", "AED", "KWD", "BHD", "OMR")
 
 
 @app.get("/api/fx")
 def fx(src: str = "EUR", dst: str = "USD"):
     """Today's rate between two currencies, for the converter: units of `dst` per one `src`."""
-    src, dst = src.upper(), dst.upper()
-    if src not in FX_CODES or dst not in FX_CODES:
-        raise HTTPException(400, f"Choose currencies from: {', '.join(FX_CODES)}.")
+    src, dst = src.strip().upper(), dst.strip().upper()
+    if src not in data.CURRENCIES or dst not in data.CURRENCIES:
+        raise HTTPException(400, "Choose both currencies from the list.")
     try:
         rate = data.fx_rate(src, dst)
     except data.DataError as e:
         raise HTTPException(404, str(e))
-    return ok({"from": src, "to": dst, "rate": rate, "stale": data.is_stale_fx(src) or data.is_stale_fx(dst), "codes": FX_CODES})
+    return ok({"from": src, "to": dst, "rate": rate, "stale": data.is_stale_fx(src) or data.is_stale_fx(dst)})
 
 
 @app.get("/api/opportunities")

@@ -3405,6 +3405,30 @@ def test_portfolio_backtest_matches_independent_sums():
     _reset()
 
 
+def test_digest_news_and_every_currency():
+    from backend import data, insights
+    _reset()
+    with TestClient(app) as c:
+        # Holding only a fund and watching only a coin: the coin's own news counts; a fund's never does
+        c.post("/api/transactions", json={"ticker": "VWCE.DE", "kind": "buy", "date": "2025-01-06", "shares": 10, "price": 100})
+        c.post("/api/watchlist", json={"ticker": "BTC-USD"})
+        news = [i for i in c.get("/api/digest").json()["items"] if i.get("kind") == "news"]
+        assert news and all(i["ticker"] == "BTC-USD" and not i.get("market") for i in news), news
+        # With nothing of yours in the news, the market's headlines take its place, marked as such
+        c.delete("/api/watchlist/BTC-USD")
+        news = [i for i in c.get("/api/digest").json()["items"] if i.get("kind") == "news"]
+        assert news and all(i.get("market") and i["ticker"] is None and i["text"].startswith("Markets: ") for i in news), news
+        assert len(news) <= insights.MARKET_NEWS_COUNT
+        # The converter: every currency in use, and an unknown code refused
+        meta = c.get("/api/meta").json()
+        assert len(meta["currencies"]) >= 150 and meta["currencies"]["JPY"] == "Japanese yen" and meta["currencies"] == data.CURRENCIES
+        for src, dst in (("NGN", "EUR"), ("EUR", "VND"), ("XOF", "BRL")):
+            r = c.get(f"/api/fx?src={src}&dst={dst}")
+            assert r.status_code == 200 and r.json()["rate"] > 0, (src, dst)
+        assert c.get("/api/fx?src=ZZZ&dst=EUR").status_code == 400
+    _reset()
+
+
 def test_regions_you_follow_decide_what_is_scanned():
     from backend import insights
     from backend.universe import REGIONS, UNIVERSE, country_of

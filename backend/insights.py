@@ -741,29 +741,43 @@ def portfolio_points(settings):
 HEADLINE_DAYS = 3
 
 
+MARKET_NEWS = "^GSPC"  # whose Yahoo feed is the general market news shown when none of yours has any
+MARKET_NEWS_COUNT = 6
+
+
 def recent_headlines(rows, tickers, per_ticker=2):
-    """The latest headlines that name a stock you hold or watch, from the past few days, with links. Funds are left
-    out: their feed is general market news, and matching "Vanguard" would bring in any story about the firm."""
+    """The latest headlines that name a stock or coin you hold or watch, from the past few days, with links. Funds are
+    left out: their feed is general market news, and matching "Vanguard" would bring in any story about the firm.
+    When none of yours has any (someone holding only funds, say), the day's market headlines take their place,
+    marked as such, so the News tab isn't empty."""
     from .ai import relevant_headlines
     since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=HEADLINE_DAYS)
-    items = []
-    for t in tickers:
-        r = rows.get(t)
-        if not r or r.get("assetClass") != "Stocks":
-            continue
-        fresh = []
-        for n in relevant_headlines(data.news(t), t, r.get("name")):
+
+    def fresh_of(news):
+        out = []
+        for n in news:
             try:
                 when = pd.Timestamp(n.get("time"))
                 when = when.tz_localize("UTC") if when.tzinfo is None else when
             except (TypeError, ValueError):
                 continue
             if when >= since:
-                fresh.append((when, n))
-        for when, n in sorted(fresh, key=lambda x: x[0], reverse=True)[:per_ticker]:
-            url = n.get("url") or ""
-            items.append({"tone": 0, "ticker": t, "priority": 7, "kind": "news", "text": f"{t}: {n['title']}" + (f" ({n['publisher']})" if n.get("publisher") else ""),
-                          "url": url if url.startswith(("https://", "http://")) else None, "time": when.isoformat()})
+                out.append((when, n))
+        return sorted(out, key=lambda x: x[0], reverse=True)
+
+    def item(t, when, n, text):
+        url = n.get("url") or ""
+        return {"tone": 0, "ticker": t, "priority": 7, "kind": "news", "text": text + (f" ({n['publisher']})" if n.get("publisher") else ""),
+                "url": url if url.startswith(("https://", "http://")) else None, "time": when.isoformat()}
+    items = []
+    for t in tickers:
+        r = rows.get(t)
+        if not r or r.get("assetClass") not in ("Stocks", "Crypto"):
+            continue
+        for when, n in fresh_of(relevant_headlines(data.news(t), t, r.get("name")))[:per_ticker]:
+            items.append(item(t, when, n, f"{t}: {n['title']}"))
+    if not items:
+        items = [{**item(None, when, n, f"Markets: {n['title']}"), "market": True} for when, n in fresh_of(data.news(MARKET_NEWS))[:MARKET_NEWS_COUNT]]
     return items
 
 

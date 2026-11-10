@@ -39,6 +39,17 @@ const SLOW = 150000;
   const meta = await p.evaluate(async () => (await fetch("/api/meta")).json());
   expect(`mode is ${MODE}`, meta.demo === (MODE === "demo"), `base ${meta.settings.base_currency}, AI ${meta.ai}`);
 
+  // ---- The frame: Ask StockAI with the app's mark, just above Settings; the quote as an icon; a full-width search
+  const frame = await p.evaluate(() => {
+    const links = [...document.querySelectorAll("nav a")], ask = document.querySelector('nav a[data-view="ask"]');
+    const top = document.querySelector("header.top").getBoundingClientRect().width, box = document.querySelector(".searchbox").getBoundingClientRect().width;
+    return { ask: ask.innerText.trim(), icon: !!ask.querySelector("img.nav-ico"), next: links[links.indexOf(ask) + 1]?.dataset.view,
+             quote: document.querySelector("#modeBadge .st.quote")?.dataset.tip || "", oldQuote: !!document.querySelector("header .disclaimer"), share: box / top };
+  });
+  expect("frame: Ask StockAI with its mark, just above Settings", frame.ask === "Ask StockAI" && frame.icon && frame.next === "settings", JSON.stringify(frame));
+  expect("frame: the quote is an icon beside the others, shown on hover", /Plato/.test(frame.quote) && !frame.oldQuote, frame.quote);
+  expect("frame: the search box takes the top bar's width", frame.share > 0.9, frame.share.toFixed(2));
+
   // ---- Dashboard
   await nav("dashboard");
   await p.waitForFunction(() => document.querySelectorAll("#macroStrip .mcard").length > 5, null, { timeout: SLOW });
@@ -330,7 +341,7 @@ const SLOW = 150000;
 
   // ---- Ask: the AI icon in the sidebar opens it; with AI off (as in every test run), the page says how to set it up
   await p.click("#modeBadge .st.ai"); await p.waitForTimeout(300);
-  expect("ask: the sidebar's AI icon opens Ask AI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
+  expect("ask: the sidebar's AI icon opens Ask StockAI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
   // The Yahoo mark opens Yahoo Finance in a new tab: the front page here, the stock's page on Research (not loaded in the test)
   // Records what a click asks the browser to open, without opening Yahoo
   const yahooTab = async () => {
@@ -510,6 +521,13 @@ const SLOW = 150000;
   await p.click("#cvSwap"); await p.waitForTimeout(600);
   const conv2 = await p.evaluate(() => ({ from: document.querySelector("#cvFrom").value, to: document.querySelector("#cvTo").value, text: document.querySelector("#cvOut").innerText }));
   expect("converter: opens from the currency icon, converts and swaps", /250/.test(conv1.text) && conv1.from !== conv1.to && conv2.from === conv1.to && conv2.to === conv1.from && /250/.test(conv2.text), conv1.text.split("\n")[0]);
+  // Every currency in use, and each box searches as you type: "yen" finds the Japanese yen
+  expect("converter: every currency is offered", (await p.locator("#cvList option").count()) >= 150, await p.locator("#cvList option").count());
+  await p.click("#cvTo"); await p.locator("#cvTo").pressSequentially("yen"); await p.press("#cvTo", "Enter");
+  await p.waitForFunction(() => /JPY/.test(document.querySelector("#cvTo").value) && /=/.test(document.querySelector("#cvOut").innerText), null, { timeout: SLOW }).catch(() => {});
+  expect("converter: typing a name finds the currency", (await p.inputValue("#cvTo")) === "JPY — Japanese yen" && /=/.test(await txt("#cvOut")), await p.inputValue("#cvTo"));
+  await p.click("#cvFrom"); await p.locator("#cvFrom").pressSequentially("zzzz"); await p.press("#cvFrom", "Enter"); await p.waitForTimeout(200);
+  expect("converter: an unknown currency asks for one from the list", /Choose the currency to convert from: type part of its name/.test(await txt("#cvOut")), await txt("#cvOut"));
   await p.click("#modal [data-close]");
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#btnBackup")]);
   expect("settings: backup downloads", /stockpilot-backup/.test(dl.suggestedFilename()), dl.suggestedFilename());
