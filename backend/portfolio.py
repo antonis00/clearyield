@@ -215,7 +215,7 @@ def summary(settings, extra=None):
             "price": price, "currency": cur, "fx": fx, "value": value, "cost": cost, "pnl": value - cost,
             "pnlPct": (value / cost - 1) if cost else None, "dayPnl": p["shares"] * (price - prev) * fx,
             "dayPct": price / prev - 1 if prev else None, "sector": inf.get("sector") or inf.get("assetClass"),
-            "region": inf.get("region"), "assetClass": inf.get("assetClass"),
+            "region": inf.get("region"), "country": inf.get("country"), "assetClass": inf.get("assetClass"),
             "dividendYield": inf.get("dividendYield") or 0, "income": _income(t, p["shares"], price, fx, inf), "lots": p["lots"],
             "bucket": bucket_of(t), "bucketDefault": default_bucket(t),
             "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),

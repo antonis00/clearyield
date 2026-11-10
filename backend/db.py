@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from .universe import DEFAULT_TILES
+from .universe import DEFAULT_TILES, REGIONS
 
 DB_PATH = Path(os.getenv("STOCKPILOT_DB", Path(__file__).resolve().parent.parent / "data" / "stockpilot.db"))
 _lock = threading.Lock()
@@ -50,6 +50,7 @@ DEFAULT_SETTINGS = {
     "dashboard_tiles": DEFAULT_TILES,
     "custom_tiles": [],  # [{"ticker", "name"}], each checked for price history when added
     "core_target": 80,
+    "regions": list(REGIONS),  # the regions you follow: only their stocks are downloaded, screened and ranked against
 }
 
 
@@ -306,6 +307,13 @@ def _text(pattern, what):
     return check
 
 
+def _regions(v):
+    """At least one of the five regions, in the usual order."""
+    if not isinstance(v, list) or not v or any(r not in REGIONS for r in v):
+        raise ValueError(f"Follow at least one region, from: {', '.join(REGIONS)}.")
+    return [r for r in REGIONS if r in v]
+
+
 SETTING_CHECKS = {
     "base_currency": _text(_CURRENCY, "The base currency must be a three-letter code such as USD."),
     "risk_free_rate": lambda v: _num(v, -0.05, 0.3, "The risk-free rate"),
@@ -315,6 +323,7 @@ SETTING_CHECKS = {
     "dashboard_tiles": lambda v: _symbols(v, "Dashboard tiles"),
     "custom_tiles": _custom_tiles,
     "core_target": lambda v: _num(v, 0, 100, "The core share"),
+    "regions": _regions,
 }
 
 

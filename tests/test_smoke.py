@@ -53,9 +53,9 @@ def test_all():
         assert len(cmp_["series"]) == 3 and cmp_["correlation"]
 
         s = c.post("/api/screener", json={"markets": ["US", "Gulf"], "filters": {"min_score": 0}}).json()
-        assert s["scanned"] > 40 and s["rows"]
+        assert s["scanned"] > 40 and s["rows"] and {r["country"] for r in s["rows"]} <= {"United States", "Qatar", "Saudi Arabia", "UAE", "Kuwait"}
         s2 = c.post("/api/screener", json={"query": "cheap profitable dividend stocks in the gulf"}).json()
-        assert "Gulf" in s2["filters"]["markets"]
+        assert {"Qatar", "Saudi Arabia", "UAE", "Kuwait"} <= set(s2["filters"]["countries"])
 
         assert c.post("/api/watchlist", json={"ticker": "nvda"}).status_code == 200
         assert c.get("/api/watchlist").json()[0]["ticker"] == "NVDA"
@@ -146,9 +146,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v9:EMPTY.X") is None
-        db.cache_set("info:v9:OLD.X", {"trailingPE": 12.0})
-        db.cache_expire("info:v9:OLD.X")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v10:EMPTY.X") is None
+        db.cache_set("info:v10:OLD.X", {"trailingPE": 12.0})
+        db.cache_expire("info:v10:OLD.X")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -394,7 +394,7 @@ def test_screener_ranks_each_asset_class_separately():
     from backend.main import app
     _reset()
     with TestClient(app) as c:
-        rows = c.post("/api/screener", json={"markets": ["US", "ETFs", "Crypto"], "filters": {"sort": "composite"}}).json()["rows"]
+        rows = c.post("/api/screener", json={"markets": ["North America", "ETFs", "Crypto"], "filters": {"sort": "composite"}}).json()["rows"]
         classes = [r["assetClass"] for r in rows]
         assert classes == sorted(classes, key=["Stocks", "ETFs", "Crypto"].index), "asset classes should not be mixed"
         for cls in ("Stocks", "ETFs", "Crypto"):
@@ -909,13 +909,13 @@ def test_plain_language_parser_reads_what_was_written():
     assert "markets" not in p("generous dividend payers")
     assert "markets" not in p("famous companies")
     assert "markets" not in p("netflix style growth")
-    assert "markets" not in p("show us cheap stocks")
-    # Real mentions still do
-    assert p("cheap US stocks")["markets"] == ["US"]
-    assert p("american value")["markets"] == ["US"]
-    assert p("etfs from the usa")["markets"] == ["US", "ETFs"]
+    assert "markets" not in p("show us cheap stocks") and "countries" not in p("show us cheap stocks")
+    # Real mentions still do: a country is a country, a region a region
+    assert p("cheap US stocks")["countries"] == ["United States"] and "markets" not in p("cheap US stocks")
+    assert p("american value")["countries"] == ["United States"]
+    assert p("etfs from the usa")["markets"] == ["ETFs"] and p("etfs from the usa")["countries"] == ["United States"]
     assert p("european banks")["markets"] == ["Europe"]
-    assert p("best stocks in Qatar")["markets"] == ["Gulf"]
+    assert p("best stocks in Qatar")["countries"] == ["Qatar"]
     # Ways of writing P/E
     for q in ("stocks with PE ratio under 15", "stocks with a p/e of 15", "P/E below 15", "under 15 pe", "pe < 15"):
         assert p(q).get("max_pe") == 15.0, q
@@ -931,7 +931,7 @@ def test_plain_language_parser_reads_what_was_written():
     assert "min_roe" not in p("not profitable")
     # Sectors
     assert p("tech stocks") == {"sector": "Technology"}
-    assert p("gulf banks") == {"markets": ["Gulf"], "sector": "Financial Services", "industry": "Banks"}
+    assert p("gulf banks") == {"countries": ["Qatar", "Saudi Arabia", "UAE", "Kuwait", "Bahrain", "Oman"], "sector": "Financial Services", "industry": "Banks"}
     # Anything else is reported rather than dropped without a word
     assert p("large cap stocks")["ignored"] == ["large", "cap"]
     assert p("low risk")["max_vol"] == 0.25
@@ -1099,13 +1099,14 @@ def test_etfs_are_not_called_a_concentrated_sector():
 def test_other_exchanges_are_not_treated_as_us_dollars():
     from backend import data, db, portfolio
     from backend.universe import currency_guess, region_of
-    for t, cur, region in (("7203.T", "JPY", "Asia-Pacific"), ("0700.HK", "HKD", "Asia-Pacific"), ("SHOP.TO", "CAD", "Canada"), ("BHP.AX", "AUD", "Asia-Pacific"),
-                           ("RELIANCE.NS", "INR", "Asia-Pacific"), ("VOW3.F", "EUR", "Europe"), ("AAPL", "USD", "US"), ("BRK-B", "USD", "US"),
-                           ("PETR4.SA", "BRL", "Latin America"), ("SQM-B.SN", "CLP", "Latin America"), ("NPN.JO", "ZAc", "Africa"),
-                           ("BBCA.JK", "IDR", "Asia-Pacific"), ("MELI", "USD", "Latin America"), ("NBK.KW", "KWF", "Gulf")):
+    for t, cur, region in (("7203.T", "JPY", "Asia-Pacific"), ("0700.HK", "HKD", "Asia-Pacific"), ("SHOP.TO", "CAD", "North America"), ("BHP.AX", "AUD", "Asia-Pacific"),
+                           ("RELIANCE.NS", "INR", "Asia-Pacific"), ("VOW3.F", "EUR", "Europe"), ("AAPL", "USD", "North America"), ("BRK-B", "USD", "North America"),
+                           ("PETR4.SA", "BRL", "Latin America"), ("SQM-B.SN", "CLP", "Latin America"), ("NPN.JO", "ZAc", "Middle East & Africa"),
+                           ("BBCA.JK", "IDR", "Asia-Pacific"), ("MELI", "USD", "Latin America"), ("NBK.KW", "KWF", "Middle East & Africa"),
+                           ("TEVA.TA", "ILA", "Middle East & Africa"), ("THYAO.IS", "TRY", "Middle East & Africa")):
         assert currency_guess(t) == cur and region_of(t) == region, t
     assert currency_guess("ABC.ZZ") is None and region_of("ABC.ZZ") == "Other"
-    assert region_of("^GSPC") == "US" and region_of("EURUSD=X") == "US"
+    assert region_of("^GSPC") == "North America" and region_of("EURUSD=X") == "North America"
     # With no currency at all a position is unpriced, not valued 1:1 with USD
     _reset()
     db.x("INSERT INTO transactions (ticker, shares, price) VALUES ('ABC.ZZ', 100, 300)")
@@ -1927,7 +1928,8 @@ def test_opportunities_follow_their_rules():
         assert c.post("/api/transactions", json={"ticker": "SAP.DE", "kind": "buy", "date": "2025-01-06", "shares": 10, "price": 100}).status_code == 200
         o = c.get("/api/opportunities?markets=US,Europe,Gulf,Crypto,Nonsense").json()
     R = o["rules"]
-    assert o["markets"] == ["US", "Europe", "Gulf"], "stocks only: funds and crypto can't be compared on value"
+    # stocks only: funds and crypto can't be compared on value; the old "US" and "Gulf" are read as their regions
+    assert o["markets"] == ["North America", "Europe", "Middle East & Africa"], o["markets"]
     assert o["map"] and all(r["f_value"] is not None for r in o["map"]) and len(o["map"]) == o["scanned"] - len(o["failed"])
     # Top ranked: the highest overall scores, best first
     scores = [r["composite"] for r in o["top"]]
@@ -1984,8 +1986,8 @@ def test_screening_banks():
     assert ai._parse_rules("safe dividend stocks, not tech") == {"exclude_sector": "Technology", "min_div_yield": 0.025, "sort": "divYield", "max_vol": 0.25}
     assert ai._parse_rules("european stocks excluding banks") == {"exclude_industry": "Banks", "markets": ["Europe"]}
     assert ai._parse_rules("cheap stocks with no debt")["max_de"] == 0.5 and "markets" not in ai._parse_rules("show us cheap stocks")
-    assert ai._parse_rules("us tech stocks with strong momentum") == {"markets": ["US"], "sector": "Technology", "min_momentum": 60, "sort": "momentum"}
-    assert ai._parse_rules("us banks")["markets"] == ["US"] and "markets" not in ai._parse_rules("show us banks")
+    assert ai._parse_rules("us tech stocks with strong momentum") == {"countries": ["United States"], "sector": "Technology", "min_momentum": 60, "sort": "momentum"}
+    assert ai._parse_rules("us banks")["countries"] == ["United States"] and "countries" not in ai._parse_rules("show us banks")
     assert ai._parse_rules("revenue growth above 20%") == {"min_rev_growth": 0.2, "sort": "growth"}
     # A bank's free cash flow and debt aren't given to the model as if they meant something
     bank = ai.brief_data({"ticker": "B", "info": {"name": "B", "industry": "Banks - Regional", "debtToEquity": 3.0, "freeCashflow": -5e9, "returnOnEquity": 0.15},
@@ -2263,7 +2265,7 @@ def test_search_finds_what_yahoo_lists():
             assert calls.count("vwce") == 1, "repeat searches use the cache"
             # The built-in list comes first, and nothing appears twice
             apple = c.get("/api/search?q=apple").json()
-            assert [h["ticker"] for h in apple] == ["AAPL", "APLE"] and apple[0]["market"] == "US"
+            assert [h["ticker"] for h in apple] == ["AAPL", "APLE"] and apple[0]["market"] == "North America"
             assert apple[1]["name"] == "Apple Hospitality" and apple[1]["market"] == "Stock · NYQ", "Yahoo's long name and type"
             # With Yahoo down or nothing found, a typed symbol can still be tried
             assert c.get("/api/search?q=down").json() == [{"ticker": "DOWN", "name": "Look up this symbol on Yahoo Finance", "market": "Any"}]
@@ -2385,11 +2387,11 @@ def test_fund_regions_follow_what_they_hold():
     from backend import db
     from backend.universe import UNIVERSE, region_of
     assert "VWCE.DE" in UNIVERSE["ETFs"]
-    expected = {"VWCE.DE": "Global", "SPY": "US", "QQQ": "US", "VWO": "Emerging", "VXUS": "International", "EFA": "International",
-                "KSA": "Gulf", "QAT": "Gulf"}
+    expected = {"VWCE.DE": "Global", "SPY": "North America", "QQQ": "North America", "VWO": "Emerging", "VXUS": "International",
+                "EFA": "International", "KSA": "Middle East & Africa", "QAT": "Middle East & Africa"}
     assert {t: region_of(t) for t in expected} == expected
     # Only the named funds: other listings and plain stocks still go by exchange
-    assert region_of("VWCE.MI") == "Europe" and region_of("SAP.DE") == "Europe" and region_of("AAPL") == "US"
+    assert region_of("VWCE.MI") == "Europe" and region_of("SAP.DE") == "Europe" and region_of("AAPL") == "North America"
     _reset()
     db.cache_clear()  # the region is stored with each symbol's details
     with TestClient(app) as c:
@@ -2399,7 +2401,7 @@ def test_fund_regions_follow_what_they_hold():
         p = c.get("/api/portfolio").json()
         pos = {r["ticker"]: r for r in p["positions"]}
         regions = p["allocation"]["region"]
-        assert set(regions) == {"Global", "US", "Europe"}, regions
+        assert set(regions) == {"Global", "North America", "Europe"}, regions
         assert abs(regions["Global"] - pos["VWCE.DE"]["value"]) < 1e-6, "its own slice, not counted as Europe"
         assert abs(regions["Europe"] - pos["SAP.DE"]["value"]) < 1e-6
     _reset()
@@ -2825,7 +2827,8 @@ def test_ai_providers():
             llm.seen.clear()
             llm.replies = [_chat("I think you want Gulf stocks!"), _chat('{"markets": ["US"], "sort": "growth"}')]
             got = ai.parse_query("fast growing american companies")
-            assert got["markets"] == ["US"] and got["sort"] == "growth" and got["min_rev_growth"] == 0.10 and "ignored" not in got, got
+            # the model still says "US": read as the country it meant
+            assert got["countries"] == ["United States"] and got["sort"] == "growth" and got["min_rev_growth"] == 0.10 and "ignored" not in got, got
             assert len(llm.seen) == 2 and "couldn't be read" in llm.seen[1][2]["messages"][1]["content"]
             # Unreadable twice: the regex rules take over
             llm.seen.clear()
@@ -3174,7 +3177,7 @@ def test_ask_reaches_more_yahoo_data():
     assert abs(float(q["eps_reported"]) / float(q["eps_expected"]) - 1 - float(q["surprise"].rstrip("%")) / 100) < 0.01
     # Dividends: the years add up to every payment, and the past 12 months match the income estimate's figure
     from backend.universe import UNIVERSE
-    payer = next(t for t in UNIVERSE["US"] if data.dividend_payments(t))
+    payer = next(t for t in UNIVERSE["North America"] if data.dividend_payments(t))
     pays = data.dividend_payments(payer)
     d, _ = run("get_dividends", ticker=payer)
     years = {y: sum(v for day, v in pays if day.startswith(y)) for y in {p[0][:4] for p in pays}}
@@ -3402,6 +3405,38 @@ def test_portfolio_backtest_matches_independent_sums():
     _reset()
 
 
+def test_regions_you_follow_decide_what_is_scanned():
+    from backend import insights
+    from backend.universe import REGIONS, UNIVERSE, country_of
+    _reset()
+    with TestClient(app) as c:
+        # All five by default; a choice is checked and kept in the usual order
+        assert c.get("/api/settings").json()["regions"] == REGIONS
+        for bad in ([], ["Mars"], "Europe"):
+            assert c.post("/api/settings", json={"regions": bad}).status_code == 400, bad
+        assert c.post("/api/settings", json={"regions": ["Asia-Pacific", "Europe"]}).json()["regions"] == ["Europe", "Asia-Pacific"]
+        meta = c.get("/api/meta").json()
+        assert meta["markets"] == ["Europe", "Asia-Pacific", "ETFs", "Crypto"] and list(meta["countries"]) == ["Europe", "Asia-Pacific"]
+        assert meta["regions"] == REGIONS and "Japan" in meta["countries"]["Asia-Pacific"] and meta["countryGroups"]["Gulf"]
+        # The Screener scans only those (a region you don't follow is ignored even when asked for)
+        s = c.post("/api/screener", json={"markets": ["Europe", "North America"]}).json()
+        assert s["scanned"] == len(UNIVERSE["Europe"]) and {r["region"] for r in s["rows"]} == {"Europe"}
+        s = c.post("/api/screener", json={}).json()
+        assert s["scanned"] == len(UNIVERSE["Europe"]) + len(UNIVERSE["Asia-Pacific"]) + len(UNIVERSE["ETFs"]) + len(UNIVERSE["Crypto"])
+        # Opportunities and the sector table too
+        assert c.get("/api/opportunities").json()["markets"] == ["Europe", "Asia-Pacific"]
+        settings = c.get("/api/settings").json()
+        assert {r["region"] for r in insights.peer_table(settings).values()} == {"Europe", "Asia-Pacific"}
+        # A country, or a group of them, narrows the screen and scans only its region
+        j = c.post("/api/screener", json={"filters": {"countries": ["Japan"]}}).json()
+        assert j["rows"] and {r["country"] for r in j["rows"]} == {"Japan"} and j["scanned"] == len(UNIVERSE["Asia-Pacific"])
+        c.post("/api/settings", json={"regions": REGIONS})
+        g = c.post("/api/screener", json={"filters": {"countries": ["Gulf"]}}).json()
+        assert g["rows"] and {r["country"] for r in g["rows"]} <= {"Qatar", "Saudi Arabia", "UAE", "Kuwait"} and g["scanned"] == len(UNIVERSE["Middle East & Africa"])
+        assert all(r["country"] == country_of(r["ticker"]) for r in g["rows"])
+    _reset()
+
+
 def test_insider_trades_count_only_market_buys_and_sales():
     from backend import data, insights
     # Yahoo's descriptions, as they come: only a trade at a price on the market is buying or selling
@@ -3475,6 +3510,43 @@ def test_yahoo_refusals_pause_long_lists():
         insights._quick_row, insights.time.sleep, insights.data.rate_limited_for = real
 
 
+def test_sector_table_is_built_in_the_background():
+    import threading
+    import time
+
+    from backend import data, db, insights
+    _reset()
+    real = (data.DEMO, insights.peer_table)
+    started, release = [], threading.Event()
+
+    def slow_build(settings, fresh=False, patience=60):  # stands in for downloading every followed stock
+        if fresh:
+            started.append(time.time())
+            release.wait(5)
+            db.cache_set(insights._peer_key(settings), {"T1": {"sector": "Tech", "region": "US", **{k: 50.0 for k in insights.RANKED[1:]}}})
+        return {"T1": {"sector": "Tech", "region": "US", "composite": 50.0, **{k: 50.0 for k in insights.RANKED[1:]}}}
+    data.DEMO, insights.peer_table = False, slow_build
+    db.cache_clear()  # no table left by an earlier test
+    try:
+        t0 = time.time()
+        assert insights.sector_ranks("T1", {}) == {"pending": True} and time.time() - t0 < 1, "answered at once"
+        assert insights.sector_ranks("T1", {}) == {"pending": True}
+        time.sleep(0.2)
+        assert len(started) == 1, "one build at a time"
+        release.set()
+        for _ in range(50):
+            if insights.peer_table_now({}) is not None:
+                break
+            time.sleep(0.1)
+        r = insights.sector_ranks("T1", {})
+        assert r["sector"] == "Tech" and r["others"] == 0 and len(started) == 1
+    finally:
+        data.DEMO, insights.peer_table = real
+        release.set()
+        db.cache_clear()  # the stand-in table mustn't be what the next test ranks against
+        _reset()
+
+
 def test_sector_ranks_count_the_peers_beaten():
     from backend import insights
     table = {f"T{i}": {"sector": "Tech", "region": "US" if i % 2 else "Asia-Pacific", "composite": 10.0 * i, "value": 10.0 * i,
@@ -3508,7 +3580,7 @@ def test_sector_ranks_count_the_peers_beaten():
         assert r["sector"] and r["others"] >= 1 and set(r["ranks"]) == set(insights.RANKED) and r["minPeers"] == insights.MIN_PEERS
         assert c.get("/api/stock/SPY/peers").json() is None
         # The Screener shows each stock's overall rank in its sector; funds and crypto have none
-        rows = c.post("/api/screener", json={"markets": ["US", "ETFs"]}).json()["rows"]
+        rows = c.post("/api/screener", json={"markets": ["North America", "ETFs"]}).json()["rows"]
         stock = next(x for x in rows if x["ticker"] == "AAPL")
         assert stock["sectorOf"] == r["ranks"]["composite"]["of"] and (stock["sectorBeats"] is None or abs(stock["sectorBeats"] - r["ranks"]["composite"]["beats"]) < 1e-12)
         assert all(x["sectorBeats"] is None for x in rows if x["assetClass"] != "Stocks")

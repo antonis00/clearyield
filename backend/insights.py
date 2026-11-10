@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import data, db, ledger, scoring
 from . import indicators as ind
-from .universe import CORE_FUNDS, STOCK_MARKETS, tickers_for
+from .universe import CORE_FUNDS, REGIONS, tickers_for
 
 log = logging.getLogger("stockpilot.insights")
 
@@ -64,7 +64,7 @@ def _quick_row(t, settings):
         return {"ticker": t, "error": str(e)}
     c = full["Close"]
     return {
-        "ticker": t, "name": inf.get("name"), "region": inf.get("region"), "assetClass": inf.get("assetClass"),
+        "ticker": t, "name": inf.get("name"), "region": inf.get("region"), "country": inf.get("country"), "assetClass": inf.get("assetClass"),
         "sector": inf.get("sector"), "industry": inf.get("industry"), "currency": inf.get("currency"), "priceUnit": inf.get("priceUnit"), "price": float(c.iloc[-1]),
         "day": ind.ret_over(c, 1), "ret1m": ind.ret_over(c, 21), "ret1y": ind.ret_over(c, 252),
         "pe": inf.get("trailingPE"), "pb": inf.get("priceToBook"), "divYield": inf.get("dividendYield"),
@@ -138,12 +138,19 @@ PEERS_FOR = 7 * 3600   # seconds the table of every stock's scores is kept: the 
 RANKED = ("composite", "value", "quality", "growth", "momentum", "risk")
 
 
-def _peer_markets():
-    """Every market, unless STOCKPILOT_PEER_MARKETS names fewer: the live browser checks start with an empty cache, and
-    ranking against all 400 symbols on every run would get the computer refused by Yahoo."""
+def followed(settings):
+    """The regions you follow (Settings), in the usual order: only their stocks are downloaded, screened and ranked."""
+    chosen = settings.get("regions") or REGIONS
+    return [r for r in REGIONS if r in chosen] or list(REGIONS)
+
+
+def _peer_markets(settings):
+    """The regions you follow, narrowed further by STOCKPILOT_PEER_MARKETS where it's set: the live browser checks start
+    with an empty cache, and ranking against all 400 symbols on every run would get the computer refused by Yahoo."""
     import os
-    named = [m.strip() for m in (os.environ.get("STOCKPILOT_PEER_MARKETS") or "").split(",") if m.strip() in STOCK_MARKETS]
-    return named or STOCK_MARKETS
+    mine = followed(settings)
+    named = [m.strip() for m in (os.environ.get("STOCKPILOT_PEER_MARKETS") or "").split(",") if m.strip() in mine]
+    return named or mine
 
 
 def peer_table(settings, fresh=False, patience=60):
@@ -151,11 +158,12 @@ def peer_table(settings, fresh=False, patience=60):
     `fresh` scores again even when a table is kept (the background scoring does, so the table is never old).
     The factors are kept and the overall score worked out with the weights in Settings now, so changing the weights
     doesn't mean scoring every stock again."""
-    key = "peers:v2"
+    regions = _peer_markets(settings)
+    key = _peer_key(settings)
     table = None if fresh else db.cache_get(key, PEERS_FOR)
     if table is None:
         table = {}
-        for r in rows_for(tickers_for(_peer_markets()), settings, 6, patience):
+        for r in rows_for(tickers_for(regions), settings, 6, patience):
             if "error" in r or r.get("assetClass") != "Stocks" or not r.get("sector"):
                 continue
             table[r["ticker"]] = {"sector": r["sector"], "region": r.get("region"), **{k: r.get(f"f_{k}") for k in RANKED[1:]}}
@@ -164,11 +172,45 @@ def peer_table(settings, fresh=False, patience=60):
     return {t: {**r, "composite": scoring.combine({k: r[k] for k in RANKED[1:]}, weights)} for t, r in table.items()}
 
 
+def _peer_key(settings):
+    return "peers:v3:" + ",".join(_peer_markets(settings))  # another set of followed regions is another table
+
+
+_building, _build_lock = set(), __import__("threading").Lock()
+
+
+def peer_table_now(settings):
+    """The table if it's ready, else None while it's built in the background (one build at a time). A page never
+    waits minutes for it: built cold, it downloads every followed stock, which also draws Yahoo's refusals.
+    In demo mode it's built at once, since that takes seconds and keeps tests simple."""
+    if data.DEMO or db.cache_get(_peer_key(settings), PEERS_FOR) is not None:
+        return peer_table(settings)
+    key = _peer_key(settings)
+    with _build_lock:
+        if key in _building:
+            return None
+        _building.add(key)
+
+    def build():
+        try:
+            peer_table(settings, True, 900)
+        except Exception as e:  # the next request tries again
+            log.warning("building the sector table failed: %s", e)
+        finally:
+            with _build_lock:
+                _building.discard(key)
+    __import__("threading").Thread(target=build, daemon=True).start()
+    return None
+
+
 def sector_ranks(ticker, settings, own=None):
     """Where a stock's overall and factor scores stand among the other stocks in its sector, from every market in the
     list: the share of them it beats (a tie counts half), how many there are, and their middle score. A score with
-    fewer than MIN_PEERS others to compare with gets no rank. `own` is the stock's quick row, if already worked out."""
-    table = peer_table(settings)
+    fewer than MIN_PEERS others to compare with gets no rank. `own` is the stock's quick row, if already worked out.
+    {"pending": True} while the table is being built."""
+    table = peer_table_now(settings)
+    if table is None:
+        return {"pending": True}
     row = table.get(ticker)
     if row is None:  # a stock outside the list, ranked against it
         own = own or rows_for([ticker], settings)[0]
@@ -245,7 +287,10 @@ def opportunities(settings, markets):
     ranked, the best fit for your portfolio's satellite part, and good companies well below their high.
     Stocks only: funds and crypto are scored on trend and risk alone, so they can't be compared on value."""
     from . import portfolio
-    markets = [m for m in (markets or STOCK_MARKETS) if m in STOCK_MARKETS] or STOCK_MARKETS
+    from .universe import LEGACY_MARKETS, REGION_OF_COUNTRY
+    mine = followed(settings)
+    markets = [REGION_OF_COUNTRY[LEGACY_MARKETS[m][0]] if m in LEGACY_MARKETS else m for m in (markets or [])]  # "US": its region
+    markets = [m for m in dict.fromkeys(markets or mine) if m in mine] or mine
     rows = rows_for(tickers_for(markets), settings)
     failed = [r["ticker"] for r in rows if "error" in r]
     stocks = [r for r in rows if "error" not in r and r.get("assetClass") == "Stocks" and r.get("composite") is not None]
@@ -303,7 +348,18 @@ def opportunities(settings, markets):
 
 def screen(body, settings):
     f = dict(body.get("filters") or {})
-    markets = f.pop("markets", None) or body.get("markets") or [*STOCK_MARKETS, "ETFs", "Crypto"]
+    offered = [*followed(settings), "ETFs", "Crypto"]  # a region you don't follow isn't screened
+    from .universe import COUNTRY_GROUPS, LEGACY_MARKETS, REGION_OF_COUNTRY
+    raw = f.pop("markets", None) or body.get("markets") or []
+    old = [c for m in raw for c in LEGACY_MARKETS.get(m, [])]  # "US", "Gulf": the countries they meant
+    asked = [m for m in raw if m not in LEGACY_MARKETS] + [REGION_OF_COUNTRY[c] for c in old]
+    asked = list(dict.fromkeys(asked)) or None
+    countries = [c for x in (f.get("countries") or []) for c in COUNTRY_GROUPS.get(x, [x])] + old  # "Gulf" is its countries
+    if countries:
+        f["countries"] = list(dict.fromkeys(countries))
+    if countries and not asked:  # "Japanese banks": only the regions those countries are in need scanning
+        asked = list(dict.fromkeys(REGION_OF_COUNTRY[c] for c in countries if c in REGION_OF_COUNTRY))
+    markets = [m for m in (asked or offered) if m in offered] or offered
     tickers = tickers_for(markets) + [t.strip().upper() for t in (body.get("extra") or []) if t.strip()]
     rows = rows_for(list(dict.fromkeys(tickers)), settings)
     ok, failed = [r for r in rows if "error" not in r], [r["ticker"] for r in rows if "error" in r]
@@ -316,6 +372,8 @@ def screen(body, settings):
 
         def gt(v, lim):
             return lim is None or (v is not None and v >= lim)
+        if f.get("countries") and r.get("country") not in f["countries"]:
+            return False
         if f.get("sector") and r.get("sector") != f["sector"]:
             return False
         if f.get("industry") and f["industry"].lower() not in (r.get("industry") or "").lower():
@@ -337,7 +395,9 @@ def screen(body, settings):
 
     out = [r for r in ok if keep(r)]
     # Each stock's overall score against the rest of its sector, from every market in the list
-    table = peer_table(settings) if any(r.get("assetClass") == "Stocks" for r in out) else {}
+    table = (peer_table_now(settings) if any(r.get("assetClass") == "Stocks" for r in out) else {})
+    ranks_pending = table is None
+    table = table or {}
     for r in out:
         r["sectorBeats"], r["sectorOf"] = _beats(r, table)
     sort = f.get("sort", "composite")
@@ -349,6 +409,8 @@ def screen(body, settings):
     notes = []
     if debt_skipped:
         notes.append(f"The debt limit wasn't applied to {len(debt_skipped)} bank{'s' if len(debt_skipped) > 1 else ''}: debt/equity doesn't measure a bank's risk, since deposits and borrowing are what it lends from.")
+    if ranks_pending:
+        notes.append("Ranks within each sector are being prepared in the background; they'll show in a minute or two.")
     return {"rows": out, "failed": failed, "filters": {**f, "markets": markets}, "scanned": len(rows), "notes": notes}
 
 

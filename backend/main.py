@@ -96,7 +96,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from . import agent, ai, backtest, data, db, insights, ledger, portfolio, simulate  # noqa: E402
 from . import indicators as ind  # noqa: E402
-from .universe import MACRO, STOCK_MARKETS, UNIVERSE, search as uni_search, tickers_for  # noqa: E402
+from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("stockpilot")
@@ -272,7 +272,8 @@ def _tile_list(settings):
 def meta():
     settings = db.get_settings()
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
-               "settings": settings, "markets": list(UNIVERSE), "stockMarkets": STOCK_MARKETS, "alertKinds": insights.ALERT_KINDS,
+               "settings": settings, "markets": [*insights.followed(settings), "ETFs", "Crypto"], "stockMarkets": insights.followed(settings), "regions": REGIONS,
+               "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "alertKinds": insights.ALERT_KINDS,
                "strategies": backtest.STRATEGIES})
 
 
@@ -516,6 +517,8 @@ def screener(body: dict = Body(...)):
     if body.get("query"):
         parsed = ai.parse_query(body["query"])
         body = {**body, "filters": {**(body.get("filters") or {}), **parsed}}
+        if parsed.get("countries") and not parsed.get("markets"):
+            body.pop("markets", None)  # "Gulf banks" scans the Gulf's region, not every market the page has ticked
     return ok(insights.screen(body, settings))
 
 

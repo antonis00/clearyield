@@ -261,6 +261,7 @@
         <label>Min ROE %<input type="number" id="fRoe"></label>
         <label>Min score<input type="number" id="fScore"></label>
         <label>Max volatility %<input type="number" id="fVol"></label>
+        <label>Country<select id="fCountry"></select></label>
         <label>Sort by<select id="fSort"><option value="composite">Composite</option><option value="value">Value</option><option value="quality">Quality</option><option value="growth">Growth</option><option value="momentum">Momentum</option><option value="risk">Low risk</option><option value="divYield">Dividend yield</option></select></label>
         <button class="btn ghost" id="btnScr">Apply filters</button>
       </div>
@@ -441,6 +442,9 @@
             <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
             <label>Benchmark<input id="sBench"></label>
           </div>
+          <h4>Regions you follow</h4>
+          <div class="markets" id="sRegions"></div>
+          <p class="muted sm">Only their stocks are downloaded, screened, scored for Opportunities and compared in sector ranks. Research opens any symbol, followed or not.</p>
         </div>
         <div class="card">
           <div class="card-h"><h3>Factor weights</h3><span class="muted sm">Balanced = 20% each</span></div>

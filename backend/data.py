@@ -12,7 +12,7 @@ import pandas as pd
 
 from . import db
 from . import indicators as ind
-from .universe import MACRO, currency_guess, name_of, region_of
+from .universe import MACRO, country_of, currency_guess, name_of, region_of
 
 log = logging.getLogger("stockpilot.data")
 
@@ -237,7 +237,7 @@ def info(ticker):
 
 
 def _info(ticker):
-    key = f"info:v9:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v10:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -286,6 +286,7 @@ def _normalize_info(ticker, d):
     d["quoteType"] = qt
     d["assetClass"] = asset_class(qt)
     d["region"] = region_of(ticker, qt)
+    d["country"] = country_of(ticker) if d["assetClass"] == "Stocks" else None  # where it's listed; funds and coins have none here
     d["ticker"] = ticker
     return d
 
