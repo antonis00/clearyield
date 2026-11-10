@@ -40,7 +40,7 @@ nav a.active { color: var(--text); border-left-color: var(--accent); background:
 
 main { flex: 1; min-width: 0; padding: 0 24px 40px; }
 .top { display: flex; align-items: center; gap: 16px; padding: 16px 0; position: sticky; top: 0; background: var(--bg); z-index: 20; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
-.searchbox { position: relative; flex: 1; max-width: 560px; }
+.searchbox { position: relative; flex: 1; }  /* the whole width: questions to the screener can be long */
 .searchbox input { width: 100%; }
 .disclaimer { margin-left: auto; font-size: 12px; color: var(--muted); }
 .dropdown { position: absolute; top: 42px; left: 0; right: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; box-shadow: 0 12px 30px #0008; }
@@ -311,3 +311,7 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 #rOwn h4 { margin: 10px 0 6px; }
 .clip-wide { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 #rOwn td .sub { display: block; font-size: 11px; color: var(--muted); }
+.st.quote { font: 600 15px Georgia, serif; color: var(--up); cursor: default; line-height: 1; }
+.nav-ico { width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
+@media (max-width: 1100px) { nav a.nav-ask .nav-ico { margin-right: 0; } }
+.cv-cur { min-width: 210px; }

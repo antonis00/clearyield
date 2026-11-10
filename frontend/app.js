@@ -264,7 +264,7 @@ async function loadDashboard() {
     .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
-const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts and journal reminders; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock you hold or watch.";
+const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts and journal reminders; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
 $("#digestInfo").innerHTML = infoIcon(DIGEST_RULES);
 // Two tabs: Highlights (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
 // stocks). The choice is remembered; switching only redraws, it doesn't ask the server again.
@@ -278,9 +278,12 @@ function renderDigest() {
     b.textContent = `${b.dataset.tab === "news" ? "News" : "Highlights"} (${(b.dataset.tab === "news" ? news : mine).length})`;
   });
   const shown = tab === "news" ? news : mine;
+  // Market headlines stand in when none of your stocks or coins has any: said at the top, so it's clear why
+  const marketNote = tab === "news" && shown.length && shown.every((i) => i.market)
+    ? '<li class="muted sm">None of the stocks or coins you hold or watch has headlines from the past 3 days, so these are headlines about the market as a whole.</li>' : "";
   // A headline links to its source; the link keeps its own job inside a row that opens the stock
   const text = (i) => i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.text)}</a>` : esc(i.text);
-  ul.innerHTML = shown.length ? shown.map((i) => `<li class="t${i.tone}${i.kind ? ` k-${esc(i.kind)}` : ""}" data-t="${esc(i.ticker || "")}"${i.ticker ? ` data-stock="${esc(i.ticker)}"` : i.kind === "portfolio" ? ` data-goto="portfolio"` : ""}>${text(i)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("")
+  ul.innerHTML = shown.length ? marketNote + shown.map((i) => `<li class="t${i.tone}${i.kind ? ` k-${esc(i.kind)}` : ""}" data-t="${esc(i.ticker || "")}"${i.ticker ? ` data-stock="${esc(i.ticker)}"` : i.kind === "portfolio" ? ` data-goto="portfolio"` : ""}>${text(i)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("")
     : `<li>${tab === "news" ? "No headlines from the past 3 days name a stock you hold or watch." : "Quiet day — nothing notable on your names."}</li>`;
   $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => {
     e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" });
@@ -1406,15 +1409,17 @@ const currencySymbol = (code) => {
 function aiStatus(a) {
   const tip = a?.on ? `AI: ${a.model} via ${a.server}${a.thinking === "off" ? ", thinking off" : a.thinking === "on" ? ", thinking on" : ["low", "medium", "high"].includes(a.thinking) ? `, thinking ${a.thinking}` : ""}. Writes research briefs and reads screener questions.`
     : a?.problem ? `AI isn't set up: ${a.problem}` : "AI is off. Set AI_PROVIDER in .env (see .env.example) for AI-written briefs.";
-  // A click opens Ask AI, where the model answers questions with the app's tools
-  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask AI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
+  // A click opens Ask StockAI, where the model answers questions with the app's tools
+  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask StockAI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
 }
+const QUOTE = "“The greatest wealth is to live content with little.” Plato";
 function renderModeBadge() {
   const m = state.meta, cur = m.settings.base_currency;
   $("#modeBadge").innerHTML = `<div class="status">
     ${statusIcon(!m.demo, "yahoo.svg", "Yahoo Finance", `${m.demo ? "Demo data: made-up prices, Yahoo Finance is off." : "Prices: live from Yahoo Finance."} Click to open Yahoo Finance (the stock's page when you're on one).`).replace('class="st ', 'class="st yahoo ').replace('role="img"', 'role="link" tabindex="0"')}
     ${aiStatus(m.aiInfo)}
     <span class="st cur" role="button" tabindex="0" data-currency="${esc(cur)}" aria-label="Base currency: ${esc(cur)}. Opens the currency converter." data-tip="Base currency: ${esc(cur)}. Every total is shown in it; change it in Settings. Click to convert between currencies.">${esc(currencySymbol(cur))}</span>
+    <span class="st quote" tabindex="0" aria-label="${esc(QUOTE)}" data-tip="${esc(QUOTE)}">❝</span>
   </div>`;
   const icon = $("#modeBadge .st.cur");
   icon.onclick = openConverter;
@@ -1429,27 +1434,37 @@ function renderModeBadge() {
   yahoo.onclick = openYahoo;
   yahoo.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openYahoo(); } };
 }
-// The converter: today's rate between two currencies, from the same rates the portfolio uses. It starts from your
-// base currency to the dollar, and remembers the last pair.
-const CONVERT_CODES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "CNY", "HKD", "INR", "QAR", "SAR", "AED", "KWD", "BHD", "OMR"];
+// The converter: today's rate between two currencies, from the same rates the portfolio uses. Every currency in use
+// can be picked; each box searches as you type, by code, name or country ("yen", "JPY", "Japanese"). It starts from
+// your base currency to the dollar, and remembers the last pair.
+const currencies = () => state.meta?.currencies || { EUR: "Euro", USD: "US dollar" };
+const currencyLabel = (c) => `${c} — ${currencies()[c] || c}`;
+function currencyOf(text) {
+  const all = currencies(), t = String(text || "").trim(), code = t.slice(0, 3).toUpperCase();
+  if (all[code] && (t.length === 3 || t.slice(3, 6) === " — ")) return code;
+  const hits = Object.entries(all).filter(([c, n]) => `${c} ${n}`.toLowerCase().includes(t.toLowerCase()));
+  return t && hits.length === 1 ? hits[0][0] : null;  // one match for words typed, e.g. "yen"
+}
 function openConverter() {
   const base = state.meta?.settings?.base_currency || "EUR";
   let pair; try { pair = JSON.parse(localStorage.getItem("fxPair")); } catch { pair = null; }
-  const [from0, to0] = Array.isArray(pair) && pair.every((c) => CONVERT_CODES.includes(c)) ? pair : [base, base === "USD" ? "EUR" : "USD"];
-  const opts = (sel) => CONVERT_CODES.map((c) => `<option ${c === sel ? "selected" : ""}>${c}</option>`).join("");
+  const [from0, to0] = Array.isArray(pair) && pair.every((c) => currencies()[c]) ? pair : [base, base === "USD" ? "EUR" : "USD"];
   modal(`<h3>Currency converter</h3>
+    <datalist id="cvList">${Object.keys(currencies()).map((c) => `<option value="${esc(currencyLabel(c))}"></option>`).join("")}</datalist>
     <div class="form-row conv">
       <label>Amount<input type="number" id="cvAmount" value="1000" min="0" step="any"></label>
-      <label>From<select id="cvFrom">${opts(from0)}</select></label>
+      <label>From<input id="cvFrom" class="cv-cur" list="cvList" value="${esc(currencyLabel(from0))}" autocomplete="off" spellcheck="false" placeholder="Type to search"></label>
       <button type="button" class="btn ghost sm" id="cvSwap" title="Swap">⇄</button>
-      <label>To<select id="cvTo">${opts(to0)}</select></label>
+      <label>To<input id="cvTo" class="cv-cur" list="cvList" value="${esc(currencyLabel(to0))}" autocomplete="off" spellcheck="false" placeholder="Type to search"></label>
       <button type="button" class="btn" id="cvGo">Convert</button>
     </div>
     <div id="cvOut" class="conv-out"></div>
     <div class="modal-actions"><span class="muted sm">Today's rate from Yahoo, as the portfolio uses. Your bank or broker will add its own margin.</span><button class="btn ghost" data-close>Close</button></div>`);
   let asked = 0;
   const run = async () => {
-    const from = $("#cvFrom").value, to = $("#cvTo").value, amount = Number($("#cvAmount").value), out = $("#cvOut"), mine = ++asked;
+    const from = currencyOf($("#cvFrom").value), to = currencyOf($("#cvTo").value), amount = Number($("#cvAmount").value), out = $("#cvOut"), mine = ++asked;
+    if (!from || !to) { out.innerHTML = `<span class="muted">Choose the currency to convert ${!from ? "from" : "to"}: type part of its name or code, then pick it in the list.</span>`; return; }
+    $("#cvFrom").value = currencyLabel(from); $("#cvTo").value = currencyLabel(to);
     try { localStorage.setItem("fxPair", JSON.stringify([from, to])); } catch { /* kept for this visit */ }
     if (!(amount >= 0)) { out.innerHTML = `<span class="muted">Enter an amount.</span>`; return; }
     try {
@@ -1461,7 +1476,13 @@ function openConverter() {
   };
   // Converts on the button or Enter; swapping converts straight away
   $("#cvGo").onclick = run;
-  $("#cvAmount").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } };
+  $$("#cvAmount, .cv-cur").forEach((i) => { i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } }; });
+  // Clicking a currency box clears it, so the whole list shows and typing searches it; leaving it empty puts it back
+  $$(".cv-cur").forEach((i) => {
+    i.onfocus = () => { i.dataset.was = i.value; i.value = ""; };
+    i.onblur = () => { if (!i.value.trim()) i.value = i.dataset.was || ""; };
+    i.onchange = () => { if (currencyOf(i.value)) run(); };
+  });
   $("#cvSwap").onclick = () => { const f = $("#cvFrom").value; $("#cvFrom").value = $("#cvTo").value; $("#cvTo").value = f; run(); };
   run(); $("#cvAmount").select();
 }
