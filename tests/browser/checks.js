@@ -229,7 +229,9 @@ const CHECKS = {
     const record = async (kind, fields) => {
       await page.selectOption("#hKind", kind);
       for (const [k, v] of Object.entries(fields)) await page.fill(k, v);
-      await page.click("#btnAddHolding"); await page.waitForTimeout(1500);
+      // wait for the save itself, then for the table to be drawn again: a fixed wait was sometimes too short under load
+      await Promise.all([page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/(holdings|transactions)/.test(r.url()), { timeout: 60000 }), page.click("#btnAddHolding")]);
+      await page.waitForTimeout(1500);
     };
     await record("buy", { "#hTicker": "AAPL", "#hShares": "10", "#hCost": "100", "#hDate": "2024-06-03" });
     expect("buy is recorded", (await page.locator("#pfTable tbody tr").count()) === 1);

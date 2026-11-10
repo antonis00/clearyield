@@ -15,7 +15,7 @@ import httpx
 from . import ai, data, db, insights, portfolio
 from . import indicators as ind
 from .ai import _f_money, _f_num, _f_pct, _f_x
-from .universe import STOCK_MARKETS
+from .universe import REGIONS
 
 USAGE = []            # token counts the provider reported, newest last (for tuning; kept short)
 MAX_ROUNDS = 4        # model calls that may use tools; one more call then answers with what was found
@@ -65,7 +65,7 @@ def get_portfolio():
                "Hold": "On target."}.get(cs.get("action"))
     trades_in = sorted({r["currency"] for r in p["positions"] if r.get("currency")})
     from .universe import FUND_CURRENCIES
-    us_share = sum(r["value"] * (FUND_CURRENCIES[r["ticker"]].get("USD", 0) if r["ticker"] in FUND_CURRENCIES else (1 if r.get("region") == "US" else 0))
+    us_share = sum(r["value"] * (FUND_CURRENCIES[r["ticker"]].get("USD", 0) if r["ticker"] in FUND_CURRENCIES else (1 if r.get("country") == "United States" else 0))
                    for r in p["positions"]) / p["total"] if p["total"] else None
     top = lambda d: {k: _f_pct(v / p["total"], 1) for k, v in list(d.items())[:6]} if p["total"] else {}
     out = {
@@ -108,7 +108,9 @@ def get_stock(ticker):
     d.pop("Recent headlines naming the company", None)
     d.pop("What the scores mean", None)  # said once in the instructions
     peers = insights.sector_ranks(t, settings) if inf.get("assetClass") == "Stocks" else None
-    if peers:
+    if peers and peers.get("pending"):
+        d["Within its sector"] = "not available yet: the sector table is being prepared"
+    elif peers:
         d["Within its sector"] = {"sector": peers["sector"], "other stocks compared": peers["others"],
                                   **{f"{k} score beats": f"{_f_pct(v['beats'], 0)} of {v['of']} others (their middle: {_f_num(v['median'], 0)})"
                                      if v["beats"] is not None else f"not ranked: {v['of']} others with this score" for k, v in peers["ranks"].items()},
@@ -132,7 +134,7 @@ def screen(filters=None, question=None):
     for k in ("industry", "exclude_industry"):  # the rules' bank filters, which the model may pass on too
         if isinstance((filters or {}).get(k), str):
             f[k] = filters[k]
-    d = insights.screen({"filters": f, "markets": f.get("markets") or STOCK_MARKETS}, _settings())
+    d = insights.screen({"filters": f, "markets": f.get("markets") or insights.followed(_settings())}, _settings())
     rows = [{"ticker": r["ticker"], "name": r["name"], "sector": r["sector"], "region": r["region"], "score": _f_num(r["composite"], 1), "stance": r["stance"],
              "pe": _f_x(r["pe"]) if r.get("pe") and r["pe"] > 0 else None, "dividend_yield": _f_pct(r["divYield"], 2), "revenue_growth": _f_pct(r["revGrowth"], 1),
              "roe": _f_pct(r["roe"], 1), "return_1y": _f_pct(r["ret1y"], 1), "volatility": _f_pct(r["vol"], 1)} for r in d["rows"][:10]]
@@ -141,7 +143,7 @@ def screen(filters=None, question=None):
 
 
 def get_opportunities(markets=None):
-    o = insights.opportunities(_settings(), markets or STOCK_MARKETS)
+    o = insights.opportunities(_settings(), markets or insights.followed(_settings()))
     short = lambda r, extra=(): {"ticker": r["ticker"], "name": r["name"], "sector": r["sector"], "score": _f_num(r["composite"], 1), "stance": r["stance"],
                                  "reasons": r["reasons"], **dict(extra)}
     return {
@@ -525,7 +527,7 @@ TOOLS = {
                   "question": {"type": "string", "description": "e.g. 'cheap European banks'; read by the app's keyword rules"}})),
     "get_opportunities": (get_opportunities, "The Opportunities page: top ranked stocks; fits_your_portfolio, with each stock's measured correlation "
                                               "with what the investor holds (use it for diversification questions); and good companies below their high.",
-                          S({"markets": {"type": "array", "items": {"type": "string", "enum": STOCK_MARKETS}}})),
+                          S({"markets": {"type": "array", "items": {"type": "string", "enum": REGIONS}}})),
     "compare": (compare, "Up to 5 assets side by side: return, volatility, drawdown, Sharpe, P/E, and how closely each pair moves together.",
                 S({"tickers": {"type": "array", "items": {"type": "string"}}, "period": {"type": "string", "enum": ["6mo", "1y", "2y", "5y"]}}, ["tickers"])),
     "pretrade": (pretrade, "What buying an amount (in the base currency) of one asset would do to the portfolio: its weight, the whole sector mix "

@@ -495,7 +495,7 @@ function renderFactors(s) {
 const PEER_INFO = "Ranks compare a score with the other stocks in the same sector, from every market in StockPilot's list. 50% is the "
   + "sector's middle. The score itself is on one fixed scale for every stock, so a bank and a software company meet the same limits; "
   + "the rank says how it compares with its own kind. A sector with fewer than 8 others isn't ranked.";
-async function loadPeers(t, request) {
+async function loadPeers(t, request, tries = 0) {
   const stock = state.stock?.info?.assetClass === "Stocks";
   $("#rPeers").innerHTML = stock ? '<span class="muted">Comparing with its sector…</span>' : "";
   $$(".factor .peer").forEach((el) => { el.textContent = ""; });
@@ -504,6 +504,11 @@ async function loadPeers(t, request) {
   try { r = await api(`/api/stock/${encodeURIComponent(t)}/peers`); } catch { r = null; }
   if (request !== state.stockRequest) return;
   if (!r) { $("#rPeers").innerHTML = ""; return; }
+  if (r.pending) {  // the first ranking of the followed regions is being built in the background: look again shortly
+    $("#rPeers").innerHTML = '<span class="muted">Sector ranks are being prepared (the first ranking downloads every followed stock, a minute or two). Checking again shortly…</span>';
+    if (tries < 12) setTimeout(() => { if (request === state.stockRequest) loadPeers(t, request, tries + 1); }, 15000);
+    return;
+  }
   const where = Object.entries(r.regions).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${v}`).join(", ");
   const line = (k) => {
     const x = r.ranks[k];
@@ -761,7 +766,9 @@ $("#btnCompare").onclick = async () => {
 /* ---------------------------------------------------------------- screener */
 const FILTER_LABELS = { max_pe: ["Max P/E", (v) => v], min_div_yield: ["Min yield", (v) => pct(v, 1, false)], min_rev_growth: ["Min revenue growth", (v) => pct(v, 0, false)],
   max_de: ["Max debt/equity", (v) => v], min_roe: ["Min ROE", (v) => pct(v, 0, false)], min_score: ["Min score", (v) => v], min_momentum: ["Min momentum", (v) => v],
-  max_vol: ["Max volatility", (v) => pct(v, 0, false)], sector: ["Sector", (v) => esc(v)], sort: ["Sorted by", (v) => esc(v)], markets: ["Markets", (v) => esc(v.join(", "))] };
+  max_vol: ["Max volatility", (v) => pct(v, 0, false)], sector: ["Sector", (v) => esc(v)], sort: ["Sorted by", (v) => esc(v)], markets: ["Markets", (v) => esc(v.join(", "))],
+  countries: ["Countries", (v) => { const g = Object.entries(state.meta.countryGroups || {}).find(([, cs]) => cs.length === v.length && cs.every((c) => v.includes(c)));
+    return g ? `${esc(g[0])} (${esc(v.join(", "))})` : esc(v.join(", ")); }] };
 const filterChips = (f) => Object.entries(FILTER_LABELS).filter(([k]) => isNum(f[k]) && f[k] !== "").map(([k, [label, show]]) => `<span class="pill">${label}: ${show(f[k])}</span>`).join("");
 function fillFilterForm(f) {
   const set = (id, v, scale = 1) => { $(id).value = isNum(v) ? +(v * scale).toFixed(4) : ""; };
@@ -772,7 +779,7 @@ function fillFilterForm(f) {
 function screenerFilters() {
   const v = (id, scale = 1) => ($(id).value === "" ? undefined : Number($(id).value) / scale);
   return { max_pe: v("#fPe"), min_div_yield: v("#fDiv", 100), min_rev_growth: v("#fGrowth", 100), max_de: v("#fDe"), min_roe: v("#fRoe", 100),
-           min_score: v("#fScore"), max_vol: v("#fVol", 100), sort: $("#fSort").value };
+           min_score: v("#fScore"), max_vol: v("#fVol", 100), sort: $("#fSort").value, ...($("#fCountry").value ? { countries: [$("#fCountry").value] } : {}) };
 }
 async function runScreen(body) {
   const el = $("#scrTable"); loading(el, "Scanning the universe… the first run downloads data for ~100 tickers.");
@@ -784,7 +791,7 @@ async function runScreen(body) {
     const kinds = [f.industry ? `${f.industry} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${f.exclude_sector}` : "", f.exclude_industry ? `Not ${f.exclude_industry}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
     $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
-      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "region", label: "Region", fmt: (v) => `<span class="clip" title="${esc(v)}">${esc(v)}</span>` }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
+      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "country", label: "Country", fmt: (v, r) => `<span class="clip" title="${esc(v || r.region)}">${esc(v || r.region)}</span>` }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: priceOf }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
       { k: "revGrowth", label: "Rev g.", num: 1, fmt: (v) => cpct(v) }, { k: "roe", label: "ROE", num: 1, fmt: (v) => pct(v, 0, false) },
@@ -854,9 +861,11 @@ $("#askInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault();
 // One scoring of the stocks feeds the page and the dashboard card. It's kept for five minutes, so moving between
 // them doesn't recalculate; Refresh asks again. The first load of the day downloads every stock, about half a minute.
 // Every market of single stocks, from the backend's list; until it has arrived, the three the app began with
-const OPP_MARKETS_START = ["US", "Europe", "Gulf"];
+const OPP_MARKETS_START = ["North America", "Europe", "Latin America", "Middle East & Africa", "Asia-Pacific"];
 const oppAll = () => state.meta?.stockMarkets || OPP_MARKETS_START;
-const oppMarkets = () => { try { const m = JSON.parse(localStorage.getItem("oppMarkets")); const ok = Array.isArray(m) ? m.filter((x) => oppAll().includes(x)) : []; return ok.length ? ok : oppAll(); } catch { return oppAll(); } };
+// A choice saved under names no longer offered (the old "US", "Gulf", or a region you stopped following) starts again
+// from every region you follow, rather than quietly keeping what's left of it
+const oppMarkets = () => { try { const m = JSON.parse(localStorage.getItem("oppMarkets")); return Array.isArray(m) && m.length && m.every((x) => oppAll().includes(x)) ? m : oppAll(); } catch { return oppAll(); } };
 async function getOpportunities(force) {
   const key = oppMarkets().join(",");
   if (!force && state.opp?.key === key && Date.now() - state.opp.at < 5 * 60e3) return state.opp.data;
@@ -1352,6 +1361,7 @@ function loadSettings() {
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)}<input type="number" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
   $("#sCore").value = s.core_target;
+  $("#sRegions").innerHTML = state.meta.regions.map((r) => `<label><input type="checkbox" data-region="${esc(r)}" ${(s.regions || state.meta.regions).includes(r) ? "checked" : ""}> ${esc(r)}</label>`).join("");
   renderTileChoices(new Set(s.dashboard_tiles));
 }
 // Ticks you haven't saved yet are kept when a custom tile is added or removed
@@ -1466,8 +1476,13 @@ $("#btnSaveSettings").onclick = async () => {
     risk_free_rate: Number($("#sRf").value) / 100, benchmark: $("#sBench").value.trim().toUpperCase() || "SPY",
     targets: Object.fromEntries($$("[data-tgt]").map((i) => [i.dataset.tgt, Number(i.value)])),
     dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile),
-    core_target: Number($("#sCore").value) };
+    core_target: Number($("#sCore").value), regions: $$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region) };
+  if (!body.regions.length) return toast("Follow at least one region.");
+  const regionsBefore = (state.meta.settings.regions || []).join();
   state.meta.settings = await api("/api/settings", { method: "POST", body });
+  if (state.meta.settings.regions.join() !== regionsBefore) {  // other regions: other markets and countries to offer
+    state.meta = await api("/api/meta"); renderMarketChoices(); state.opp = null;
+  }
   renderModeBadge(); loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
 };
 $("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Everything will refresh on its next use"); };
@@ -1546,13 +1561,22 @@ $$("#themeSeg button").forEach((b) => b.onclick = () => {
 lightQuery.addEventListener("change", applyTheme);
 applyTheme();
 
+// The Screener's markets and countries come from the regions you follow, so they're built again when that changes
+function renderMarketChoices() {
+  const m = state.meta;
+  $("#scrMarkets").innerHTML = m.markets.map((x) => `<label><input type="checkbox" value="${esc(x)}" ${x !== "Crypto" ? "checked" : ""}> ${esc(x)}</label>`).join("");
+  const groups = Object.entries(m.countryGroups || {}).filter(([, cs]) => cs.some((c) => Object.values(m.countries).flat().includes(c)));
+  $("#fCountry").innerHTML = '<option value="">Any</option>' + groups.map(([g]) => `<option value="${esc(g)}">${esc(g)} (all)</option>`).join("")
+    + Object.entries(m.countries).map(([r, cs]) => `<optgroup label="${esc(r)}">${cs.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</optgroup>`).join("");
+}
+
 /* ---------------------------------------------------------------- boot */
 (async function boot() {
   state.meta = await api("/api/meta");
   const m = state.meta;
   renderModeBadge();
   checkFiredAlerts(); setInterval(checkFiredAlerts, 60000);
-  $("#scrMarkets").innerHTML = m.markets.map((x) => `<label><input type="checkbox" value="${x}" ${x !== "Crypto" ? "checked" : ""}> ${x}</label>`).join("");
+  renderMarketChoices();
   $("#bStrat").innerHTML = Object.entries(m.strategies).map(([k, v]) => `<option value="${k}" ${k === "sma_cross" ? "selected" : ""}>${v.label}</option>`).join("");
   $("#bStrat").onchange = renderParams; renderParams();
   $("#aKind").innerHTML = Object.entries(m.alertKinds).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");

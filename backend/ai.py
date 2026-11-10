@@ -510,7 +510,8 @@ def brief(ctx):
 
 # ---------------------------------------------------------------- natural-language screener
 FILTER_SPEC = {
-    "markets": "list of any of US, Europe, Gulf, Asia-Pacific, Canada, Latin America, Africa, ETFs, Crypto",
+    "markets": "list of any of North America, Europe, Latin America, Middle East & Africa, Asia-Pacific, ETFs, Crypto",
+    "countries": "list of countries within those, e.g. United States, Japan, Qatar, Saudi Arabia, UAE (the Gulf is Qatar, Saudi Arabia, UAE, Kuwait)",
     "max_pe": "number", "min_div_yield": "fraction e.g. 0.03", "min_rev_growth": "fraction", "max_de": "number (x)",
     "min_roe": "fraction", "min_score": "0-100", "min_momentum": "0-100 momentum factor score", "max_vol": "fraction annual volatility",
     "sort": "one of composite, value, quality, growth, momentum, risk, divYield",
@@ -524,15 +525,30 @@ MEANINGS = ("cheap/undervalued/value: max_pe 18. low debt: max_de 0.5. profitabl
             "risk/safe/defensive: max_vol 0.25 (these words describe risk, not a sector). Only set a sector when the request "
             "names an industry. Use a number the request gives in place of these.")
 
-MARKET_WORDS = {"US": ["usa", "u.s.", "u.s", "american", "america"], "Europe": ["europe", "european", "eu"],
-                "Gulf": ["gulf", "qatar", "qatari", "saudi", "uae", "gcc", "dubai", "middle east", "kuwait", "kuwaiti"],
-                "Asia-Pacific": ["asia", "asian", "asia-pacific", "apac", "japan", "japanese", "china", "chinese", "hong kong", "india",
-                                 "indian", "korea", "korean", "taiwan", "taiwanese", "australia", "australian", "singapore", "indonesia", "indonesian"],
-                "Canada": ["canada", "canadian"],
-                "Latin America": ["latin america", "latin american", "latam", "brazil", "brazilian", "mexico", "mexican", "chile", "chilean",
-                                  "argentina", "argentine", "argentinian", "peru", "peruvian", "colombia", "colombian"],
-                "Africa": ["africa", "african"],
+# Regions, and the funds and crypto groups, as the Screener's markets
+MARKET_WORDS = {"North America": ["north america", "north american"], "Europe": ["europe", "european", "eu"],
+                "Latin America": ["latin america", "latin american", "latam", "south america", "south american"],
+                "Middle East & Africa": ["middle east", "mea", "africa", "african"],
+                "Asia-Pacific": ["asia", "asian", "asia-pacific", "apac"],
                 "ETFs": ["etf", "etfs"], "Crypto": ["crypto", "cryptocurrency", "bitcoin"]}
+# Countries, as a filter within the regions. "China" reads as Hong Kong, where the big Chinese companies in the list
+# are listed. The Gulf is a group of countries.
+COUNTRY_WORDS = {
+    "United States": ["usa", "u.s.", "u.s", "american", "america"], "Canada": ["canada", "canadian"],
+    "Brazil": ["brazil", "brazilian"], "Mexico": ["mexico", "mexican"], "Chile": ["chile", "chilean"],
+    "Argentina": ["argentina", "argentine", "argentinian"], "Peru": ["peru", "peruvian"], "Colombia": ["colombia", "colombian"],
+    "United Kingdom": ["uk", "u.k.", "british", "britain", "england"], "Germany": ["germany", "german"], "France": ["france", "french"],
+    "Switzerland": ["switzerland", "swiss"], "Netherlands": ["netherlands", "dutch"], "Spain": ["spain", "spanish"],
+    "Italy": ["italy", "italian"], "Denmark": ["denmark", "danish"], "Sweden": ["sweden", "swedish"], "Norway": ["norway", "norwegian"],
+    "Finland": ["finland", "finnish"], "Belgium": ["belgium", "belgian"],
+    "Qatar": ["qatar", "qatari"], "Saudi Arabia": ["saudi", "saudi arabia", "saudi arabian"], "UAE": ["uae", "dubai", "emirati", "emirates"],
+    "Kuwait": ["kuwait", "kuwaiti"], "Israel": ["israel", "israeli"], "Turkey": ["turkey", "turkish", "turkiye"],
+    "South Africa": ["south africa", "south african"],
+    "Japan": ["japan", "japanese"], "Hong Kong": ["hong kong", "china", "chinese"], "India": ["india", "indian"],
+    "South Korea": ["korea", "korean", "south korea"], "Taiwan": ["taiwan", "taiwanese"], "Australia": ["australia", "australian"],
+    "Singapore": ["singapore", "singaporean"], "Indonesia": ["indonesia", "indonesian"],
+}
+GROUP_WORDS = {"Gulf": ["gulf", "gcc"]}
 SECTOR_WORDS = {"Technology": ["tech", "technology", "software", "semiconductor", "semiconductors"],
                 "Financial Services": ["bank", "banks", "financial", "financials"], "Energy": ["energy", "oil"],
                 "Healthcare": ["health", "healthcare", "pharma"], "Utilities": ["utility", "utilities"],
@@ -586,10 +602,24 @@ def _tidy_filters(raw):
     if isinstance(markets, str):
         markets = [markets]
     if isinstance(markets, list):
+        from .universe import LEGACY_MARKETS
         known = {m.lower(): m for m in MARKET_WORDS}
+        old = {m.lower(): cs for m, cs in LEGACY_MARKETS.items()}
         picked = [known[str(m).strip().lower()] for m in markets if str(m).strip().lower() in known]
         if picked:
             out["markets"] = list(dict.fromkeys(picked))
+        meant = [c for m in markets for c in old.get(str(m).strip().lower(), [])]  # a model that still says "US" or "Gulf"
+        if meant:
+            out["countries"] = list(dict.fromkeys(meant))
+    countries = raw.get("countries")
+    if isinstance(countries, str):
+        countries = [countries]
+    if isinstance(countries, list):
+        from .universe import COUNTRY_GROUPS, REGION_OF_COUNTRY
+        known = {c.lower(): [c] for c in REGION_OF_COUNTRY} | {g.lower(): cs for g, cs in COUNTRY_GROUPS.items()}
+        picked = [c for x in countries for c in known.get(str(x).strip().lower(), [])]
+        if picked:
+            out["countries"] = list(dict.fromkeys([*out.get("countries", []), *picked]))
     if raw.get("sort") in SORTS:
         out["sort"] = raw["sort"]
     for key in ("sector", "exclude_sector"):
@@ -656,16 +686,22 @@ def _parse_rules(t):
     t = re.sub(r"\b(not|non|no|excluding|except|without)[ -](\w+)", rule_out, t)
     t = re.sub(r"\bdividend growth\b", set_aside, t)
 
-    # "Latin American" holds "American", which isn't the US here
-    not_latin = re.sub(r"\blatin[ -]americ(?:a|an)\b", " ", t)
-    markets = [m for m, words in MARKET_WORDS.items() if _has(not_latin if m == "US" else t, *words)]
+    from .universe import COUNTRY_GROUPS, REGION_OF_COUNTRY
+    # "Latin American", "North American" and "South American" hold "American", which isn't the US there
+    not_latin = re.sub(r"\b(?:latin|north|south)[ -]americ(?:a|an)\b", " ", t)
+    countries = [c for c, words in COUNTRY_WORDS.items() if _has(not_latin if c == "United States" else t, *words)]
+    countries += [c for g, words in GROUP_WORDS.items() if _has(t, *words) for c in COUNTRY_GROUPS[g]]
+    # "South African" holds "African": a region a named country is in isn't asked for as a whole
+    markets = [m for m, words in MARKET_WORDS.items() if _has(t, *words) and not any(REGION_OF_COUNTRY.get(c) == m for c in countries)]
     # "us" on its own is usually the pronoun, as in "show us"
     # ...but before "stocks" or a sector ("US banks", "US tech") it's the country
     nouns = "|".join(["stocks?", "shares", "companies", "market", "equities", "listed", "names"] + [re.escape(w) for ws in SECTOR_WORDS.values() for w in ws])
     if re.search(rf"(?<!show )(?<!give )(?<!find )(?<!tell )(?<!get )(?<!let )\bus[ -](?:[a-z]+ ){{0,2}}(?:{nouns})\b|\bin the us\b", t):
-        markets.insert(0, "US")
+        countries.insert(0, "United States")
     if markets:
         f["markets"] = list(dict.fromkeys(m for m in MARKET_WORDS if m in markets))
+    if countries:
+        f["countries"] = list(dict.fromkeys(countries))
     for sector, words in SECTOR_WORDS.items():
         if _has(t, *words) or (sector == "Real Estate" and "real estate" in t):
             f["sector"] = sector
@@ -704,7 +740,7 @@ def _parse_rules(t):
         f["max_vol"] = 0.25
         f.setdefault("sort", "risk")
 
-    known = RULE_WORDS | FILLER_WORDS | {w for ws in (*MARKET_WORDS.values(), *SECTOR_WORDS.values()) for w in ws}
+    known = RULE_WORDS | FILLER_WORDS | {w for ws in (*MARKET_WORDS.values(), *COUNTRY_WORDS.values(), *GROUP_WORDS.values(), *SECTOR_WORDS.values()) for w in ws}
     ignored += [w for w in re.findall(r"[a-z][a-z/.'-]*", t) if w.strip(".'") not in known]
     if ignored:
         f["ignored"] = list(dict.fromkeys(ignored))

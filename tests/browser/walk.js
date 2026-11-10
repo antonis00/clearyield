@@ -30,9 +30,11 @@ const SLOW = 150000;
   const canvasDrawn = (s) => p.evaluate((x) => { const c = document.querySelector(x); if (!c) return false; const d = c.getContext("2d")?.getImageData(0, 0, c.width, c.height).data; if (!d) return true; for (let i = 3; i < d.length; i += 4) if (d[i]) return true; return false; }, s);
   const research = async (t) => { await p.fill("#search, input[placeholder*='Search']", ""); await p.evaluate((x) => { location.hash = `#research/${encodeURIComponent(x)}`; }, t); await p.waitForFunction((x) => { const e = document.querySelector("#researchEmpty"); if (e && !e.classList.contains("hidden") && e.textContent.trim()) return true; return document.querySelector("#rSym")?.textContent === x && document.querySelector("#researchBody").style.opacity === "1" && !document.querySelector("#newsList .spinner"); }, t, { timeout: SLOW }); await p.waitForTimeout(600); };
 
+  // Live: a non-USD base exercises the currency conversions, and two regions keep the run light on Yahoo: every run
+  // starts with an empty cache, and downloading all 400 symbols each time gets the computer refused for a while.
+  // Set before the first page, whose dashboard would otherwise start scoring every region. Demo covers them all.
+  if (MODE === "live") await p.request.post(`${BASE}/api/settings`, { data: { base_currency: "EUR", regions: ["Europe", "Middle East & Africa"] } });
   await p.goto(BASE, { waitUntil: "load" }); await p.waitForTimeout(600);
-  // A non-USD base exercises the currency conversions
-  if (MODE === "live") await p.evaluate(() => fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base_currency: "EUR" }) }));
   await p.reload(); await p.waitForTimeout(600);
   const meta = await p.evaluate(async () => (await fetch("/api/meta")).json());
   expect(`mode is ${MODE}`, meta.demo === (MODE === "demo"), `base ${meta.settings.base_currency}, AI ${meta.ai}`);
@@ -58,10 +60,12 @@ const SLOW = 150000;
     }
     expect(`research ${t}`, r.price && r.charts > 0 && r.stats >= 2 && !r.bad, `${r.price} | ${r.stance} | ${r.cov}${r.bad ? " | BAD TEXT" : ""}`);
     if (["AAPL", "SPY"].includes(t)) {  // a stock is ranked within its sector, after the page; a fund isn't
-      if (t === "AAPL") await p.waitForFunction(() => /In its sector|too few to rank/.test(document.querySelector("#rPeers").innerText), null, { timeout: SLOW });
+      if (t === "AAPL") await p.waitForFunction(() => /In its sector|too few to rank|being prepared/.test(document.querySelector("#rPeers").innerText), null, { timeout: SLOW });
       const peers = await p.evaluate(() => ({ line: document.querySelector("#rPeers").innerText, factors: [...document.querySelectorAll(".factor .peer")].map((x) => x.innerText).filter(Boolean) }));
+      // live runs start with no sector table, so there it's being prepared in the background; demo builds it at once
+      const preparing = MODE === "live" && /being prepared/.test(peers.line) && peers.factors.length === 0;
       expect(`research ${t}: ${t === "AAPL" ? "ranked within its sector" : "no sector rank for a fund"}`, t === "AAPL"
-        ? (/In its sector: the overall score is better than \d+% of \d+ other/.test(peers.line) && peers.factors.length >= 3 && peers.factors.every((x) => /better than \d+% of \d+|too few/.test(x)))
+        ? (preparing || (/In its sector: the overall score is better than \d+% of \d+ other/.test(peers.line) && peers.factors.length >= 3 && peers.factors.every((x) => /better than \d+% of \d+|too few/.test(x))))
         : (peers.line === "" && peers.factors.length === 0), `${peers.line} | ${peers.factors[0] || ""}`);
       // Ownership: a stock's insiders and institutions, each trade named for what it was; a fund has no such card
       if (t === "AAPL") await p.waitForFunction(() => !/Loading/.test(document.querySelector("#rOwn").innerText), null, { timeout: SLOW });
@@ -175,10 +179,6 @@ const SLOW = 150000;
   // ---- Screener
   await nav("screener");
   await p.check('#scrMarkets input[value="Crypto"]');
-  // Live, only the markets the app began with: every run starts with an empty cache, and downloading all 400 symbols
-  // each time gets the computer refused by Yahoo for a while. Demo mode covers every market.
-  const fewer = ["Asia-Pacific", "Canada", "Latin America", "Africa"];
-  if (MODE === "live") for (const m of fewer) await p.uncheck(`#scrMarkets input[value="${m}"]`);
   await p.fill("#fPe", "25"); await p.fill("#fRoe", "10"); await p.click("#btnScr");
   await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: 400000 }); await p.waitForTimeout(400);
   const scr = await p.evaluate(() => [...document.querySelectorAll("#scrTable tbody tr")].map((r) => r.innerText));
@@ -191,6 +191,14 @@ const SLOW = 150000;
   expect("screener: full universe, nothing failed", allRows >= 89 && !/No data:/.test(await txt("#scrInfo")), `${allRows} rows`);
   const width = await p.evaluate(() => { const t = document.querySelector("#scrTable"); return [t.clientWidth, t.scrollWidth]; });
   expect("screener: Score and Stance on screen at 1440px", width[1] <= width[0], width.join("/"));
+  // A country narrows the screen to it; the Gulf is offered as a group
+  const countries = await p.evaluate(() => [...document.querySelectorAll("#fCountry option")].map((o) => o.value));
+  expect("screener: countries offered, with the Gulf as a group", countries.includes("Gulf") && countries.includes("Qatar") && countries.length > 10, countries.slice(0, 8).join(", "));
+  await p.selectOption("#fCountry", "Qatar"); await p.click("#btnScr");
+  await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
+  const qa = await p.evaluate(() => [...document.querySelectorAll("#scrTable tbody tr td:nth-child(2)")].map((td) => td.innerText.trim()));
+  expect("screener: a country shows only its stocks", qa.length > 0 && qa.every((x) => x === "Qatar") && /Countries: Qatar/.test(await txt("#scrInfo")), `${qa.length} rows | ${qa.slice(0, 3).join(", ")}`);
+  await p.selectOption("#fCountry", "");
   await shot("screener");
   await p.fill("#scrQuery", ""); await p.locator("#scrQuery").pressSequentially("cheap profitable dividend stocks in the gulf");
   expect("screener: you can type in the question box", (await p.inputValue("#scrQuery")) === "cheap profitable dividend stocks in the gulf", await p.inputValue("#scrQuery"));
@@ -307,7 +315,7 @@ const SLOW = 150000;
   expect("journal: delete an entry", !/walk test/.test(await txt("#journalList")));
 
   // ---- Opportunities: four charts from one scoring, each bar opening its stock; the dashboard card leads here
-  if (MODE === "live") await p.evaluate(() => localStorage.setItem("oppMarkets", JSON.stringify(["US", "Europe", "Gulf"])));
+  if (MODE === "live") await p.evaluate(() => localStorage.setItem("oppMarkets", JSON.stringify(["Europe", "Middle East & Africa"])));
   await nav("opportunities");
   await p.waitForFunction(() => /stocks scored/.test(document.querySelector("#oppStatus").innerText), null, { timeout: SLOW });
   await p.waitForTimeout(500);
@@ -429,6 +437,17 @@ const SLOW = 150000;
   const startBase = await p.inputValue("#sBase");
   await p.selectOption("#sBase", startBase === "USD" ? "EUR" : "USD"); await p.locator("[data-w='value']").fill("60"); await saveSettings();
   expect("settings: saved and weights normalised", /Saved/.test(await txt("#settingsMsg")));
+  // Regions you follow: unfollowing one takes it out of the Screener's markets and countries; following it again brings it back
+  const followedNow = MODE === "live" ? 2 : 5;  // live follows two (set at the start)
+  expect("settings: five regions, the followed ones ticked", (await p.locator("#sRegions [data-region]").count()) === 5 && (await p.locator("#sRegions [data-region]:checked").count()) === followedNow);
+  await p.uncheck('#sRegions [data-region="Europe"]'); await saveSettings();
+  // the page then fetches the markets to offer for the new choice
+  await p.waitForFunction(() => ![...document.querySelectorAll("#scrMarkets input")].some((i) => i.value === "Europe"), null, { timeout: SLOW }).catch(() => {});
+  const offered = await p.evaluate(() => ({ markets: [...document.querySelectorAll("#scrMarkets input")].map((i) => i.value), germany: !!document.querySelector('#fCountry option[value="Germany"]') }));
+  expect("settings: an unfollowed region isn't offered", !offered.markets.includes("Europe") && offered.markets.includes("Middle East & Africa") && !offered.germany, offered.markets.join(", "));
+  await p.check('#sRegions [data-region="Europe"]'); await saveSettings();
+  await p.waitForFunction(() => [...document.querySelectorAll("#scrMarkets input")].some((i) => i.value === "Europe"), null, { timeout: SLOW }).catch(() => {});
+  expect("settings: following it again brings it back", await p.evaluate(() => [...document.querySelectorAll("#scrMarkets input")].some((i) => i.value === "Europe")));
   const after = await p.evaluate(async () => (await fetch("/api/portfolio")).json());
   expect("settings: base currency applies to the portfolio", after.base !== startBase && after.total > 0, `${Math.round(pf.total)} ${pf.base} -> ${Math.round(after.total)} ${after.base}`);
   await research("AAPL");
