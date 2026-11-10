@@ -13,7 +13,7 @@ import pandas as pd
 
 from . import data, db, ledger, scoring
 from . import indicators as ind
-from .universe import CORE_FUNDS, REGIONS, region_of, tickers_for
+from .universe import CORE_FUNDS, REGIONS, UNIVERSE, region_of, tickers_for
 
 log = logging.getLogger("stockpilot.insights")
 
@@ -102,13 +102,19 @@ def progress():
     return {"jobs": sorted(jobs, key=lambda j: j["started"]), "pause": data.rate_limited_for()}
 
 
+def _group(t):
+    """Where a ticker counts in the progress: its region for a stock, "ETFs" for a fund (whose region is what it holds,
+    such as Global or Emerging, which would read like more regions), "Crypto" for a coin."""
+    return "ETFs" if t in UNIVERSE.get("ETFs", {}) else region_of(t)
+
+
 def _tracked(tickers, kind):
     """A job entry for a long list, and the function that counts one ticker done; None for a short list."""
     if len(tickers) < TRACK_FROM:
         return None, lambda t: None
     regions = {}
     for t in tickers:
-        regions.setdefault(region_of(t), [0, 0])[1] += 1
+        regions.setdefault(_group(t), [0, 0])[1] += 1
     job = {"id": next(_job_ids), "kind": kind, "done": 0, "total": len(tickers), "started": time.time(), "regions": regions}
     with _jobs_lock:
         _jobs[job["id"]] = job
@@ -116,7 +122,7 @@ def _tracked(tickers, kind):
     def tick(t):
         with _jobs_lock:
             job["done"] += 1
-            job["regions"][region_of(t)][0] += 1
+            job["regions"][_group(t)][0] += 1
     return job, tick
 
 

@@ -114,8 +114,10 @@ function modal(html, onSubmit) {
 
 /* ---------------------------------------------------------------- routing */
 function show(view, push = true) {
+  const other = $(`#view-${view}`).classList.contains("hidden");  // another screen: it opens at its top, not where the last one was scrolled to
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
+  if (other) window.scrollTo(0, 0);
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
   if (view === "research" && state.redrawResearch && state.stock) redrawResearch();
   if (push) {
@@ -218,6 +220,15 @@ async function watchBackground() {
   }
   setTimeout(watchBackground, j ? 1500 : 8000);
 }
+
+// Research: the overall score opens its make-up, the Factor scores card, which lights up briefly to show where it is
+function toFactors() {
+  const card = $("#rFactorsCard");
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash");  // restart the glow on a second click
+}
+$("#rScoreBox").onclick = (e) => { if (!e.target.closest(".info")) toFactors(); };
+$("#rScoreBox").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toFactors(); } };
 
 /* ---------------------------------------------------------------- search */
 (() => {
@@ -393,6 +404,7 @@ $("#refreshDigest").onclick = loadDigest;
 // The range is how far back the chart goes; bars is how much time each candle covers
 const chartUrl = () => `/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}&bars=${state.bars}`;
 async function openStock(t, period) {
+  if (state.ticker !== t.toUpperCase()) window.scrollTo(0, 0);  // another stock starts at the top too, also from Research itself
   state.ticker = t.toUpperCase(); state.period = period || state.period;
   show("research");
   $("#researchEmpty").classList.add("hidden");

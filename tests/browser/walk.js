@@ -185,6 +185,11 @@ const SLOW = 150000;
   expect("research: 1D shows candles within the day, without the daily indicators", intra.n > 0 && intra.panes && (await p.locator("#priceChart canvas").count()) > 0, JSON.stringify(intra));
   await p.locator("#periodSeg button[data-p='1y']").click(); await p.waitForFunction(() => document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
   for (const id of ["#tSma", "#tBb", "#tVol"]) { await p.click(id); await p.waitForTimeout(120); }
+  // The overall score opens its make-up: the Factor scores card, scrolled to just below the search bar and lit up
+  await p.evaluate(() => window.scrollTo(0, 0));
+  await p.click("#rScore"); await p.waitForTimeout(900);
+  const toCard = await p.evaluate(() => ({ top: Math.round(document.querySelector("#rFactorsCard").getBoundingClientRect().top), bar: Math.round(document.querySelector("header.top").getBoundingClientRect().bottom), flash: document.querySelector("#rFactorsCard").classList.contains("flash") }));
+  expect("research: clicking the score goes to the Factor scores", toCard.flash && toCard.top >= toCard.bar && toCard.top - toCard.bar < 40, JSON.stringify(toCard));
   // Each factor explains itself on hover, and the icon doesn't open the drill-down
   await p.locator("#factorList .info").nth(3).hover(); await p.waitForTimeout(150);
   const factorTip = await p.evaluate(() => ({ n: document.querySelectorAll("#factorList .info").length, tip: document.querySelector("#tooltip:not(.hidden)")?.textContent || "", open: document.querySelectorAll(".factor.open").length }));
@@ -236,6 +241,15 @@ const SLOW = 150000;
   await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: 400000 }); await p.waitForTimeout(400);
   const allRows = await p.locator("#scrTable tbody tr").count();
   expect("screener: full universe, nothing failed", allRows >= 89 && !/No data:/.test(await txt("#scrInfo")), `${allRows} rows`);
+  // A row far down the list opens Research at its top, not where the Screener was scrolled to
+  const farRow = p.locator("#scrTable tbody tr").nth(60);
+  await farRow.scrollIntoViewIfNeeded();
+  const scrolledTo = await p.evaluate(() => scrollY), farTicker = (await farRow.locator("td").first().innerText()).trim().split(/\s/)[0];
+  await farRow.click();
+  await p.waitForFunction(() => !document.querySelector("#view-research").classList.contains("hidden"), null, { timeout: SLOW }); await p.waitForTimeout(300);
+  const landed = await p.evaluate(() => scrollY);
+  expect("screener: a row far down opens Research at the top", scrolledTo > 1000 && landed === 0, JSON.stringify({ scrolledTo, landed, farTicker }));
+  await nav("screener");
   const width = await p.evaluate(() => { const t = document.querySelector("#scrTable"); return [t.clientWidth, t.scrollWidth]; });
   expect("screener: Score and Stance on screen at 1440px", width[1] <= width[0], width.join("/"));
   // A country narrows the screen to it; the Gulf is offered as a group
