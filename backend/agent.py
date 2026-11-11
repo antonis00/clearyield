@@ -130,9 +130,11 @@ def screen(filters=None, question=None):
     f = ai._parse_rules(question.lower()) if question else {}
     f = {k: v for k, v in f.items() if k != "ignored"}
     f.update(ai._tidy_filters(filters or {}))
-    for k in ("industry", "exclude_industry"):  # the rules' bank filters, which the model may pass on too
-        if isinstance((filters or {}).get(k), str):
-            f[k] = filters[k]
+    from .universe import INDUSTRIES
+    for k in ("industry", "exclude_industry"):  # part of an industry's name ("Banks", "Insurance"), which the model may pass on
+        v = (filters or {}).get(k)
+        if isinstance(v, str) and k not in f and any(v.strip().lower() in n.lower() for n in INDUSTRIES):
+            f[k] = v.strip()
     d = insights.screen({"filters": f, "markets": f.get("markets") or insights.followed(_settings())}, _settings())
     rows = [{"ticker": r["ticker"], "name": r["name"], "sector": r["sector"], "region": r["region"], "score": _f_num(r["composite"], 1), "stance": r["stance"],
              "pe": _f_x(r["pe"]) if r.get("pe") and r["pe"] > 0 else None, "dividend_yield": _f_pct(r["divYield"], 2), "revenue_growth": _f_pct(r["revGrowth"], 1),
@@ -552,7 +554,7 @@ TOOLS = {
     "get_stock": (get_stock, "One stock, fund or coin: scores, key figures, returns, risk, signals, rank in its sector, latest day.", ONE),
     "screen": (screen, "Find stocks in the app's list (about 400, in the regions followed) by filters, best score first (top 10).",
                S({"filters": {"type": "object", "description": "Any of: markets (" + "/".join(REGIONS) + "), countries, sector, exclude_sector, "
-                                                                     "industry ('Banks'), exclude_industry, max_pe, max_pb, min_div_yield (0.03 = 3%), min_rev_growth, max_de, "
+                                                                     "industry (Yahoo's names, e.g. ['Insurance - Life'], or 'Banks'), exclude_industry, max_pe, max_pb, min_div_yield (0.03 = 3%), min_rev_growth, max_de, "
                                                                      "min_roe, min_score, min_value/quality/growth/momentum/risk (0-100), max_vol, min/max_mcap (USD), "
                                                                      "min/max_rsi, min/max_ret1y, min/max_ytd, min_off_high/max_off_high (below 52w high), max_above_low, "
                                                                      "beat_market, sort (also size, return)"},
