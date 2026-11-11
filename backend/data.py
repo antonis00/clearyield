@@ -364,11 +364,11 @@ def balance(ticker):
 STATEMENT_ROWS = {  # what the score research rebuilds past scores from (scorecheck.py), by Yahoo's row names
     "income_stmt": {"revenue": ("Total Revenue", "Operating Revenue"), "operatingIncome": ("Operating Income",),
                     "netIncome": ("Net Income", "Net Income Common Stockholders"), "eps": ("Diluted EPS", "Basic EPS"),
-                    "ebitda": ("EBITDA", "Normalized EBITDA")},
+                    "ebitda": ("EBITDA", "Normalized EBITDA"), "grossProfit": ("Gross Profit",)},
     "balance_sheet": {"equity": ("Stockholders Equity", "Common Stock Equity"), "totalDebt": ("Total Debt",),
                       "cash": ("Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"),
                       "currentAssets": ("Current Assets",), "currentLiabilities": ("Current Liabilities",),
-                      "shares": ("Ordinary Shares Number",)},  # not "Share Issued": it counts treasury shares
+                      "shares": ("Ordinary Shares Number",), "totalAssets": ("Total Assets",)},  # not "Share Issued": it counts treasury shares
     "cashflow": {"fcf": ("Free Cash Flow",)},
 }
 STATEMENTS_TTL = 14 * 24 * 3600  # annual figures change once a year
@@ -377,7 +377,7 @@ STATEMENTS_TTL = 14 * 24 * 3600  # annual figures change once a year
 def statements(ticker):
     """Every annual statement Yahoo keeps (usually four years), oldest first: one record per fiscal year end with the
     rows in STATEMENT_ROWS, in the statement currency. [] when there are none. Kept 14 days."""
-    key = f"stmts:v1:{ticker}"
+    key = f"stmts:v2:{ticker}"
     cached = db.cache_get(key, STATEMENTS_TTL)
     if cached is not None:
         return cached
@@ -411,11 +411,33 @@ def statements(ticker):
     return out
 
 
+RESEARCH_PRICES_TTL = 3 * 24 * 3600  # the score research reads hundreds of stocks; a few days' old prices don't change it
+
+
+def long_closes(ticker):
+    """Yahoo's full history of adjusted closes (dividends and splits), for the score research's ten years. Kept three
+    days, apart from the 15-minute price cache the pages use, so a research run doesn't download 400 histories."""
+    key = f"long:v1:{ticker}"
+    cached = db.cache_get(key, RESEARCH_PRICES_TTL)
+    if cached is None:
+        if DEMO:
+            return _demo_history(ticker)["Close"]
+        try:
+            df = _fetch_history(ticker, "max")
+            cached = {"index": [d.strftime("%Y-%m-%d") for d in df.index], "close": [float(v) for v in df["Close"]]}
+            db.cache_set(key, cached)
+        except DataError:
+            cached = db.cache_get_stale(key)
+            if cached is None:
+                raise
+    return pd.Series(cached["close"], index=pd.to_datetime(cached["index"]))
+
+
 def plain_closes(ticker):
     """Five years of closes adjusted for splits but not for dividends: the price as it was quoted that day, which a
     past market value needs (adjusted closes take later dividends out of earlier prices). Kept a day."""
     key = f"plain:v1:{ticker}"
-    cached = db.cache_get(key, 24 * 3600)
+    cached = db.cache_get(key, RESEARCH_PRICES_TTL)
     if cached is None:
         if DEMO:
             return _demo_history(ticker)["Close"]
@@ -452,7 +474,8 @@ def _demo_statements(ticker):
         out.append({"end": f"{dt.date.today().year - 4 + i}-12-31", "revenue": rev, "operatingIncome": rev * (margin + 0.05), "netIncome": ni,
                     "eps": ni / shares, "ebitda": rev * (margin + 0.12), "equity": equity, "totalDebt": equity * rng.uniform(0, 1.5),
                     "cash": rev * rng.uniform(0.02, 0.3), "currentAssets": rev * rng.uniform(0.2, 0.6), "currentLiabilities": rev * rng.uniform(0.15, 0.5),
-                    "shares": shares, "fcf": rev * rng.uniform(-0.02, 0.2)})
+                    "shares": shares, "fcf": rev * rng.uniform(-0.02, 0.2), "grossProfit": rev * rng.uniform(0.15, 0.6),
+                    "totalAssets": equity * rng.uniform(1.5, 4)})
     return out
 
 

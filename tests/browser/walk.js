@@ -395,14 +395,17 @@ const SLOW = 150000;
   // hundreds of requests a run, which is what gets the computer refused by Yahoo. tests/test_smoke.py checks the method.
   if (MODE === "demo") {
   await p.click("#btMode button[data-mode=score]");
-  await p.waitForFunction(() => document.querySelector("#scTable table") || /No price|Not enough/.test(document.querySelector("#scTable").innerText), null, { timeout: SLOW * 3 });
+  // The first run builds in the background (every stock in the list): the tab says how far it's got meanwhile
+  await p.waitForFunction(() => /of \d+ stocks/.test(document.querySelector("#scTable").innerText) || document.querySelector("#scTable table"), null, { timeout: SLOW });
+  expect("score check: building in the background says how far it's got", /of \d+ stocks|Rank IC/.test(await txt("#scTable")), await txt("#scTable"));
+  await p.waitForFunction(() => document.querySelector("#scTable table") || /No price|stopped/.test(document.querySelector("#scTable").innerText), null, { timeout: SLOW * 4 });
   const sc = await p.evaluate(() => ({ rows: [...document.querySelectorAll("#scTable tr")].slice(1).map((r) => r.innerText.replace(/\s+/g, " ")),
-    cands: [...document.querySelectorAll("#scCands tr")].slice(1).map((r) => r.innerText.replace(/\s+/g, " ")),
+    cands: [...document.querySelectorAll("#scCands tr")].slice(1).map((r) => r.innerText.replace(/\s+/g, " ")), regions: document.querySelectorAll("#scRegions tr").length,
     meta: document.querySelector("#scMeta").innerText, method: document.querySelector("#scMethod").innerText, caveats: document.querySelectorAll("#scCaveats li").length }));
-  expect("score check: each score with its verdict, rank IC and t", sc.rows.length === 6 && sc.rows.every((r) => /works|suggestive|no evidence|works backwards|not enough data/.test(r))
-    && /^Overall score/.test(sc.rows[5]) && /stocks · \d{4}-\d\d to \d{4}-\d\d/.test(sc.meta) && /rank IC/.test(sc.method) && sc.caveats === 6, JSON.stringify(sc).slice(0, 300));
-  expect("score check: the eight changes tested, each adopted or not with why", sc.cands.length === 8 && sc.cands.every((r) => /adopted/.test(r)) && !/undefined|NaN/.test(sc.cands.join(" ")), sc.cands.slice(0, 2).join(" | "));
-  await p.click(".sc-detail summary"); await p.click('#scKind [data-sc="risk"]'); await p.waitForTimeout(300);
+  expect("score check: each score everywhere, on the deciding and the confirming regions", sc.rows.length === 6 && sc.rows.every((r) => (r.match(/works|suggestive|no evidence|works backwards|not enough data/g) || []).length >= 3)
+    && /^Overall score/.test(sc.rows[5]) && /stocks · \d{4}-\d\d to \d{4}-\d\d/.test(sc.meta) && /rank IC/.test(sc.method) && sc.caveats === 8 && sc.regions === 7, JSON.stringify(sc).slice(0, 300));
+  expect("score check: the three changes tested, each adopted or not with why", sc.cands.length === 3 && sc.cands.every((r) => /adopted/.test(r)) && !/undefined|NaN/.test(sc.cands.join(" ")), sc.cands.slice(0, 2).join(" | "));
+  await p.click('.sc-detail:last-of-type summary'); await p.click('#scKind [data-sc="risk"]'); await p.waitForTimeout(300);
   expect("score check: month by month, a score's IC per date", (await canvasDrawn("#scChart")) && await p.evaluate(() => /Risk \(calm\): rank IC/.test(state.charts.scChart.data.datasets[0].label)));
   await shot("score-check");
   }

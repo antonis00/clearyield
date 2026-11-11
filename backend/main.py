@@ -609,12 +609,11 @@ def tax_csv(year: str = ""):
 
 @app.get("/api/scorecheck")
 def score_check():
-    """Do the scores rank the stocks you follow by what happens next? The research in docs/score-research.md
-    (scorecheck.py). Weights don't enter: the evidence is about each score, and the weights stay yours."""
-    settings = db.get_settings()
-    regions = insights.followed(settings)
-    out = scorecheck.cached_check(universe_tickers(regions), None, ",".join(regions))
-    return ok({**out, "regions": regions})
+    """Do the scores rank stocks by what happens next? The research in docs/score-research.md (scorecheck.py), over
+    every stock in the list whatever Settings follows: the design needs all five regions, to decide on two and confirm
+    on three. Built in the background the first time; until then this says how far it's got. Weights don't enter."""
+    out = scorecheck.cached_or_start(universe_tickers(list(REGIONS)), "all")
+    return ok({**out, "regions": list(REGIONS)})
 
 
 def universe_tickers(regions):
