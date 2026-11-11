@@ -33,7 +33,13 @@ const SLOW = 150000;
   // Live: a non-USD base exercises the currency conversions, and two regions keep the run light on Yahoo: every run
   // starts with an empty cache, and downloading all 400 symbols each time gets the computer refused for a while.
   // Set before the first page, whose dashboard would otherwise start scoring every region. Demo covers them all.
-  if (MODE === "live") await p.request.post(`${BASE}/api/settings`, { data: { base_currency: "EUR", regions: ["Europe", "Middle East & Africa"] } });
+  // BASE ends in a slash, so the address is built with URL: `${BASE}/api/...` made "//api/settings", which isn't the
+  // route, and every live run quietly followed all five regions and downloaded every stock. It stops at once now.
+  if (MODE === "live") {
+    const set = await p.request.post(new URL("api/settings", BASE).href, { data: { base_currency: "EUR", regions: ["Europe", "Middle East & Africa"] } });
+    const regions = set.ok() ? (await set.json()).regions : null;
+    if (JSON.stringify(regions) !== JSON.stringify(["Europe", "Middle East & Africa"])) throw new Error(`live setup: the regions weren't set (${set.status()})`);
+  }
   await p.goto(BASE, { waitUntil: "load" }); await p.waitForTimeout(600);
   await p.reload(); await p.waitForTimeout(600);
   const meta = await p.evaluate(async () => (await fetch("/api/meta")).json());
@@ -97,7 +103,9 @@ const SLOW = 150000;
       const lay = await p.evaluate(() => ({ cls: document.querySelector("#rTags").innerText, fin: !document.querySelector("#finCard").classList.contains("hidden"), dcf: !document.querySelector("#dcfCard").classList.contains("hidden"),
         statsWide: document.querySelector("#statGrid").closest(".card").getBoundingClientRect().width / document.querySelector("#statGrid").closest(".grid2").getBoundingClientRect().width }));
       const company = t === "AAPL";
-      expect(`research ${t}: fundamentals and DCF ${company ? "shown" : "hidden"}`, lay.fin === company && lay.dcf === company && (company ? lay.statsWide < 0.6 : lay.statsWide > 0.99), `width ${lay.statsWide.toFixed(2)}`);
+      const failedWith = await p.evaluate(() => { const e = document.querySelector("#researchEmpty"); return e && !e.classList.contains("hidden") ? e.textContent : ""; });
+      expect(`research ${t}: fundamentals and DCF ${company ? "shown" : "hidden"}`, lay.fin === company && lay.dcf === company && (company ? lay.statsWide < 0.6 : lay.statsWide > 0.99),
+        `width ${lay.statsWide.toFixed(2)}${failedWith ? ` | the page failed: ${failedWith}` : ""}`);
     }
   }
   // A yield reads in percent and an index in points, not in dollars
