@@ -136,7 +136,8 @@ def screen(filters=None, question=None):
     d = insights.screen({"filters": f, "markets": f.get("markets") or insights.followed(_settings())}, _settings())
     rows = [{"ticker": r["ticker"], "name": r["name"], "sector": r["sector"], "region": r["region"], "score": _f_num(r["composite"], 1), "stance": r["stance"],
              "pe": _f_x(r["pe"]) if r.get("pe") and r["pe"] > 0 else None, "dividend_yield": _f_pct(r["divYield"], 2), "revenue_growth": _f_pct(r["revGrowth"], 1),
-             "roe": _f_pct(r["roe"], 1), "return_1y": _f_pct(r["ret1y"], 1), "volatility": _f_pct(r["vol"], 1)} for r in d["rows"][:10]]
+             "roe": _f_pct(r["roe"], 1), "return_1y": _f_pct(r["ret1y"], 1), "volatility": _f_pct(r["vol"], 1),
+             "market_cap": _f_money(r.get("marketCapUsd"), "USD"), "below_52w_high": _f_pct(r.get("fromHigh"), 1), "rsi": _f_num(r.get("rsi"), 0)} for r in d["rows"][:10]]
     return {"filters_used": {k: v for k, v in f.items()}, "matches": len(d["rows"]), "scanned": d["scanned"], "top_10": [{k: v for k, v in r.items() if v is not None} for r in rows],
             "notes": d.get("notes") or None}
 
@@ -551,8 +552,10 @@ TOOLS = {
     "get_stock": (get_stock, "One stock, fund or coin: scores, key figures, returns, risk, signals, rank in its sector, latest day.", ONE),
     "screen": (screen, "Find stocks in the app's list (about 400, in the regions followed) by filters, best score first (top 10).",
                S({"filters": {"type": "object", "description": "Any of: markets (" + "/".join(REGIONS) + "), countries, sector, exclude_sector, "
-                                                                     "industry ('Banks'), exclude_industry, max_pe, min_div_yield (0.03 = 3%), min_rev_growth, max_de, "
-                                                                     "min_roe, min_score, max_vol, sort"},
+                                                                     "industry ('Banks'), exclude_industry, max_pe, max_pb, min_div_yield (0.03 = 3%), min_rev_growth, max_de, "
+                                                                     "min_roe, min_score, min_value/quality/growth/momentum/risk (0-100), max_vol, min/max_mcap (USD), "
+                                                                     "min/max_rsi, min/max_ret1y, min/max_ytd, min_off_high/max_off_high (below 52w high), max_above_low, "
+                                                                     "beat_market, sort (also size, return)"},
                   "question": {"type": "string", "description": "or a short plain question: 'cheap European banks'"}})),
     "get_opportunities": (get_opportunities, "Top ranked stocks; fits_your_portfolio (measured correlation with the holdings: use for diversification); quality on sale.",
                           S({"markets": {"type": "array", "items": {"type": "string", "enum": REGIONS}}})),

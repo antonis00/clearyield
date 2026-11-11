@@ -546,7 +546,12 @@ FILTER_SPEC = {
     "countries": "list of countries within those, e.g. United States, Japan, Qatar, Saudi Arabia, UAE (the Gulf is Qatar, Saudi Arabia, UAE, Kuwait)",
     "max_pe": "number", "min_div_yield": "fraction e.g. 0.03", "min_rev_growth": "fraction", "max_de": "number (x)",
     "min_roe": "fraction", "min_score": "0-100", "min_momentum": "0-100 momentum factor score", "max_vol": "fraction annual volatility",
-    "sort": "one of composite, value, quality, growth, momentum, risk, divYield",
+    "min_value": "0-100 value factor score", "min_quality": "0-100", "min_growth": "0-100 growth factor score", "min_risk": "0-100 risk factor score (higher = calmer)",
+    "min_mcap": "market cap in US dollars, e.g. 10000000000", "max_mcap": "market cap in US dollars", "max_pb": "price to book (x)",
+    "min_rsi": "0-100", "max_rsi": "0-100", "min_ret1y": "past-year return as a fraction, may be negative", "max_ret1y": "fraction, may be negative",
+    "min_ytd": "return since 1 January as a fraction", "max_ytd": "fraction", "min_off_high": "fraction below the 52-week high, e.g. 0.3",
+    "max_off_high": "fraction below the 52-week high", "max_above_low": "fraction above the 52-week low", "beat_market": "true: past-year return above the world index",
+    "sort": "one of composite, value, quality, growth, momentum, risk, divYield, size, return",
     "sector": "one of Technology, Financial Services, Energy, Healthcare, Utilities, Real Estate, Industrials, Communication Services, Basic Materials, Consumer Defensive, Consumer Cyclical",
     "exclude_sector": "a sector from the same list that the request rules out, e.g. 'not tech'",
 }
@@ -554,8 +559,11 @@ FILTER_SPEC = {
 # rules found a value it stands: a model left to choose picks its own, often stricter, limits and empties the screen.
 MEANINGS = ("cheap/undervalued/value: max_pe 18. low debt: max_de 0.5. profitable/quality: min_roe 0.12. dividend/income: "
             "min_div_yield 0.025. growth/growing: min_rev_growth 0.10. momentum/trending: min_momentum 60. low volatility/low "
-            "risk/safe/defensive: max_vol 0.25 (these words describe risk, not a sector). Only set a sector when the request "
-            "names an industry. Use a number the request gives in place of these.")
+            "risk/safe/defensive: max_vol 0.25 (these words describe risk, not a sector). mega cap: min_mcap 200e9. large "
+            "cap/big/blue chip: min_mcap 10e9. mid cap: min_mcap 2e9 and max_mcap 10e9. small cap: max_mcap 2e9. oversold: "
+            "max_rsi 30. overbought: min_rsi 70. near the 52-week high: max_off_high 0.05. near the 52-week low: max_above_low "
+            "0.1. beaten down: min_off_high 0.25. below book value: max_pb 1. beat the market: beat_market true. largest: "
+            "sort size. Only set a sector when the request names an industry. Use a number the request gives in place of these.")
 
 # Regions, and the funds and crypto groups, as the Screener's markets
 MARKET_WORDS = {"North America": ["north america", "north american"], "Europe": ["europe", "european", "eu"],
@@ -594,8 +602,11 @@ FILLER_WORDS = {"stock", "stocks", "share", "shares", "company", "companies", "n
                 "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "give", "get", "tell", "list", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous", "trading", "trades"}
 
 
-FRACTIONS = ("min_div_yield", "min_rev_growth", "min_roe", "max_vol")
-SORTS = ("composite", "value", "quality", "growth", "momentum", "risk", "divYield")
+FRACTIONS = ("min_div_yield", "min_rev_growth", "min_roe", "max_vol", "min_off_high", "max_off_high", "max_above_low")
+RETURNS = ("min_ret1y", "max_ret1y", "min_ytd", "max_ytd")  # shares that may be negative
+SCORES = ("min_score", "min_momentum", "min_value", "min_quality", "min_growth", "min_risk", "min_rsi", "max_rsi")  # 0-100
+NUMBERS = ("max_pe", "max_de", "max_pb", "min_mcap", "max_mcap")
+SORTS = ("composite", "value", "quality", "growth", "momentum", "risk", "divYield", "size", "return")
 SECTORS = [x.strip() for x in FILTER_SPEC["sector"].removeprefix("one of ").split(",")]
 
 
@@ -619,17 +630,19 @@ def _tidy_filters(raw):
     """Keep only what the screener understands, in its units. A small model may write 3 for a 3% yield, give
     numbers as text, or invent keys, so each value is checked rather than trusted."""
     out = {}
-    for k in ("max_pe", "max_de", "min_score", "min_momentum", *FRACTIONS):
+    for k in (*NUMBERS, *SCORES, *FRACTIONS, *RETURNS):
         v = raw.get(k)
         try:
-            v = float(str(v).strip().rstrip("%")) if v not in (None, "", False) else None
+            v = float(str(v).strip().rstrip("%")) if v not in (None, "", False, True) else None
         except ValueError:
             v = None
-        if v is None or v != v or v < 0:
+        if v is None or v != v or (v < 0 and k not in RETURNS) or (k in SCORES and v > 100):
             continue
-        if k in FRACTIONS and v > 1:
+        if (k in FRACTIONS and v > 1) or (k in RETURNS and abs(v) > 5):
             v = v / 100  # "3" or "3%" for a 3% yield
         out[k] = v
+    if raw.get("beat_market") in (True, "true", "yes"):
+        out["beat_market"] = True
     markets = raw.get("markets")
     if isinstance(markets, str):
         markets = [markets]
@@ -703,7 +716,7 @@ def _is_said(key, value, said):
     """Whether a limit's value is a number written in the request (a share as its percentage: 0.04 as 4)."""
     if not isinstance(value, (int, float)):
         return False
-    shown = value * 100 if key in FRACTIONS else value
+    shown = value * 100 if key in FRACTIONS or key in RETURNS else value
     return any(abs(shown - n) < 1e-6 for n in said)
 
 
@@ -717,28 +730,72 @@ _LESS = r"under|below|less than|lower than|cheaper than|at most|max(?:imum)?|up 
 _MORE = r"over|above|more than|higher than|greater than|at least|min(?:imum)?|or (?:more|higher|above|better)|\+|>=?"
 _LESS_RE = re.compile(rf"(?:^|[^a-z])(?:{_LESS})(?![a-z])")
 _MORE_RE = re.compile(rf"(?:^|[^a-z])(?:{_MORE})(?![a-z])")
+# Each entry: the key for a lower limit and for an upper one (None where the screen has no such limit: a minimum P/E
+# isn't offered), the words that name it, the way it points when no word says ("P/E 15" is a maximum), and the kind
+# of number: "share" (4% or 0.04), "return" (a share that may be negative), "money" (US dollars: "$10bn") or "plain".
+# The factor scores come first, so "growth score above 70" isn't read as revenue growth.
 LIMITS = [
-    ("max_pe", r"p/?e(?:\s+ratio)?|price[ /-]to[ /-]earnings(?:\s+ratio)?|earnings multiple", "max", False),
-    ("min_div_yield", r"(?:dividend\s+)?yield(?:s|ing)?|dividends?|pay(?:s|ing)?", "min", True),
-    ("min_rev_growth", r"(?:revenue|sales)\s+growth|grow(?:th|ing)", "min", True),
-    ("min_roe", r"roe|return on equity", "min", True),
-    ("max_de", r"debt[ /-]to[ /-]equity(?:\s+ratio)?|d/e|debt", "max", False),
-    ("max_vol", r"volatility|vol", "max", True),
-    ("min_momentum", r"momentum(?:\s+score)?", "min", False),
-    ("min_score", r"(?:overall\s+|composite\s+)?score", "min", False),
+    (("min_value", None), r"value\s+score", "min", "plain"),
+    (("min_quality", None), r"quality\s+score", "min", "plain"),
+    (("min_growth", None), r"growth\s+score", "min", "plain"),
+    (("min_risk", None), r"(?:risk|safety)\s+score", "min", "plain"),
+    ((None, "max_pe"), r"p/?e(?:\s+ratio)?|price[ /-]to[ /-]earnings(?:\s+ratio)?|earnings multiple", "max", "plain"),
+    ((None, "max_pb"), r"p/?b(?:\s+ratio)?|price[ /-]to[ /-]book(?:\s+ratio)?", "max", "plain"),
+    (("min_div_yield", None), r"(?:dividend\s+)?yield(?:s|ing)?|dividends?|pay(?:s|ing)?", "min", "share"),
+    (("min_rev_growth", None), r"(?:revenue|sales)\s+growth|grow(?:th|ing)", "min", "share"),
+    (("min_roe", None), r"roe|return on equity", "min", "share"),
+    ((None, "max_de"), r"debt[ /-]to[ /-]equity(?:\s+ratio)?|d/e|debt", "max", "plain"),
+    ((None, "max_vol"), r"volatility|vol", "max", "share"),
+    (("min_momentum", None), r"momentum(?:\s+score)?", "min", "plain"),
+    (("min_score", None), r"(?:overall\s+|composite\s+)?score", "min", "plain"),
+    (("min_rsi", "max_rsi"), r"rsi", "max", "plain"),
+    (("min_ret1y", "max_ret1y"), r"(?:1|one)[ -]?y(?:ea)?r\s+return|(?:annual|yearly|past[ -]year|12[ -]month)\s+return|return\s+over\s+(?:the\s+)?(?:past|last)\s+year", "min", "return"),
+    (("min_ytd", "max_ytd"), r"ytd(?:\s+return)?|year[ -]to[ -]date(?:\s+return)?", "min", "return"),
+    (("min_mcap", "max_mcap"), r"market\s+cap(?:itali[sz]ation)?|mcap|market\s+value", "min", "money"),
 ]
 _OP = rf"(?:{_LESS}|{_MORE})"
 _TAIL = r"(?P<after>\s*(?:\+|or (?:more|higher|above|better|less|lower|below|under)\b))?"
+_SCALE_WORDS = {"t": 1e12, "tn": 1e12, "trillion": 1e12, "b": 1e9, "bn": 1e9, "billion": 1e9, "m": 1e6, "mn": 1e6, "million": 1e6}
 
 
-def _reads_as_limit(m, key, share):
+def _reads_as_limit(m, kind):
     """A number is a limit when it says so: a share needs a % or a word like "above" ("top 10 dividend stocks" isn't a
     10% yield), and a number before the metric needs one of those too ("15x earnings" is written "15 pe" and counts)."""
     d = m.groupdict()
-    op = bool(_LESS_RE.search(" " + (d.get("mid") or "") + " ") or _MORE_RE.search(" " + (d.get("mid") or "") + " ") or d.get("op") or d.get("after"))
-    if share and not d.get("pct") and not op:
+    mid = " " + (d.get("mid") or "") + " "
+    op = bool(_LESS_RE.search(mid) or _MORE_RE.search(mid) or d.get("op") or d.get("after"))
+    if kind in ("share", "return") and not d.get("pct") and not op:
         return False
-    return "mid" in d or op or bool(d.get("pct")) or key == "max_pe"
+    if kind == "money" and not d.get("unit") and not op:
+        return False
+    return "mid" in d or op or bool(d.get("pct")) or bool(d.get("unit"))
+
+
+def _value(m, kind, key):
+    n = float(m.group("n"))
+    if kind in ("share", "return"):
+        return n / 100 if m.group("pct") or abs(n) > 1 else n
+    if kind == "money":  # US dollars; a bare number is billions ("market cap above 10")
+        unit = (m.groupdict().get("unit") or "").strip()
+        return n * _SCALE_WORDS[unit] if unit else n * 1e9 if n < 10000 else n
+    return n / 100 if key == "max_de" and m.group("pct") else n
+
+
+# Phrases that carry a number of their own: (pattern, key, how the number becomes the value)
+_PHRASES = [
+    # "down 30% from its high", "at least 25% below the 52-week high", "30% off highs"
+    (r"(?:(?:down|off|fallen|fell|dropped|falling|trading|sitting|at least|more than|over)\s+)*(?P<n>\d+(?:\.\d+)?)\s*%\s*(?:or more\s+)?"
+     r"(?:below|off|from|under|beneath)\s+(?:its\s+|their\s+|the\s+)?(?:52[ -]?(?:week|wk)\s+|(?:1|one)[ -]year\s+|yearly\s+|annual\s+)?highs?\b",
+     "min_off_high", lambda n: n / 100),
+    (r"within\s+(?P<n>\d+(?:\.\d+)?)\s*%\s+of\s+(?:its\s+|their\s+|the\s+|a\s+)?(?:52[ -]?(?:week|wk)\s+|(?:1|one)[ -]year\s+)?highs?\b", "max_off_high", lambda n: n / 100),
+    (r"within\s+(?P<n>\d+(?:\.\d+)?)\s*%\s+of\s+(?:its\s+|their\s+|the\s+|a\s+)?(?:52[ -]?(?:week|wk)\s+|(?:1|one)[ -]year\s+)?lows?\b", "max_above_low", lambda n: n / 100),
+    # "up 20% over the past year", "fell 30% in the last 12 months"; "this year" is since 1 January
+    (r"(?P<dir>up|gained|rose|risen|returned|climbed|down|fell|fallen|lost|dropped|declined)\s+(?:(?:at least|more than|over|by)\s+)?(?P<n>\d+(?:\.\d+)?)\s*%\s+"
+     r"(?:or more\s+)?(?:(?:over|in|during)\s+)?(?:the\s+)?(?:past|last)\s+(?:year|12 months|twelve months)\b", "ret1y", None),
+    (r"(?P<dir>up|gained|rose|risen|returned|climbed|down|fell|fallen|lost|dropped|declined)\s+(?:(?:at least|more than|over|by)\s+)?(?P<n>\d+(?:\.\d+)?)\s*%\s+"
+     r"(?:or more\s+)?(?:(?:so far\s+)?this\s+year|year[ -]to[ -]date|ytd)\b", "ytd", None),
+]
+_DOWN_WORDS = ("down", "fell", "fallen", "lost", "dropped", "declined")
 
 
 def _typed_limits(t):
@@ -749,27 +806,70 @@ def _typed_limits(t):
     t = re.sub(r"(\d+(?:\.\d+)?)\s*(?:x|times)\s+(?:(?:trailing|forward)\s+)?(?:earnings|eps|profits?)\b", r"\1 pe", t)
     t = re.sub(rf"\b({_LESS})\s*(\d+(?:\.\d+)?)\s*x\b", r"\1 \2 pe", t)
     found, aside = {}, []
+    for pattern, key, conv in _PHRASES:
+        if m := re.search(pattern, t):
+            n = float(m.group("n"))
+            if conv:
+                found[key] = conv(n)
+            else:  # a return: "up 20%" is at least +20%, "down 30%" at most -30%
+                down = m.group("dir") in _DOWN_WORDS
+                found[("max_" if down else "min_") + key] = (-n if down else n) / 100
+            t = t[:m.start()] + " " + t[m.end():]
     stop = r"(?!\b(?:and|with|but)\b)[^\d\n,;]"
-    for key, subj, way, share in LIMITS:
-        if key == "min_score":  # "quality score" is a factor's, not the overall score
-            subj = r"(?<!value )(?<!quality )(?<!growth )(?<!momentum )(?<!risk )" + f"(?:{subj})"
-        forms = (rf"\b(?:{subj})\b(?P<mid>{stop}{{0,25}}?)(?P<n>\d+(?:\.\d+)?)\s*(?P<pct>%)?{_TAIL}",
-                 rf"(?:(?P<op>{_OP})\s*)?(?P<n>\d+(?:\.\d+)?)\s*(?P<pct>%)?{_TAIL}\s*(?:(?!(?:and|with|but|or)\b)[a-z]+\s+){{0,2}}?\b(?:{subj})\b")
+    for (lo, hi), subj, way, kind in LIMITS:
+        if lo == "min_score":  # "quality score" is a factor's, not the overall score
+            subj = r"(?<!value )(?<!quality )(?<!growth )(?<!momentum )(?<!risk )(?<!safety )" + f"(?:{subj})"
+        sign = "-?" if kind == "return" else ""
+        unit = rf"(?P<unit>\s*(?:{'|'.join(sorted(_SCALE_WORDS, key=len, reverse=True))})\b)?" if kind == "money" else ""
+        cash = r"\$?" if kind == "money" else ""
+        num = rf"{cash}(?P<n>{sign}\d+(?:\.\d+)?){unit}\s*(?P<pct>%)?"
+        forms = (rf"\b(?:{subj})\b(?P<mid>{stop}{{0,25}}?){num}{_TAIL}",
+                 rf"(?:(?P<op>{_OP})\s*)?{num}{_TAIL}\s*(?:(?!(?:and|with|but|or)\b)[a-z]+\s+){{0,2}}?\b(?:{subj})\b")
         for form in forms:
-            m = next((m for m in re.finditer(form, t) if _reads_as_limit(m, key, share)), None)
+            m = next((m for m in re.finditer(form, t) if _reads_as_limit(m, kind)), None)
             if not m:
                 continue
-            ops = (m.groupdict().get("mid") or "") + " " + (m.groupdict().get("op") or "") + " " + (m.group("after") or "")
+            d = m.groupdict()
+            ops = (d.get("mid") or "") + " " + (d.get("op") or "") + " " + (d.get("after") or "")
             points = "max" if _LESS_RE.search(ops) else "min" if _MORE_RE.search(ops) else way
-            n = float(m.group("n"))
-            v = n / 100 if share and (m.group("pct") or n > 1) else n / 100 if key == "max_de" and m.group("pct") else n
-            if points != way or (key in ("min_score", "min_momentum") and n > 100):
-                aside.append((key, " ".join(m.group(0).split())))  # "yield under 2%" asks for what the screen doesn't filter
+            key = lo if points == "min" else hi
+            v = _value(m, kind, key or lo or hi)
+            if key is None or (key in SCORES and v > 100):
+                aside.append((lo or hi, " ".join(m.group(0).split())))  # "yield under 2%" asks for what the screen doesn't filter
             else:
                 found[key] = v
             t = t[:m.start()] + " " + t[m.end():]
             break
     return found, aside, t
+
+
+# Words with a defined meaning (MEANINGS) for the limits added with them: size, the 52-week range, RSI, book value
+_WORD_LIMITS = [
+    (r"\bmega[ -]?caps?\b", {"min_mcap": 200e9}),
+    (r"\b(?:large[ -]?caps?|big[ -]?caps?|blue[ -]chips?|big (?=pharma|tech|banks?|oil|companies|names))\b", {"min_mcap": 10e9}),
+    (r"\bmid[ -]?caps?\b", {"min_mcap": 2e9, "max_mcap": 10e9}),
+    (r"\bsmall[ -]?caps?\b", {"max_mcap": 2e9}),
+    (r"\boversold\b", {"max_rsi": 30}),
+    (r"\boverbought\b", {"min_rsi": 70}),
+    # "near their highs", "at 52-week lows", "near the low." but not "at low valuations" or "near high yield"
+    (r"\b(?:near|close to|at|hitting|making)\s+(?:its\s+|their\s+|the\s+|new\s+)?(?:(?:52[ -]?(?:week|wk)|(?:1|one)[ -]year|yearly)\s+highs?\b|highs\b|high(?=\s*(?:$|[,.;])))", {"max_off_high": 0.05}),
+    (r"\b(?:near|close to|at|hitting|making)\s+(?:its\s+|their\s+|the\s+|new\s+)?(?:(?:52[ -]?(?:week|wk)|(?:1|one)[ -]year|yearly)\s+lows?\b|lows\b|low(?=\s*(?:$|[,.;])))", {"max_above_low": 0.10}),
+    (r"\bbeaten[ -]down\b|\bfallen angels?\b", {"min_off_high": 0.25}),
+    (r"\b(?:below|under|beneath)\s+(?:its\s+|their\s+)?book(?:\s+value)?\b", {"max_pb": 1.0}),
+    (r"\b(?:beat(?:s|ing)?|outperform(?:s|ed|ing)?)\s+the\s+(?:market|world|index)\b|\bmarket[ -]beat(?:ers|ing)\b|\boutperformers\b", {"beat_market": True}),
+    (r"\b(?:largest|biggest)\b", {"sort": "size"}),
+    (r"\b(?:best|top)[ -]performing\b|\bbest performers\b|\bwinners\b", {"sort": "return"}),
+]
+
+
+def _word_limits(t):
+    found = {}
+    for pattern, limits in _WORD_LIMITS:
+        if re.search(pattern, t):
+            for k, v in limits.items():
+                found.setdefault(k, v)
+            t = re.sub(pattern, " ", t)
+    return found, t
 
 
 def _parse_rules(t):
@@ -804,6 +904,10 @@ def _rules(t):
     typed, aside, t = _typed_limits(t)
     f.update(typed)
     ignored += [phrase for _, phrase in aside]
+    worded, t = _word_limits(t)
+    for k, v in worded.items():
+        if k not in typed and k not in dict(aside) and k not in f:
+            f[k] = v
 
     from .universe import COUNTRY_GROUPS, REGION_OF_COUNTRY
     # "Latin American", "North American" and "South American" hold "American", which isn't the US there
