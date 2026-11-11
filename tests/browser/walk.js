@@ -722,6 +722,7 @@ const SLOW = 150000;
   expect("settings: start with Windows turns on at once", stOn && /sign in to Windows/.test(await txt("#toast")) && /No unsaved|Saved/.test(await txt("#settingsMsg")), await txt("#toast"));
   await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/startup"), { timeout: SLOW }), p.click("#startupOpt .switch")]); await p.waitForTimeout(200);
   expect("settings: and off again", !(await p.evaluate(async () => (await (await fetch("/api/startup")).json()).enabled)) && !(await p.isChecked("#sStartup")));
+  expect("settings: automatic weekly backups, with the latest", /Backed up automatically every week to \S+\\backups, the last 8 kept · latest \d{4}-\d\d-\d\d/.test(await txt("#autoBackupNote")), await txt("#autoBackupNote"));
   // The save card says when something is unsaved, and Discard puts the saved values back
   const saveMsg = () => txt("#settingsMsg");
   const asiaWas = await p.isChecked('#sRegions [data-region="Asia-Pacific"]');

@@ -1765,6 +1765,8 @@ function loadSettings() {
   renderTileChoices(new Set(s.dashboard_tiles));
   $("#sEmail").value = s.alert_email || ""; $("#sEmailOn").checked = !!s.email_alerts;
   emailSwitched(); renderEmailStatus(); markUnsaved();
+  const ab = state.meta.autoBackup;
+  $("#autoBackupNote").textContent = ab ? `Backed up automatically every week to ${ab.folder.split(/[\\/]/).slice(-2).join("\\")}, the last ${ab.keep} kept${ab.last ? ` · latest ${ab.last}` : ""}.` : "";
   const st = state.meta.startup;
   $("#startupOpt").classList.toggle("hidden", !st?.supported); $("#sStartup").checked = !!st?.enabled;
 }

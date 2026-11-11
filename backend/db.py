@@ -214,6 +214,49 @@ def export_user_data():
     return out
 
 
+# ---- automatic backups ----
+# The same file "Download backup" gives, written once a week beside the database, the last AUTO_KEEP kept: years of
+# entries shouldn't hang on one file and on remembering to download a copy. Restore any of them with "Restore from file".
+AUTO_EVERY_DAYS = 7
+AUTO_KEEP = 8
+AUTO_PREFIX = "clearyield-auto-"
+
+
+def backup_dir():
+    return DB_PATH.parent / "backups"
+
+
+def auto_backups():
+    """The automatic backups there are, newest first."""
+    d = backup_dir()
+    return sorted(d.glob(f"{AUTO_PREFIX}*.json"), key=lambda p: p.name, reverse=True) if d.exists() else []
+
+
+def auto_backup(now=None, force=False):
+    """Write this week's backup when the newest is AUTO_EVERY_DAYS old (or there's none), then keep the newest AUTO_KEEP.
+    Returns the file written, or None. Written to a temporary name first, so a crash never leaves half a backup."""
+    now = now or time.time()
+    have = auto_backups()
+    if have and not force and now - have[0].stat().st_mtime < AUTO_EVERY_DAYS * 86400:
+        return None
+    d = backup_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{AUTO_PREFIX}{time.strftime('%Y-%m-%d', time.localtime(now))}.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(export_user_data()), encoding="utf-8")
+    os.replace(tmp, path)
+    os.utime(path, (now, now))
+    for old in auto_backups()[AUTO_KEEP:]:
+        old.unlink(missing_ok=True)
+    return path
+
+
+def auto_backup_status():
+    have = auto_backups()
+    return {"last": time.strftime("%Y-%m-%d", time.localtime(have[0].stat().st_mtime)) if have else None, "count": len(have),
+            "folder": str(backup_dir()), "everyDays": AUTO_EVERY_DAYS, "keep": AUTO_KEEP}
+
+
 def read_backup(backup):
     """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
     if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, BACKUP_VERSION):

@@ -1192,6 +1192,42 @@ def test_tax_year_is_hand_calculated():
     _reset()
 
 
+def test_automatic_backups():
+    """A backup a week beside the database, the last 8 kept, written whole or not at all, and each one restores."""
+    import json
+    import shutil
+    import time
+
+    from backend import db
+    _reset()
+    shutil.rmtree(db.backup_dir(), ignore_errors=True)
+    with TestClient(app) as c:  # starting the app writes the first one
+        st = c.get("/api/meta").json()["autoBackup"]
+        assert st["count"] == 1 and st["last"] == time.strftime("%Y-%m-%d") and st["keep"] == 8, st
+        c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "shares": 3, "price": 100})
+        c.post("/api/settings", json={"base_currency": "EUR"})
+    t0 = time.time()
+    assert db.auto_backup(now=t0 + 3600) is None, "not again within the week"
+    first = db.auto_backup(now=t0 + 8 * 86400)
+    assert first and first.name == f"clearyield-auto-{time.strftime('%Y-%m-%d', time.localtime(t0 + 8 * 86400))}.json"
+    saved = json.loads(first.read_text(encoding="utf-8"))
+    assert saved["transactions"][0]["ticker"] == "AAPL" and saved["settings"]["base_currency"] == "EUR" and saved["version"] == db.BACKUP_VERSION
+    assert not list(db.backup_dir().glob("*.tmp")), "no half-written file left"
+    for week in range(2, 12):
+        assert db.auto_backup(now=t0 + 8 * 86400 + week * 7 * 86400)
+    have = db.auto_backups()
+    assert len(have) == db.AUTO_KEEP and have[0].name > have[-1].name, [h.name for h in have]
+    assert first not in have, "the oldest went first"
+
+    # Any of them restores, like a downloaded backup
+    with TestClient(app) as c:
+        c.post("/api/transactions", json={"ticker": "MSFT", "kind": "buy", "shares": 1, "price": 100})
+        assert c.post("/api/backup/restore", json=json.loads(have[0].read_text(encoding="utf-8"))).status_code == 200
+        assert [t["ticker"] for t in c.get("/api/transactions").json()] == ["AAPL"]
+    shutil.rmtree(db.backup_dir(), ignore_errors=True)
+    _reset()
+
+
 def test_journal_stops_work_for_any_ticker():
     """A stop or target applies whether or not the ticker is held or watched, without adding it to the digest's moves."""
     from fastapi.testclient import TestClient
