@@ -331,6 +331,14 @@ const SLOW = 150000;
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
   expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs a date on every purchase and sale/.test(await txt("#pfKpis")), await txt("#pfKpis"));
   expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
+  // Tax year: the 2025 sale and dividend, in the base currency, with the CSV for that year
+  await p.waitForFunction(() => /2025/.test(document.querySelector("#taxYear")?.value || "") && document.querySelector("#taxSales tbody tr"), null, { timeout: SLOW });
+  const taxCard = await p.evaluate(() => ({ text: document.querySelector("#taxCard").innerText.replace(/\s+/g, " "), csv: document.querySelector("#taxCsv").getAttribute("href"),
+    sales: document.querySelectorAll("#taxSales tbody tr").length }));
+  expect("portfolio: tax year shows the sale, the dividend and where it came from", taxCard.sales === 1 && /QNBK\.QA/.test(taxCard.text) && /Qatar/i.test(taxCard.text)
+    && /Net realised/i.test(taxCard.text) && taxCard.csv === "/api/tax.csv?year=2025" && !/undefined|NaN/.test(taxCard.text), taxCard.text.slice(0, 200));
+  const csv = await p.evaluate(async () => (await fetch("/api/tax.csv?year=2025")).text());
+  expect("portfolio: the tax CSV lists the year's lines", /^Sales,2025/.test(csv) && /2025-06-02,QNBK\.QA/.test(csv), csv.split("\n").slice(0, 3).join(" | "));
   expect("portfolio: look-through adds up", Math.abs(Object.values(led.allocation.sectorLookThrough).reduce((a, b) => a + b, 0) - led.total) < 1e-6, Object.keys(led.allocation.sectorLookThrough).slice(0, 4).join(", "));
   await shot("ledger");
   await p.click("#pfTable thead th:nth-child(6)"); await p.waitForTimeout(200);

@@ -93,10 +93,10 @@ _trust_windows_certificates()
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
 from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, scorecheck, simulate, startup  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, scorecheck, simulate, startup, tax  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
 
@@ -573,6 +573,26 @@ def fx(src: str = "EUR", dst: str = "USD"):
 def progress():
     """How far the long scorings under way have got (the day's first downloads), for the page's loader."""
     return ok(insights.progress())
+
+
+@app.get("/api/tax")
+def tax_year(year: str = ""):
+    """A tax year from the ledger: gains and losses on sales and the dividends received, in the base currency (tax.py)."""
+    if year and not (year.isdigit() and len(year) == 4):
+        raise HTTPException(400, "The year must look like 2026.")
+    try:
+        return ok(tax.summary(db.get_settings(), year or None))
+    except ledger.LedgerError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/tax.csv")
+def tax_csv(year: str = ""):
+    if year and not (year.isdigit() and len(year) == 4):
+        raise HTTPException(400, "The year must look like 2026.")
+    s = tax.summary(db.get_settings(), year or None)
+    return Response(tax.to_csv(s), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="clearyield-tax-{s["year"]}.csv"'})
 
 
 @app.get("/api/scorecheck")

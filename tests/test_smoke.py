@@ -1150,6 +1150,48 @@ def test_fund_costs_are_hand_calculated():
     _reset()
 
 
+def test_tax_year_is_hand_calculated():
+    """Sales matched first in, first out, each side at its own date's rate; dividends by country with the usual
+    source tax; a spreadsheet of the year's lines."""
+    from backend import data
+    _reset()
+    with TestClient(app) as c:
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        assert post(ticker="AAPL", kind="buy", date="2024-01-10", shares=10, price=100).status_code == 200
+        assert post(ticker="AAPL", kind="buy", date="2024-06-03", shares=5, price=120).status_code == 200
+        assert post(ticker="AAPL", kind="sell", date="2025-03-03", shares=12, price=150).status_code == 200  # 10 from the first lot, 2 from the second
+        assert post(ticker="AAPL", kind="dividend", date="2025-05-01", amount=50).status_code == 200
+        assert post(ticker="AAPL", kind="sell", date="2026-02-02", shares=3, price=90).status_code == 200  # the last 3, at a loss
+        c.post("/api/settings", json={"base_currency": "USD"})
+        y25 = c.get("/api/tax?year=2025").json()
+        assert y25["years"] == ["2026", "2025"] and len(y25["sales"]) == 2, y25["years"]
+        assert abs(y25["gains"] - 560) < 1e-9 and y25["losses"] == 0 and abs(y25["net"] - 560) < 1e-9
+        assert abs(y25["longNet"] - 500) < 1e-9 and abs(y25["shortNet"] - 60) < 1e-9, "only the first lot was held over a year"
+        assert [s["heldDays"] for s in y25["sales"]] == [418, 273]
+        assert abs(y25["dividendTotal"] - 50) < 1e-9 and y25["dividendsByCountry"][0]["country"] == "United States"
+        assert "W-8BEN" in y25["dividendsByCountry"][0]["withholding"] and len(y25["caveats"]) == 3
+        y26 = c.get("/api/tax?year=2026").json()
+        assert abs(y26["losses"] + 90) < 1e-9 and y26["gains"] == 0 and y26["dividends"] == []
+        assert c.get("/api/tax").json()["year"] == "2026", "the newest year by default"
+        assert c.get("/api/tax?year=20x5").status_code == 400
+
+        # In euros, each side at its own date's rate, so the dollar's move is part of the gain
+        c.post("/api/settings", json={"base_currency": "EUR"})
+        eur = c.get("/api/tax?year=2025").json()
+        r = lambda d: data.fx_on("USD", "EUR", d)  # noqa: E731
+        expected = 10 * (150 * r("2025-03-03") - 100 * r("2024-01-10")) + 2 * (150 * r("2025-03-03") - 120 * r("2024-06-03"))
+        assert abs(eur["net"] - expected) < 1e-6 and abs(eur["dividendTotal"] - 50 * r("2025-05-01")) < 1e-9, (eur["net"], expected)
+        assert all(s["exact"] for s in eur["sales"]) and eur["approximate"] == []
+
+        csv_text = c.get("/api/tax.csv?year=2025")
+        assert csv_text.status_code == 200 and 'filename="clearyield-tax-2025.csv"' in csv_text.headers["content-disposition"]
+        lines = csv_text.text.splitlines()
+        assert lines[1].startswith("Date sold,Ticker") and lines[2].startswith("2025-03-03,AAPL") and f"{eur['net']:.2f}" in lines[4], lines[:5]
+        assert any(line.startswith("2025-05-01,AAPL") for line in lines)
+        c.post("/api/settings", json={"base_currency": "USD"})
+    _reset()
+
+
 def test_journal_stops_work_for_any_ticker():
     """A stop or target applies whether or not the ticker is held or watched, without adding it to the digest's moves."""
     from fastapi.testclient import TestClient
