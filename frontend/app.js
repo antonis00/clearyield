@@ -1288,6 +1288,7 @@ async function loadDashOpp() {
 /* ---------------------------------------------------------------- portfolio */
 async function loadPortfolio() {
   const t = $("#pfTable"); loading(t);
+  loadTax($("#taxYear").value || "");  // alongside, keeping the year shown
   // What the funds cost a year, taken from their prices: shown only when you hold a fund
   const fundCostKpi = (p) => {
     const c = p.fundCosts;
@@ -1501,6 +1502,36 @@ $$("#btMode button").forEach((b) => b.onclick = () => setBtMode(b.dataset.mode))
 function btMode() { try { const m = localStorage.getItem("btMode"); return ["portfolio", "score"].includes(m) ? m : "single"; } catch { return "single"; } }
 setBtMode(btMode(), false);
 function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) => toast(e.message)); if (btMode() === "score") loadScoreCheck(); }
+
+/* ---------------------------------------------------------------- tax year */
+// A calendar year's sales (gains and losses, first in, first out) and dividends, in the base currency (tax.py)
+async function loadTax(year) {
+  let t;
+  try { t = await api(`/api/tax${year ? `?year=${year}` : ""}`); } catch (e) { $("#taxKpis").innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
+  const b = t.base, years = t.years.length ? t.years : [t.year];
+  $("#taxYear").innerHTML = years.map((y) => `<option ${y === t.year ? "selected" : ""}>${esc(y)}</option>`).join("");
+  $("#taxYear").onchange = () => loadTax($("#taxYear").value);
+  $("#taxCsv").href = `/api/tax.csv?year=${encodeURIComponent(t.year)}`;
+  if (!t.sales.length && !t.dividends.length) {
+    $("#taxKpis").innerHTML = `<div class="muted">No sales or dividends in ${esc(t.year)}.</div>`;
+    ["#taxSales", "#taxDivs", "#taxNotes"].forEach((id) => { $(id).innerHTML = ""; });
+    return;
+  }
+  $("#taxKpis").innerHTML = [["Gains", money(t.gains, b, 0)], ["Losses", money(t.losses, b, 0)], ["Net realised", `<span class="${cls(t.net)}">${money(t.net, b, 0)}</span>`,
+    t.sales.some((r) => r.long) ? `${money(t.longNet, b, 0)} on holdings over a year` : ""], ["Dividends received", money(t.dividendTotal, b, 0)]]
+    .map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
+  table($("#taxSales"), [
+    { k: "date", label: "Sold" }, { k: "ticker", label: "Ticker", fmt: symCell }, { k: "shares", label: "Shares", num: 1, fmt: (v) => num(v, v < 1 ? 4 : 2) },
+    { k: "bought", label: "Bought", fmt: (v) => v ? esc(v) : `<span class="muted">unknown</span>` },
+    { k: "costBase", label: `Cost (${esc(b)})`, num: 1, fmt: (v) => money(v, b, 0) }, { k: "proceeds", label: `Proceeds (${esc(b)})`, num: 1, fmt: (v) => money(v, b, 0) },
+    { k: "gain", label: "Gain", num: 1, fmt: (v, r) => `<span class="${cls(v)}">${money(v, b, 0)}</span>${r.exact ? "" : ' <span class="pill warn" title="A date\'s rate was missing: today\'s rate was used">approx.</span>'}` },
+  ], t.sales, { stock: (r) => r.ticker, empty: `No sales in ${esc(t.year)}.` });
+  $("#taxDivs").innerHTML = t.dividendsByCountry.length ? `<table><tr><th>Dividends from</th><th>Holdings</th><th class="num">Received (${esc(b)})</th><th>Usually withheld at source</th></tr>
+    ${t.dividendsByCountry.map((c) => `<tr><td>${esc(c.country)}</td><td>${esc(c.tickers.join(", "))}</td><td class="num">${money(c.amount, b, 0)}</td>
+      <td class="muted sm">${esc(c.withholding || "Check with your broker what was withheld")}</td></tr>`).join("")}</table>` : "";
+  $("#taxNotes").innerHTML = [...(t.approximate.length ? [`Approximate for ${t.approximate.join(", ")}: a date's exchange rate was missing, so today's was used.`] : []), ...t.caveats]
+    .map((c) => `<li>${esc(c)}</li>`).join("");
+}
 
 /* ---------------------------------------------------------------- fund costs */
 // Each fund's yearly cost: yours, from its factsheet, stands over Yahoo's (which is missing for many European funds)
