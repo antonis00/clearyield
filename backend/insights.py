@@ -29,6 +29,34 @@ def multi_year_growth(financials, key, years=3):
     return (rows[-1][1] / rows[0][1]) ** (1 / span) - 1 if span > 0 else None
 
 
+def fill_from_statements(t, inf, fin):
+    """Ratios Yahoo leaves empty, worked out from the company's own annual statements where they're there: free cash
+    flow from the cash flow statement, debt / equity and the current ratio from the balance sheet (0 debt when Yahoo
+    says the total debt is nil, which is when it leaves the ratio empty). Each one filled is named in `statementYears`
+    with its year, so the score shows where it came from. Banks are left alone: those three aren't scored for banks."""
+    if "bank" in (inf.get("industry") or "").lower():
+        return inf
+    out, years = dict(inf), {}
+    if out.get("freeCashflow") is None:
+        latest = next((r for r in reversed(fin or []) if r.get("fcf") is not None), None)
+        if latest:
+            out["freeCashflow"], years["freeCashflow"] = latest["fcf"], latest["year"]
+    if out.get("debtToEquity") is None or out.get("currentRatio") is None:
+        need_sheet = (out.get("debtToEquity") is None and out.get("totalDebt") != 0) or out.get("currentRatio") is None
+        bal = data.balance(t) if need_sheet else {}
+        if out.get("debtToEquity") is None:
+            debt = 0.0 if out.get("totalDebt") == 0 else bal.get("totalDebt")
+            if debt is not None and (bal.get("equity") or 0) > 0:
+                out["debtToEquity"], years["debtToEquity"] = debt / bal["equity"], bal["year"]
+            elif debt == 0.0:
+                out["debtToEquity"], years["debtToEquity"] = 0.0, "no debt"
+        if out.get("currentRatio") is None and bal.get("currentAssets") is not None and (bal.get("currentLiabilities") or 0) > 0:
+            out["currentRatio"], years["currentRatio"] = bal["currentAssets"] / bal["currentLiabilities"], bal["year"]
+    if years:
+        out["statementYears"] = years
+    return out
+
+
 def evaluate_ticker(t, settings):
     full = data.history(t, "5y")
     inf = data.info(t)
@@ -36,7 +64,7 @@ def evaluate_ticker(t, settings):
         # Growth over several years of annual statements, not one quarter against a year before: a single quarter
         # read an oil-price swing as +40% growth for companies whose revenue shrank each year since 2022
         fin = data.financials(t)
-        inf = {**inf, "revenueGrowth3y": multi_year_growth(fin, "revenue"), "earningsGrowth3y": multi_year_growth(fin, "netIncome")}
+        inf = {**fill_from_statements(t, inf, fin), "revenueGrowth3y": multi_year_growth(fin, "revenue"), "earningsGrowth3y": multi_year_growth(fin, "netIncome")}
     sc = scoring.evaluate(inf, full["Close"], settings.get("weights"))
     return full, inf, sc
 

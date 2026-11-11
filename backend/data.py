@@ -334,6 +334,33 @@ def asset_class(quote_type):
     return {"EQUITY": "Stocks", "ETF": "ETFs", "MUTUALFUND": "ETFs", "CRYPTOCURRENCY": "Crypto"}.get(quote_type, "Other")
 
 
+def balance(ticker):
+    """The latest annual balance sheet's debt, equity, current assets and current liabilities (statement currency), for
+    the ratios Yahoo leaves empty (insights.fill_from_statements). {} when there is none. Asked only for the few stocks
+    that need it, so it adds little to Yahoo's load."""
+    key = f"bal:{ticker}"
+    cached = db.cache_get(key, TTL["fin"])
+    if cached is not None:
+        return cached
+    if DEMO:
+        return {}
+    names = {"totalDebt": "Total Debt", "equity": "Stockholders Equity", "currentAssets": "Current Assets", "currentLiabilities": "Current Liabilities"}
+    try:
+        bs = _yf().Ticker(ticker).balance_sheet
+        if bs is None or bs.empty:
+            raise ValueError("no balance sheet")
+        latest = max(c for c in bs.columns if bs[c].notna().any())
+        out = {"year": str(pd.Timestamp(latest).year), **{k: _num(bs.at[n, latest]) if n in bs.index else None for k, n in names.items()}}
+    except Exception as e:
+        log.info("no balance sheet for %s: %s", ticker, e)
+        out = db.cache_get_stale(key) or {}
+        if not out:  # as with the other statements: retry within the hour, since a rate limit looks the same
+            db.cache_set(key, {}, ts=time.time() - TTL["fin"] + 3600)
+        return out
+    db.cache_set(key, out)
+    return out
+
+
 def financials(ticker):
     """Annual revenue / net income / free cash flow, oldest first."""
     key = f"fin:{ticker}"

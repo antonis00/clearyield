@@ -288,6 +288,10 @@ def brief_data(ctx):
     cur, fin_cur = i.get("currency") or "", i.get("financialCurrency") or i.get("currency") or ""
     price = ctx.get("price")
     target = i.get("targetMeanPrice")
+    # A figure worked out from the annual statements, where Yahoo had none, says so (insights.fill_from_statements)
+    yrs = i.get("statementYears") or {}
+    from_sheet = lambda label, k: label if k not in yrs else f"{label}, no debt reported" if yrs[k] == "no debt" else f"{label}, from the {yrs[k]} annual statements"  # noqa: E731
+    fcf_label = f"Free cash flow, {yrs['freeCashflow']} annual statement" if "freeCashflow" in yrs else "Free cash flow, last 12 months"
     groups = {
         "Company": {"Name": i.get("name"), "Symbol": ctx["ticker"], "Asset class": i.get("assetClass"), "Sector": i.get("sector"),
                     "Industry": i.get("industry"), "Region": i.get("region"), "Quote currency": cur,
@@ -301,8 +305,8 @@ def brief_data(ctx):
                       "Price to book": _f_x(i.get("priceToBook")), "EV to EBITDA": _f_x(i.get("enterpriseToEbitda")),
                       "PEG ratio": _f_num(i.get("pegRatio"))},
         "Profitability and balance sheet": {"Return on equity": _f_pct(i.get("returnOnEquity")), "Operating margin": _f_pct(i.get("operatingMargins")),
-                                            "Net margin": _f_pct(i.get("profitMargins")), "Debt to equity": _f_x(i.get("debtToEquity"), 2),
-                                            "Current ratio": _f_x(i.get("currentRatio"), 2), "Free cash flow, last 12 months": _f_money(i.get("freeCashflow"), fin_cur)},
+                                            "Net margin": _f_pct(i.get("profitMargins")), from_sheet("Debt to equity", "debtToEquity"): _f_x(i.get("debtToEquity"), 2),
+                                            from_sheet("Current ratio", "currentRatio"): _f_x(i.get("currentRatio"), 2), fcf_label: _f_money(i.get("freeCashflow"), fin_cur)},
         # Several years first, as the growth score uses; the latest quarter separately, so a one-quarter swing isn't
         # read as the trend
         "Growth": {"Revenue growth a year, over 3 years": _f_pct(i.get("revenueGrowth3y")), "Net income growth a year, over 3 years": _f_pct(i.get("earningsGrowth3y")),
