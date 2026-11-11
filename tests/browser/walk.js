@@ -516,6 +516,31 @@ const SLOW = 150000;
     await p.click(".ask-thread.current .ask-answer .ask-stock");
     await p.waitForFunction(() => location.hash === "#research/NVDA", null, { timeout: SLOW });
     expect("ask: a ticker in an answer opens it in Research", true);
+    // Hand-offs. From the Screener: a sentence with parts no filter expresses goes to Ask whole; "Ask about these"
+    // leaves a question about the matches in Ask's box to edit, without sending it
+    await nav("screener");
+    await p.fill("#scrQuery", "wide moat stocks"); await p.press("#scrQuery", "Enter");
+    await p.waitForSelector("#scrAskAbout", { timeout: SLOW });
+    const handoff = await p.evaluate(() => ({ instead: !!document.querySelector("#scrToAsk"), about: !!document.querySelector("#scrAskAbout") }));
+    const before = sent.length;
+    await p.click("#scrAskAbout"); await p.waitForTimeout(300);
+    const about = await p.evaluate(() => ({ view: location.hash, q: document.querySelector("#askInput").value, focused: document.activeElement?.id }));
+    expect("screener: Ask about these opens Ask with a question about the matches, ready to edit, not sent",
+      handoff.instead && handoff.about && about.view === "#ask" && /^Of the Screener's \d+ matches for "wide moat stocks" \(best first: [A-Z]/.test(about.q) && about.focused === "askInput" && sent.length === before,
+      JSON.stringify({ handoff, about }));
+    await nav("screener"); polls = 0;
+    await p.click("#scrToAsk");
+    await p.waitForFunction(() => document.querySelector(".ask-thread .ask-answer"), null, { timeout: 10000 });
+    expect("screener: Ask StockPilotAI instead sends the sentence to Ask", sent.length === before + 1 && sent[before].question === "wide moat stocks" && JSON.stringify(sent[before].follow) === "[]", JSON.stringify(sent[before]));
+    // From Ask: an answer that ran a screen opens it in the Screener, where every match shows
+    answer.steps = [step, { tool: "screen", args: { question: "cheap european banks" }, ok: true }];
+    polls = 0;
+    await p.fill("#askInput", "Which European banks are cheap?"); await p.press("#askInput", "Enter");
+    await p.waitForSelector(".ask-actions button", { timeout: 10000 });
+    await p.click(".ask-actions button");
+    await p.waitForFunction(() => location.hash === "#screener" && /matches out of/.test(document.querySelector("#scrInfo").innerText) && !document.querySelector("#btnScr").disabled, null, { timeout: SLOW });
+    expect("ask: an answer that ran a screen opens it in the Screener", (await p.inputValue("#scrQuery")) === "cheap european banks" && /Banks only/.test(await txt("#scrInfo")), (await txt("#scrInfo")).slice(0, 120));
+    answer.steps = [step];
     await p.unroute("**/api/ask/start", startAsk); await p.unroute("**/api/ask/job/*", jobAsk);
     await nav("ask");
   }
