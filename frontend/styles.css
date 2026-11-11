@@ -67,8 +67,11 @@ label.block { margin: 8px 0; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { background: transparent; color: var(--muted); border: 0; padding: 6px 11px; font: 500 12px var(--mono); cursor: pointer; }
 .seg button.on { background: var(--line); color: var(--text); }
-#themeSeg button { font-family: var(--sans); font-size: 13px; padding: 6px 14px; }
-#themeSeg button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); border-radius: 5px; }
+/* Rounded like the region chips beneath it: a pill holding the choices, the chosen one a pill inside */
+#themeSeg { border-radius: 99px; padding: 3px; gap: 2px; }
+#themeSeg button { font-family: var(--sans); font-size: 12px; padding: 5px 13px; border-radius: 99px; transition: background 0.15s, color 0.15s; }
+#themeSeg button:hover:not(.on) { color: var(--text); }
+#themeSeg button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
 .cs-body { margin-bottom: 0; align-items: start; }
 .split { position: relative; display: flex; height: 14px; border-radius: 7px; overflow: visible; background: var(--panel2); margin: 26px 0 8px; }
 .split i { display: block; height: 100%; }

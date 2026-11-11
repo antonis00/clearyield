@@ -107,10 +107,10 @@ Views, in the sidebar's order: dashboard, research, portfolio, opportunities, co
 
 ## Ideas / next steps
 - Upgrade the data provider (FMP or Polygon), at least for Gulf fundamentals, behind an interface in `data.py`.
-- Sector-relative scoring: percentile within sector instead of absolute thresholds.
-- Insider and institutional activity.
-- Email or push digest on a schedule.
-- Portfolio-level backtest and Monte Carlo simulation.
+- Sector-relative scoring: the scores still use absolute thresholds; sector ranks (`insights.sector_ranks()`) are only shown beside them.
+- The daily digest by email on a schedule, through `mailer.py` (triggered alerts are already emailed).
+
+Done since they were listed: insider and institutional activity (`data.ownership()`, `insights.insider_summary()`), alert emails, and the portfolio-level backtest and Monte Carlo simulation (`simulate.py`).
 
 ## Conventions
 - Keep the "decision support, not financial advice" framing, and keep scores explainable.
