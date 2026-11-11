@@ -609,11 +609,11 @@ def tax_csv(year: str = ""):
 
 @app.get("/api/scorecheck")
 def score_check():
-    """Would the price-based scores have picked winners among the stocks you follow? (scorecheck.py)"""
+    """Do the scores rank the stocks you follow by what happens next? The research in docs/score-research.md
+    (scorecheck.py). Weights don't enter: the evidence is about each score, and the weights stay yours."""
     settings = db.get_settings()
-    regions, w = insights.followed(settings), settings["weights"]
-    key = f"{','.join(regions)}:{w.get('momentum', 0):.3f}:{w.get('risk', 0):.3f}"
-    out = scorecheck.cached_check(universe_tickers(regions), w, key)
+    regions = insights.followed(settings)
+    out = scorecheck.cached_check(universe_tickers(regions), None, ",".join(regions))
     return ok({**out, "regions": regions})
 
 

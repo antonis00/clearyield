@@ -361,6 +361,101 @@ def balance(ticker):
     return out
 
 
+STATEMENT_ROWS = {  # what the score research rebuilds past scores from (scorecheck.py), by Yahoo's row names
+    "income_stmt": {"revenue": ("Total Revenue", "Operating Revenue"), "operatingIncome": ("Operating Income",),
+                    "netIncome": ("Net Income", "Net Income Common Stockholders"), "eps": ("Diluted EPS", "Basic EPS"),
+                    "ebitda": ("EBITDA", "Normalized EBITDA")},
+    "balance_sheet": {"equity": ("Stockholders Equity", "Common Stock Equity"), "totalDebt": ("Total Debt",),
+                      "cash": ("Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"),
+                      "currentAssets": ("Current Assets",), "currentLiabilities": ("Current Liabilities",),
+                      "shares": ("Ordinary Shares Number",)},  # not "Share Issued": it counts treasury shares
+    "cashflow": {"fcf": ("Free Cash Flow",)},
+}
+STATEMENTS_TTL = 14 * 24 * 3600  # annual figures change once a year
+
+
+def statements(ticker):
+    """Every annual statement Yahoo keeps (usually four years), oldest first: one record per fiscal year end with the
+    rows in STATEMENT_ROWS, in the statement currency. [] when there are none. Kept 14 days."""
+    key = f"stmts:v1:{ticker}"
+    cached = db.cache_get(key, STATEMENTS_TTL)
+    if cached is not None:
+        return cached
+    if DEMO:
+        return _demo_statements(ticker)
+    years = {}
+    try:
+        t = _yf().Ticker(ticker)
+        for sheet, rows in STATEMENT_ROWS.items():
+            df = getattr(t, sheet)
+            if df is None or df.empty:
+                continue
+            for col in df.columns:
+                end = pd.Timestamp(col).date().isoformat()
+                for name, options in rows.items():
+                    found = next((o for o in options if o in df.index), None)
+                    v = _num(df.at[found, col]) if found else None
+                    if v is not None:
+                        years.setdefault(end, {"end": end})[name] = v
+    except Exception as e:
+        log.info("no statements for %s: %s", ticker, e)
+        return db.cache_get_stale(key) or []
+    out = [years[k] for k in sorted(years) if len(years[k]) > 3]  # Yahoo pads with an old year that's nearly empty
+    if not out:  # as with the other statements: a rate limit looks the same, so retry within the hour
+        old = db.cache_get_stale(key)
+        if old:
+            return old
+        db.cache_set(key, out, ts=time.time() - STATEMENTS_TTL + 3600)
+        return out
+    db.cache_set(key, out)
+    return out
+
+
+def plain_closes(ticker):
+    """Five years of closes adjusted for splits but not for dividends: the price as it was quoted that day, which a
+    past market value needs (adjusted closes take later dividends out of earlier prices). Kept a day."""
+    key = f"plain:v1:{ticker}"
+    cached = db.cache_get(key, 24 * 3600)
+    if cached is None:
+        if DEMO:
+            return _demo_history(ticker)["Close"]
+        try:
+            df = _yf().Ticker(ticker).history(period="5y", interval="1d", auto_adjust=False)
+            if df is None or df.empty:
+                raise ValueError("no prices")
+            idx = pd.to_datetime(df.index)
+            s = pd.Series(df["Close"].to_numpy(), index=(idx.tz_localize(None) if idx.tz is not None else idx).normalize()).dropna()
+            s = s[~s.index.duplicated(keep="last")]
+            cached = {"index": [d.strftime("%Y-%m-%d") for d in s.index], "close": [float(v) for v in s]}
+            db.cache_set(key, cached)
+        except Exception as e:
+            log.info("no plain closes for %s: %s", ticker, e)
+            cached = db.cache_get_stale(key)
+            if cached is None:
+                raise DataError(f"No unadjusted prices for {ticker}.")
+    return pd.Series(cached["close"], index=pd.to_datetime(cached["index"]))
+
+
+def _demo_statements(ticker):
+    """Four synthetic fiscal years, consistent with the demo company's size, so the research runs offline."""
+    if ticker.endswith("-USD") or ticker in _etfs() or ticker in MACRO:
+        return []
+    rng = np.random.default_rng(_seed(ticker) + 5)
+    rev, out = rng.uniform(5e9, 3e11), []
+    shares = rng.uniform(2e8, 5e9)
+    shares = _demo_info(ticker).get("sharesOutstanding") or shares  # the demo company's own count, so its market value fits
+    for i in range(4):
+        rev *= 1 + rng.uniform(-0.05, 0.2)
+        margin = rng.uniform(-0.03, 0.3)
+        ni = rev * margin
+        equity = rev * rng.uniform(0.3, 1.5)
+        out.append({"end": f"{dt.date.today().year - 4 + i}-12-31", "revenue": rev, "operatingIncome": rev * (margin + 0.05), "netIncome": ni,
+                    "eps": ni / shares, "ebitda": rev * (margin + 0.12), "equity": equity, "totalDebt": equity * rng.uniform(0, 1.5),
+                    "cash": rev * rng.uniform(0.02, 0.3), "currentAssets": rev * rng.uniform(0.2, 0.6), "currentLiabilities": rev * rng.uniform(0.15, 0.5),
+                    "shares": shares, "fcf": rev * rng.uniform(-0.02, 0.2)})
+    return out
+
+
 def financials(ticker):
     """Annual revenue / net income / free cash flow, oldest first."""
     key = f"fin:{ticker}"
