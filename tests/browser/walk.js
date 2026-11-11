@@ -431,7 +431,15 @@ const SLOW = 150000;
   expect("sidebar: the Yahoo mark opens Yahoo Finance in a new tab, the stock's page on Research",
     front === "https://finance.yahoo.com/ _blank noopener,noreferrer" && quote === "https://finance.yahoo.com/quote/AAPL/ _blank noopener,noreferrer", `${front} | ${quote}`);
   await nav("ask"); await p.waitForTimeout(300);
-  const askInfo = await p.evaluate(() => ({ examples: document.querySelectorAll("#askExamples, .ask-ex").length, intro: document.querySelector("#view-ask .card p").innerText }));
+  const askInfo = await p.evaluate(() => ({ examples: document.querySelectorAll("#askExamples, .ask-ex").length, intro: document.querySelector("#askIntro p").innerText }));
+  // Before the first question, the explanation and the box sit in the middle, the box ready to type in;
+  // Shift+Enter starts a new line and the box grows with it
+  const empty = await p.evaluate(() => { const b = document.querySelector(".ask-composer").getBoundingClientRect();
+    return { mid: b.top > innerHeight * 0.25 && b.bottom < innerHeight * 0.85, focused: document.activeElement?.id === "askInput", h: document.querySelector("#askInput").offsetHeight }; });
+  await p.locator("#askInput").pressSequentially("one"); await p.keyboard.press("Shift+Enter"); await p.locator("#askInput").pressSequentially("two");
+  const grown = await p.evaluate(() => ({ v: document.querySelector("#askInput").value, h: document.querySelector("#askInput").offsetHeight }));
+  expect("ask: before the first question the box sits in the middle, focused; Shift+Enter adds a line and the box grows",
+    empty.mid && empty.focused && grown.v === "one\ntwo" && grown.h > empty.h, JSON.stringify({ empty, grown }));
   await p.fill("#askInput", "How is my portfolio doing?"); await p.press("#askInput", "Enter"); await p.waitForTimeout(300);
   expect("ask: a short explanation, no example questions, and it says when AI is off", askInfo.examples === 0 && askInfo.intro.length < 250 && /AI_PROVIDER|isn't set up/.test(await txt("#askStatus")) && !(await p.locator("#askAnswers .ask-answer").count()), await txt("#askStatus"));
   // Figures in an answer are marked: unsupported ones highlighted wherever they appear (however the thousands are
@@ -477,12 +485,21 @@ const SLOW = 150000;
     await p.waitForFunction(() => document.querySelectorAll(".ask-thread.current .ask-answer").length === 2, null, { timeout: 10000 });
     const follow = await p.evaluate(() => ({ pill: document.querySelectorAll(".ask-thread.current .ask-answer")[1].querySelector(".ask-q .pill")?.textContent, threads: document.querySelectorAll(".ask-thread").length }));
     expect("ask: a follow-up carries the earlier answer and joins its conversation", JSON.stringify(sent[1].follow) === '["a1"]' && follow.pill === "Follow-up" && follow.threads === 1, JSON.stringify({ follow, sent }));
+    // Like a chat: oldest first, the explanation gone, and the box held at the bottom of the window while scrolling up
+    await p.evaluate(() => { document.querySelector(".ask-answer .brief").insertAdjacentHTML("beforeend", "<p>filler</p>".repeat(80)); scrollTo(0, 0); });
+    await p.waitForTimeout(200);
+    const chat = await p.evaluate(() => { const b = document.querySelector(".ask-composer").getBoundingClientRect(), qs = [...document.querySelectorAll(".ask-answer .ask-q")].map((q) => q.textContent);
+      return { order: qs, intro: getComputedStyle(document.querySelector("#askIntro")).display, bottom: Math.round(innerHeight - b.bottom), visible: b.top < innerHeight && b.top > innerHeight - 200 }; });
+    expect("ask: the conversation reads oldest first, with the question box kept at the bottom of the window",
+      /Nvidia/.test(chat.order[0]) && /dividend/.test(chat.order[1]) && chat.intro === "none" && chat.visible && chat.bottom >= 0 && chat.bottom < 4, JSON.stringify(chat));
     await p.click("#askNew"); polls = 0;
+    const cleared = await p.evaluate(() => ({ answers: document.querySelectorAll("#askAnswers .ask-answer").length, empty: document.querySelector("#view-ask").classList.contains("ask-empty") }));
     await p.fill("#askInput", "How are markets?"); await p.press("#askInput", "Enter");
-    await p.waitForFunction(() => document.querySelectorAll(".ask-thread").length === 2 && document.querySelector(".ask-thread.current .ask-answer"), null, { timeout: 10000 });
-    expect("ask: New conversation starts afresh, on top", JSON.stringify(sent[2].follow) === "[]" && (await p.evaluate(() => document.querySelector("#askAnswers").firstElementChild.classList.contains("current"))), JSON.stringify(sent[2]));
+    await p.waitForFunction(() => document.querySelector(".ask-thread.current .ask-answer"), null, { timeout: 10000 });
+    const fresh = await p.evaluate(() => document.querySelectorAll(".ask-thread").length);
+    expect("ask: New conversation clears the page and starts afresh", JSON.stringify(sent[2].follow) === "[]" && !cleared.answers && cleared.empty && fresh === 1, JSON.stringify({ sent: sent[2], cleared, fresh }));
     // A ticker link opens the stock
-    await p.click(".ask-thread:not(.current) .ask-answer .ask-stock");
+    await p.click(".ask-thread.current .ask-answer .ask-stock");
     await p.waitForFunction(() => location.hash === "#research/NVDA", null, { timeout: SLOW });
     expect("ask: a ticker in an answer opens it in Research", true);
     await p.unroute("**/api/ask/start", startAsk); await p.unroute("**/api/ask/job/*", jobAsk);
