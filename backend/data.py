@@ -14,9 +14,9 @@ from . import db
 from . import indicators as ind
 from .universe import MACRO, country_of, currency_guess, name_of, region_of
 
-log = logging.getLogger("stockpilot.data")
+log = logging.getLogger("clearyield.data")
 
-DEMO = os.getenv("STOCKPILOT_DEMO", "0") == "1"
+DEMO = os.getenv("CLEARYIELD_DEMO", "0") == "1"
 TTL = {"history": 15 * 60, "info": 6 * 3600, "news": 30 * 60, "fin": 24 * 3600, "fx": 3600}
 PERIOD_DAYS = {"1mo": 21, "3mo": 63, "6mo": 126, "ytd": None, "1y": 252, "2y": 504, "5y": 1260}
 
@@ -41,7 +41,7 @@ class _RateLimitWatch(logging.Handler):
             _limited["until"] = time.time() + RATE_PAUSE
 
 
-for _name in ("yfinance", "stockpilot.data"):
+for _name in ("yfinance", "clearyield.data"):
     logging.getLogger(_name).addHandler(_RateLimitWatch())
 
 

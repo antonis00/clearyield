@@ -72,7 +72,7 @@ const CHECKS = {
     await page.evaluate(() => { location.hash = "#settings"; }); await page.waitForTimeout(400);
     const [dl] = await Promise.all([page.waitForEvent("download"), page.click("#btnBackup")]);
     const path = `${OUT}/backup_test.json`; await dl.saveAs(path);
-    expect("backup file name", /^stockpilot-backup-\d{4}-\d{2}-\d{2}\.json$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+    expect("backup file name", /^clearyield-backup-\d{4}-\d{2}-\d{2}\.json$/.test(dl.suggestedFilename()), dl.suggestedFilename());
     const hid = (await post(page, "/api/backup", null, "GET")).body.transactions[0].id;
     await post(page, `/api/holdings/${hid}`, null, "DELETE");
     const dialogs = []; page.on("dialog", (d) => { dialogs.push(d.message()); d.accept(); });
@@ -82,7 +82,7 @@ const CHECKS = {
     expect("holding is back", after.transactions.length === 1 && after.transactions[0].note === "core");
     expect("journal is intact", after.journal[0].thesis === "services growth");
     await page.setInputFiles("#restoreFile", { name: "x.json", mimeType: "application/json", buffer: Buffer.from("not json") }); await page.waitForTimeout(500);
-    expect("rejects a broken file", (await page.textContent("#toast")).includes("isn't a StockPilot backup"));
+    expect("rejects a broken file", (await page.textContent("#toast")).includes("isn't a ClearYield backup"));
     expect("data untouched by broken file", (await post(page, "/api/backup", null, "GET")).body.transactions.length === 1);
   },
 
@@ -129,16 +129,16 @@ const CHECKS = {
     await page.reload(); await page.waitForTimeout(800);
     const before = await post(page, "/api/alerts", { ticker: "AAPL", kind: "price_above", value: 0.01 });
     await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
-    expect("nothing fired yet", (await page.title()) === "StockPilot", await page.title());
+    expect("nothing fired yet", (await page.title()) === "ClearYield", await page.title());
     await post(page, "/api/alerts/check", {});
     await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
-    expect("count in the tab title", (await page.title()) === "(1) StockPilot", await page.title());
+    expect("count in the tab title", (await page.title()) === "(1) ClearYield", await page.title());
     expect("browser notification shown once", (await page.evaluate(() => window.__shown)).length === 1, JSON.stringify(await page.evaluate(() => window.__shown)));
     await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
     expect("not repeated on the next check", (await page.evaluate(() => window.__shown)).length === 1);
     await post(page, `/api/alerts/${before.body.id}/dismiss`, {});
     await page.evaluate(() => checkFiredAlerts()); await page.waitForTimeout(200);
-    expect("title clears when dismissed", (await page.title()) === "StockPilot", await page.title());
+    expect("title clears when dismissed", (await page.title()) === "ClearYield", await page.title());
     await page.evaluate(() => { location.hash = "#journal"; }); await page.waitForTimeout(300);
     expect("the page says it needs the app open", /while this page is open/.test(await page.textContent("#view-journal")));
   },

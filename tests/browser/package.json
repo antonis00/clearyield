@@ -1,7 +1,7 @@
 {
-  "name": "stockpilot-browser-checks",
+  "name": "clearyield-browser-checks",
   "private": true,
-  "description": "Browser checks for StockPilot. They use your installed Chrome.",
+  "description": "Browser checks for ClearYield. They use your installed Chrome.",
   "dependencies": {
     "playwright-core": "1.48.2"
   }

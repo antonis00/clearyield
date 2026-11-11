@@ -1,4 +1,4 @@
-"""Recompute key figures from raw Yahoo data, without any StockPilot calculation code, and compare them with what
+"""Recompute key figures from raw Yahoo data, without any ClearYield calculation code, and compare them with what
 the API returns. This found errors no other check could, such as Yahoo's unreliable non-USD FX pairs.
 
 Needs internet. Uses its own temporary database:  python tests/check_live.py
@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-os.environ["STOCKPILOT_DB"] = str(Path(tempfile.mkdtemp()) / "check.db")
+os.environ["CLEARYIELD_DB"] = str(Path(tempfile.mkdtemp()) / "check.db")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd  # noqa: E402

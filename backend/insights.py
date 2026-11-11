@@ -15,7 +15,7 @@ from . import data, db, ledger, scoring
 from . import indicators as ind
 from .universe import CORE_FUNDS, REGIONS, UNIVERSE, region_of, tickers_for
 
-log = logging.getLogger("stockpilot.insights")
+log = logging.getLogger("clearyield.insights")
 
 
 def multi_year_growth(financials, key, years=3):
@@ -218,11 +218,11 @@ def followed(settings):
 
 
 def _peer_markets(settings):
-    """The regions you follow, narrowed further by STOCKPILOT_PEER_MARKETS where it's set: the live browser checks start
+    """The regions you follow, narrowed further by CLEARYIELD_PEER_MARKETS where it's set: the live browser checks start
     with an empty cache, and ranking against all 400 symbols on every run would get the computer refused by Yahoo."""
     import os
     mine = followed(settings)
-    named = [m.strip() for m in (os.environ.get("STOCKPILOT_PEER_MARKETS") or "").split(",") if m.strip() in mine]
+    named = [m.strip() for m in (os.environ.get("CLEARYIELD_PEER_MARKETS") or "").split(",") if m.strip() in mine]
     return named or mine
 
 

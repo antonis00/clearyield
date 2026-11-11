@@ -11,9 +11,16 @@ from pathlib import Path
 
 from .universe import DEFAULT_TILES, REGIONS
 
-DB_PATH = Path(os.getenv("STOCKPILOT_DB", Path(__file__).resolve().parent.parent / "data" / "stockpilot.db"))
+_DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "clearyield.db"
+DB_PATH = Path(os.getenv("CLEARYIELD_DB", _DEFAULT_DB))
+# The database from when the app was called StockPilot moves to the new name once, with everything in it
+_OLD_DB = _DEFAULT_DB.with_name("stockpilot.db")
+if DB_PATH == _DEFAULT_DB and not DB_PATH.exists() and _OLD_DB.exists():
+    for _suffix in ("", "-wal", "-shm"):
+        if Path(f"{_OLD_DB}{_suffix}").exists():
+            os.replace(f"{_OLD_DB}{_suffix}", f"{DB_PATH}{_suffix}")
 _lock = threading.Lock()
-log = logging.getLogger("stockpilot.db")
+log = logging.getLogger("clearyield.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL);
@@ -207,7 +214,7 @@ def export_user_data():
 def read_backup(backup):
     """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
     if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, BACKUP_VERSION):
-        raise ValueError("This isn't a StockPilot backup, or it's from a different version.")
+        raise ValueError("This isn't a ClearYield backup, or it's from a different version.")
     if backup["version"] == 1:  # before the ledger, when there was a table of current lots
         lots = backup.get("holdings")
         if not isinstance(lots, list) or not all(isinstance(r, dict) for r in lots):

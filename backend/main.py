@@ -1,4 +1,4 @@
-"""StockPilot API + static frontend.  Run:  uvicorn backend.main:app --reload --port 8001"""
+"""ClearYield API + static frontend.  Run:  uvicorn backend.main:app --reload --port 8001"""
 import asyncio
 import datetime as dt
 import json
@@ -19,7 +19,9 @@ def _load_env(env=ROOT / ".env"):
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+                k = k.strip()
+                k = "CLEARYIELD_" + k[len("STOCKPILOT_"):] if k.startswith("STOCKPILOT_") else k  # the app's old name
+                os.environ.setdefault(k, v.strip().strip('"').strip("'"))
 
 
 _load_env()
@@ -99,7 +101,7 @@ from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("stockpilot")
+log = logging.getLogger("clearyield")
 # The page checks /api/progress every second or two while data downloads; those checks stay out of the request log
 logging.getLogger("uvicorn.access").addFilter(lambda r: "/api/progress" not in r.getMessage() and "/api/ask/job/" not in r.getMessage())
 ALERT_INTERVAL = int(os.getenv("ALERT_CHECK_MINUTES", "15")) * 60
@@ -147,7 +149,7 @@ async def lifespan(app):
     except Exception as e:  # never stop the app over housekeeping
         log.warning("cache pruning failed: %s", e)
     tasks = [asyncio.create_task(_alert_loop())]
-    if not data.DEMO and os.environ.get("STOCKPILOT_WARM", "1") != "0":
+    if not data.DEMO and os.environ.get("CLEARYIELD_WARM", "1") != "0":
         tasks.append(asyncio.create_task(_warm_loop()))
     yield
     for task in tasks:
@@ -173,7 +175,7 @@ async def _warm_loop():
         await asyncio.sleep(WARM_EVERY)
 
 
-app = FastAPI(title="StockPilot", lifespan=lifespan)
+app = FastAPI(title="ClearYield", lifespan=lifespan)
 FRONT = ROOT / "frontend"
 
 
@@ -186,9 +188,9 @@ async def only_local_addresses(request, call_next):
     pointing its own domain name at this machine to read and change your data through your browser."""
     host = request.headers.get("host", "")
     if (host if host.endswith("]") else host.rsplit(":", 1)[0]) not in LOCAL_HOSTS:
-        return JSONResponse({"detail": "StockPilot only answers on localhost."}, status_code=400)
+        return JSONResponse({"detail": "ClearYield only answers on localhost."}, status_code=400)
     if request.url.path.startswith("/api/") and _from_another_site(request, host):
-        return JSONResponse({"detail": "StockPilot only answers its own page."}, status_code=403)
+        return JSONResponse({"detail": "ClearYield only answers its own page."}, status_code=403)
     return await call_next(request)
 
 
@@ -874,7 +876,7 @@ def settings_set(body: dict = Body(...)):
 # ---------------------------------------------------------------- backup
 @app.get("/api/backup")
 def backup():
-    name = f"stockpilot-backup-{dt.date.today().isoformat()}.json"
+    name = f"clearyield-backup-{dt.date.today().isoformat()}.json"
     return JSONResponse(db.export_user_data(), headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 

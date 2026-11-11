@@ -39,7 +39,7 @@ const SLOW = 150000;
   const meta = await p.evaluate(async () => (await fetch("/api/meta")).json());
   expect(`mode is ${MODE}`, meta.demo === (MODE === "demo"), `base ${meta.settings.base_currency}, AI ${meta.ai}`);
 
-  // ---- The frame: Ask StockPilotAI with the app's mark, last and apart at the bottom, by the line; the quote as an icon; a full-width search
+  // ---- The frame: Ask ClearYieldAI with the app's mark, last and apart at the bottom, by the line; the quote as an icon; a full-width search
   const frame = await p.evaluate(() => {
     const links = [...document.querySelectorAll("nav a")], ask = document.querySelector('nav a[data-view="ask"]');
     const top = document.querySelector("header.top").getBoundingClientRect().width, box = document.querySelector(".searchbox").getBoundingClientRect().width;
@@ -47,7 +47,7 @@ const SLOW = 150000;
              toLine: document.querySelector("#modeBadge").getBoundingClientRect().top - ask.getBoundingClientRect().bottom,
              quote: document.querySelector("#modeBadge .st.quote")?.dataset.tip || "", oldQuote: !!document.querySelector("header .disclaimer"), share: box / top };
   });
-  expect("frame: Ask StockPilotAI with its mark, at the bottom by the line, apart from the rest", frame.ask === "Ask StockPilotAI" && frame.icon && frame.last && frame.gap > 40 && frame.toLine >= 0 && frame.toLine < 4, JSON.stringify(frame));
+  expect("frame: Ask ClearYieldAI with its mark, at the bottom by the line, apart from the rest", frame.ask === "Ask ClearYieldAI" && frame.icon && frame.last && frame.gap > 40 && frame.toLine >= 0 && frame.toLine < 4, JSON.stringify(frame));
   expect("frame: the quote is an icon beside the others, shown on hover", /Plato/.test(frame.quote) && !frame.oldQuote, frame.quote);
   const seen = [];
   for (let i = 0; i < 4; i++) {
@@ -431,7 +431,7 @@ const SLOW = 150000;
 
   // ---- Ask: the AI icon in the sidebar opens it; with AI off (as in every test run), the page says how to set it up
   await p.click("#modeBadge .st.ai"); await p.waitForTimeout(300);
-  expect("ask: the sidebar's AI icon opens Ask StockPilotAI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
+  expect("ask: the sidebar's AI icon opens Ask ClearYieldAI", (await p.evaluate(() => location.hash)) === "#ask" && !(await p.evaluate(() => document.querySelector("#view-ask").classList.contains("hidden"))));
   // The Yahoo mark opens Yahoo Finance in a new tab: the front page here, the stock's page on Research (not loaded in the test)
   // Records what a click asks the browser to open, without opening Yahoo
   const yahooTab = async () => {
@@ -531,7 +531,7 @@ const SLOW = 150000;
     await nav("screener"); polls = 0;
     await p.click("#scrToAsk");
     await p.waitForFunction(() => document.querySelector(".ask-thread .ask-answer"), null, { timeout: 10000 });
-    expect("screener: Ask StockPilotAI instead sends the sentence to Ask", sent.length === before + 1 && sent[before].question === "wide moat stocks" && JSON.stringify(sent[before].follow) === "[]", JSON.stringify(sent[before]));
+    expect("screener: Ask ClearYieldAI instead sends the sentence to Ask", sent.length === before + 1 && sent[before].question === "wide moat stocks" && JSON.stringify(sent[before].follow) === "[]", JSON.stringify(sent[before]));
     // From Ask: an answer that ran a screen opens it in the Screener, where every match shows
     answer.steps = [step, { tool: "screen", args: { question: "cheap european banks" }, ok: true }];
     polls = 0;
@@ -706,7 +706,7 @@ const SLOW = 150000;
   expect("converter: an unknown currency asks for one from the list", /Choose the currency to convert from: type part of its name/.test(await txt("#cvOut")), await txt("#cvOut"));
   await p.click("#modal [data-close]");
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#btnBackup")]);
-  expect("settings: backup downloads", /stockpilot-backup/.test(dl.suggestedFilename()), dl.suggestedFilename());
+  expect("settings: backup downloads", /clearyield-backup/.test(dl.suggestedFilename()), dl.suggestedFilename());
   await p.click("#btnClearCache"); await p.waitForTimeout(600);
   await research("SAP.DE");
   expect("settings: app refetches after clearing the cache", (await txt("#rPrice")).length > 0, await txt("#rPrice"));

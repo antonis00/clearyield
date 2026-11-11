@@ -2,15 +2,15 @@
 
     python tests/test_smoke.py              every test; failures are named, and the run goes on
     python tests/test_smoke.py splits -v    only tests whose name contains "splits", showing the app's log
-    STOCKPILOT_DEMO=1 python -m pytest tests -q
+    CLEARYIELD_DEMO=1 python -m pytest tests -q
 """
 import os
 import sys
 import tempfile
 from pathlib import Path
 
-os.environ["STOCKPILOT_DEMO"] = "1"
-os.environ["STOCKPILOT_DB"] = str(Path(tempfile.mkdtemp()) / "test.db")
+os.environ["CLEARYIELD_DEMO"] = "1"
+os.environ["CLEARYIELD_DB"] = str(Path(tempfile.mkdtemp()) / "test.db")
 os.environ.pop("ANTHROPIC_API_KEY", None)
 for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING"):
     os.environ.pop(_k, None)
@@ -1193,9 +1193,36 @@ def test_only_local_addresses_are_served():
 
     # A .env saved by Notepad starts with a byte-order mark, which used to rename the key
     env = Path(tempfile.mkdtemp()) / ".env"
-    env.write_bytes("\ufeffSTOCKPILOT_TEST_KEY=héllo\n".encode("utf-8"))
+    env.write_bytes("\ufeffCLEARYIELD_TEST_KEY=héllo\n".encode("utf-8"))
     main._load_env(env)
-    assert os.environ.pop("STOCKPILOT_TEST_KEY") == "héllo"
+    assert os.environ.pop("CLEARYIELD_TEST_KEY") == "héllo"
+    # A setting under the app's old name (StockPilot) counts as the new one
+    env.write_text("STOCKPILOT_TEST_OLD=1\n", encoding="utf-8")
+    main._load_env(env)
+    assert os.environ.pop("CLEARYIELD_TEST_OLD") == "1" and "STOCKPILOT_TEST_OLD" not in os.environ
+
+
+def test_database_from_the_old_name_moves_with_its_data():
+    """data/stockpilot.db, from when the app was called StockPilot, becomes data/clearyield.db, with what was in it."""
+    import sqlite3
+    import subprocess
+    import sys
+    root = Path(tempfile.mkdtemp())
+    (root / "backend").mkdir()
+    (root / "data").mkdir()
+    for f in ("__init__.py", "db.py", "universe.py"):
+        (root / "backend" / f).write_bytes((Path(__file__).resolve().parent.parent / "backend" / f).read_bytes())
+    with sqlite3.connect(root / "data" / "stockpilot.db") as con:
+        con.execute("CREATE TABLE note (t TEXT)")
+        con.execute("INSERT INTO note VALUES ('kept')")
+    con.close()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLEARYIELD_", "STOCKPILOT_"))}
+    out = subprocess.run([sys.executable, "-c", "from backend import db; print(db.DB_PATH.name)"], cwd=root, env=env, capture_output=True, text=True)
+    assert out.stdout.strip() == "clearyield.db", out.stderr[-400:]
+    assert not (root / "data" / "stockpilot.db").exists()
+    with sqlite3.connect(root / "data" / "clearyield.db") as con:
+        assert con.execute("SELECT t FROM note").fetchall() == [("kept",)]
+    con.close()
 
 
 def test_ledger_matches_sales_to_the_oldest_lots():
@@ -3020,7 +3047,7 @@ def test_brief_accuracy():
     assert data["Annual accounts, oldest first"] == [{"Year": "2025", "Revenue": "391.04B USD", "Free cash flow": "108.80B USD"}]
     assert "1.4213" not in flat and "null" not in flat and "Beta" not in flat, "missing figures are left out"
     # 2. What the scores mean, with risk spelled out
-    assert "higher means calmer, so LOWER risk" in data["What the scores mean"] and data["StockPilot scores"]["Risk factor"] == "76.5 out of 100"
+    assert "higher means calmer, so LOWER risk" in data["What the scores mean"] and data["ClearYield scores"]["Risk factor"] == "76.5 out of 100"
     # 4. Only headlines that name the company, with their dates
     assert data["Recent headlines naming the company"] == ["2026-11-07 Reuters: Apple unveils new iPhone", "2026-11-06 : Market wrap: Nasdaq falls"]
     assert ai.relevant_headlines([{"title": "Saudi stocks rise"}], "2222.SR", "Saudi Arabian Oil Company") == [], "a country name alone isn't the company"
@@ -3536,7 +3563,7 @@ def test_ask_uses_the_tools_and_checks_its_figures():
         with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m"), TestClient(app) as c:
             # Round 1 asks for two tools at once; round 2 answers, quoting a figure from a result and one it made up
             stock = json.loads(agent.run_tool("get_stock", {"ticker": "AAPL"})[0])
-            score = stock["StockPilot scores"]["Composite"].split()[0]  # "30.2 out of 100"
+            score = stock["ClearYield scores"]["Composite"].split()[0]  # "30.2 out of 100"
             # The latest day's move, dated, so "did it move today" has an answer
             day = stock["Latest trading day"]
             assert set(day) == {"date", "price (the close, or the latest price while trading)", "change from the day before", "is today"} and day["change from the day before"].endswith(")"), day
@@ -3841,7 +3868,7 @@ def test_yahoo_refusals_pause_long_lists():
         data._limited["until"] = 0.0
         logging.getLogger("yfinance").error("HTTP Error 429: Too Many Requests. Rate limited. Try after a while.")
         assert 100 < data.rate_limited_for() <= data.RATE_PAUSE
-        logging.getLogger("stockpilot.data").warning("prices failed for X: timed out")  # other trouble doesn't pause anything
+        logging.getLogger("clearyield.data").warning("prices failed for X: timed out")  # other trouble doesn't pause anything
         data._limited["until"] = 0.0
         assert data.rate_limited_for() == 0
     finally:

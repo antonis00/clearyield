@@ -1,4 +1,4 @@
-/* StockPilot frontend — vanilla JS, Lightweight Charts (price) + Chart.js (everything else). */
+/* ClearYield frontend — vanilla JS, Lightweight Charts (price) + Chart.js (everything else). */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const state = { stockRequest: 0, meta: null, ticker: null, period: "1y", bars: "day", stock: null, lw: [], charts: {}, lastScreen: null };
@@ -288,9 +288,9 @@ async function checkFiredAlerts() {
   const all = await api("/api/alerts").catch(() => null);
   if (!all) return;
   const fired = all.filter((a) => a.triggered && !a.dismissed);
-  document.title = fired.length ? `(${fired.length}) StockPilot` : "StockPilot";
+  document.title = fired.length ? `(${fired.length}) ClearYield` : "ClearYield";
   if (firedSeen && window.Notification?.permission === "granted") {
-    fired.filter((a) => !firedSeen.has(a.id)).forEach((a) => new Notification("StockPilot alert", { body: a.message }));
+    fired.filter((a) => !firedSeen.has(a.id)).forEach((a) => new Notification("ClearYield alert", { body: a.message }));
   }
   firedSeen = new Set(all.filter((a) => a.triggered).map((a) => a.id));
 }
@@ -589,7 +589,7 @@ function renderFactors(s) {
 }
 // Where each score stands among the other stocks of its sector, from every market in the list. It loads after the
 // page, since the first ranking of the hour scores the whole list.
-const PEER_INFO = "Ranks compare a score with the other stocks in the same sector, from every market in StockPilot's list. 50% is the "
+const PEER_INFO = "Ranks compare a score with the other stocks in the same sector, from every market in ClearYield's list. 50% is the "
   + "sector's middle. The score itself is on one fixed scale for every stock, so a bank and a software company meet the same limits; "
   + "the rank says how it compares with its own kind. A sector with fewer than 8 others isn't ranked.";
 async function loadPeers(t, request, tries = 0) {
@@ -918,7 +918,7 @@ async function runScreen(body) {
     const kinds = [f.industry ? `${inds(f.industry)} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${[].concat(f.exclude_sector).join(", ")}` : "", f.exclude_industry ? `Not ${inds(f.exclude_industry)}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
     // Hand-offs to Ask: a sentence with parts no filter can express goes there whole; the matches can be asked about
     const aiOn = state.meta?.aiInfo?.on, top = d.rows.slice(0, 5).map((r) => r.ticker);
-    const handoff = aiOn ? [f.ignored?.length && body.query ? '<button class="btn ghost sm" id="scrToAsk" title="Ask can reason about what the filters can\'t express">Ask StockPilotAI instead</button>' : "",
+    const handoff = aiOn ? [f.ignored?.length && body.query ? '<button class="btn ghost sm" id="scrToAsk" title="Ask can reason about what the filters can\'t express">Ask ClearYieldAI instead</button>' : "",
       d.rows.length ? '<button class="btn ghost sm" id="scrAskAbout" title="Opens Ask with a question about these matches, ready to edit">Ask about these</button>' : ""].join("") : "";
     $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}${handoff ? `<div class="scr-handoff">${handoff}</div>` : ""}`;
     $("#scrToAsk")?.addEventListener("click", () => askWith(body.query, true));
@@ -1706,8 +1706,8 @@ const currencySymbol = (code) => {
 function aiStatus(a) {
   const tip = a?.on ? `AI: ${a.model} via ${a.server}${a.thinking === "off" ? ", thinking off" : a.thinking === "on" ? ", thinking on" : ["low", "medium", "high"].includes(a.thinking) ? `, thinking ${a.thinking}` : ""}. Writes research briefs and reads screener questions.`
     : a?.problem ? `AI isn't set up: ${a.problem}` : "AI is off. Set AI_PROVIDER in .env (see .env.example) for AI-written briefs.";
-  // A click opens Ask StockPilotAI, where the model answers questions with the app's tools
-  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask StockPilotAI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
+  // A click opens Ask ClearYieldAI, where the model answers questions with the app's tools
+  return `<span class="st txt ai ${a?.on ? "on" : "off"}" role="button" tabindex="0" data-goto="ask" aria-label="${esc(tip)} Opens Ask ClearYieldAI." data-tip="${esc(tip)} Click to ask it a question." data-icon="AI">AI</span>`;
 }
 // The quote icon shows one of these at random on each hover, never the same twice in a row.
 const QUOTES = [
@@ -1832,7 +1832,7 @@ $("#restoreFile").onchange = async (e) => {
   const file = e.target.files[0]; e.target.value = "";
   if (!file) return;
   let backup;
-  try { backup = JSON.parse(await file.text()); } catch { return toast("That file isn't a StockPilot backup."); }
+  try { backup = JSON.parse(await file.text()); } catch { return toast("That file isn't a ClearYield backup."); }
   const n = (k) => (Array.isArray(backup[k]) ? backup[k].length : 0);
   if (!confirm(`Replace everything in the app with this backup? It has ${n("transactions") + n("holdings")} transactions, ${n("journal")} journal entries, ${n("alerts")} alerts and ${n("watchlist")} watchlist items.`)) return;
   try { await api("/api/backup/restore", { method: "POST", body: backup }); toast("Backup restored"); setTimeout(() => location.reload(), 600); }
