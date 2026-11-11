@@ -14,8 +14,8 @@ A personal investing dashboard that runs on your own computer: live prices, char
 Requires Python 3.10+.
 
 ```bash
-git clone https://github.com/antonis00/stockpilot.git
-cd stockpilot
+git clone https://github.com/antonis00/clearyield.git
+cd clearyield
 ./run.sh            # macOS / Linux
 run.bat             # Windows
 ```
