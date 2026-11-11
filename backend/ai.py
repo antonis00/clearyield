@@ -147,7 +147,9 @@ def clean(text):
     return text.strip()
 
 
-def complete(user, system=SYSTEM, max_tokens=900, temperature=0):
+def complete(user, system=SYSTEM, max_tokens=900, temperature=0, effort=None):
+    """One reply. `effort` lowers the reasoning for a simple task ("low"), where the model reasons at all: it's
+    left alone when thinking is off or the server's default."""
     c = config()
     if not available():
         raise RuntimeError(c["problem"] or "No AI provider is set up.")
@@ -173,6 +175,8 @@ def complete(user, system=SYSTEM, max_tokens=900, temperature=0):
             body["reasoning_effort"] = c["thinking"]
         if c["thinking"] not in ("off", "default"):
             body["max_tokens"] = max_tokens * THINKING_ROOM  # reasoning counts against the allowance on most servers
+            if effort:
+                body["reasoning_effort"] = effort
         while True:
             if c["key"]:  # Ollama and LM Studio need none
                 headers["authorization"] = f"Bearer {c['key']}"
@@ -723,35 +727,42 @@ def parse_query(text):
     """Turn a natural-language screen into filters. The keyword rules always run, because they reliably catch what was
     literally asked for; a model, when one is set up, adds to them and overrides where it read a value. Small local
     models in particular drop words like "cheap" or "low debt", so their reply alone would screen less than was asked.
-    An unusable reply is asked for once more, and after that the rules stand alone."""
+    An unusable reply is asked for once more, and after that the rules stand alone. When the rules read every word,
+    the model isn't asked: it could only add seconds, tokens and its own limits."""
     rules, typed, aside = _rules(text.lower())
-    if available():
+    unread = [w for w in rules.get("ignored", []) if w not in aside.values()]
+    if available() and unread:
         from .universe import INDUSTRIES
         prompt = ("Convert this stock screen request into a JSON object using only these keys (omit unused ones): "
-                  + json.dumps(FILTER_SPEC) + "\nWhat words mean here: " + MEANINGS
+                  + json.dumps({**FILTER_SPEC, "unread": "list of the request's own words for anything no key can express (e.g. 'wide moat')"})
+                  + "\nWhat words mean here: " + MEANINGS
                   + "\nINDUSTRIES: " + "; ".join(INDUSTRIES)
                   + "\nReply with the JSON object only, no explanation.\nREQUEST: " + text)
         for attempt in range(2):
             try:
                 raw = complete(prompt if attempt == 0 else prompt + "\nYour last reply couldn't be read. Reply with one JSON object and nothing else.",
-                               system="You convert screening requests into strict JSON filters.", max_tokens=300)
-                filters = {k: v for k, v in _tidy_filters(_first_json_object(raw)).items() if k not in aside}
-                if filters:
-                    # A number you typed stands. A word's defined meaning ("cheap" is P/E 18) stands over the model's
-                    # own limit, unless the model's is a number in the request, which it read where the rules
-                    # didn't. The model fills in what the rules couldn't read, such as a market named in other words.
-                    said = _numbers_in(text)
-                    merged = {**filters, **{k: v for k, v in rules.items()
-                                            if k != "ignored" and (k in typed or not _is_said(k, filters.get(k), said))}}
-                    if merged.get("sector") and merged.get("sector") == merged.get("exclude_sector"):
-                        merged.pop("sector")
-                    if "exclude_industry" in rules and "exclude_sector" not in rules:  # "excluding banks" rules out banks, not every financial company
-                        merged.pop("exclude_sector", None)
-                    if aside:  # a limit pointing the way the screen can't filter is still reported
-                        merged["ignored"] = list(aside.values())
-                    return merged
+                               system="You convert screening requests into strict JSON filters.", max_tokens=300, effort="low")
+                reply = _first_json_object(raw)
             except Exception:
                 continue
+            filters = {k: v for k, v in _tidy_filters(reply).items() if k not in aside}
+            unread_by_model = reply.get("unread") if isinstance(reply.get("unread"), list) else []
+            not_read = [str(x) for x in unread_by_model if isinstance(x, (str, int, float))][:6]
+            # A number you typed stands. A word's defined meaning ("cheap" is P/E 18) stands over the model's own
+            # limit, unless the model's is a number in the request, which it read where the rules didn't. The model
+            # fills in what the rules couldn't read, such as a market named in other words.
+            said = _numbers_in(text)
+            merged = {**filters, **{k: v for k, v in rules.items() if k != "ignored" and (k in typed or not _is_said(k, filters.get(k), said))}}
+            if merged.get("sector") and merged.get("sector") == merged.get("exclude_sector"):
+                merged.pop("sector")
+            if "exclude_industry" in rules and "exclude_sector" not in rules:  # "excluding banks" rules out banks, not every financial company
+                merged.pop("exclude_sector", None)
+            if merged.get("industry") and merged.get("sector") and "industry" not in rules and "sector" not in rules:
+                merged.pop("sector")  # the model's industries say it more narrowly than its sector
+            # Still reported: a limit pointing the way the screen can't filter, and what the model couldn't express
+            if aside or not_read:
+                merged["ignored"] = [*aside.values(), *not_read]
+            return merged
     return rules
 
 
