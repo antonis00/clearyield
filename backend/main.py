@@ -92,11 +92,11 @@ _trust_windows_certificates()
 
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
-from fastapi import Body, FastAPI, HTTPException  # noqa: E402
+from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, portfolio, simulate  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, simulate  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
 
@@ -131,10 +131,12 @@ async def _alert_loop():
     while True:
         await asyncio.sleep(ALERT_INTERVAL)
         try:
-            fired = await asyncio.to_thread(insights.check_alerts, db.get_settings())
-            await asyncio.to_thread(insights.record_today, db.get_settings())
+            settings = db.get_settings()
+            fired = await asyncio.to_thread(insights.check_alerts, settings)
             for a in fired:
                 log.info("ALERT: %s", a["message"])
+            await asyncio.to_thread(mailer.send_alerts, fired, settings)  # before the slower score recording
+            await asyncio.to_thread(insights.record_today, settings)
         except Exception as e:
             log.warning("alert check failed: %s", e)
 
@@ -278,7 +280,7 @@ def meta():
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
                "settings": settings, "markets": [*insights.followed(settings), "ETFs", "Crypto"], "stockMarkets": insights.followed(settings), "regions": REGIONS,
                "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "currencies": data.CURRENCIES, "alertKinds": insights.ALERT_KINDS,
-               "strategies": backtest.STRATEGIES})
+               "email": mailer.status(), "strategies": backtest.STRATEGIES})
 
 
 @app.get("/api/search")
@@ -837,8 +839,24 @@ def alert_dismiss(aid: int):
 
 
 @app.post("/api/alerts/check")
-def alert_check():
-    return ok(insights.check_alerts(db.get_settings()))
+def alert_check(background: BackgroundTasks):
+    settings = db.get_settings()
+    fired = insights.check_alerts(settings)
+    background.add_task(mailer.send_alerts, fired, settings)  # after the reply: a slow mail server doesn't hold up the page
+    return ok(fired)
+
+
+@app.post("/api/email/test")
+def email_test(body: dict = Body(default={})):
+    """A test email to the address typed on the page (saved or not), so the setup can be checked before relying on it."""
+    to = body.get("to") if isinstance(body, dict) else None
+    to = to.strip() if isinstance(to, str) and to.strip() else db.get_settings()["alert_email"]
+    try:
+        mailer.send(to, "ClearYield test email", "This is a test from ClearYield. Alert emails will arrive like this one "
+                    "when email alerts are on in Settings.\n\nDecision support, not financial advice.\n")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return ok({"sent": True, "to": to})
 
 
 @app.get("/api/digest")
@@ -862,10 +880,12 @@ def settings_set(body: dict = Body(...)):
         if not isinstance(tiles, list):
             raise HTTPException(400, "Dashboard tiles must be a list of symbols.")
         body["dashboard_tiles"] = [t for t in _tiles(db.get_settings()) if t in tiles]  # known ones only, in display order
+    if body.get("email_alerts") is True and not str(body.get("alert_email", db.get_settings()["alert_email"]) or "").strip():
+        raise HTTPException(400, "Enter the email address to send alerts to.")
     if "core_target" in body:
         v = _number(body, "core_target")
         if not 0 <= v <= 100:
-            raise HTTPException(400, "The core share is a percentage from 0 to 100.")
+            raise HTTPException(400, "The core target is a percentage from 0 to 100.")
         body["core_target"] = v
     try:
         return ok(db.set_settings(body))

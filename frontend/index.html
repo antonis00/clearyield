@@ -417,7 +417,7 @@
           <label>Value<input type="number" id="aValue" step="any"></label>
           <button class="btn" id="btnAlertAdd">Add alert</button>
         </div>
-        <p class="muted sm">Alerts are checked automatically while the app is running (every 15 min by default) and appear in the dashboard digest until you dismiss them. Browser notifications only arrive while this page is open. <button class="btn ghost sm" id="btnNotify">Turn on notifications</button></p>
+        <p class="muted sm">Alerts are checked automatically while the app is running (every 15 min by default) and appear in the dashboard digest until you dismiss them. They can also be emailed to you (Settings, Email alerts). Browser notifications only arrive while this page is open. <button class="btn ghost sm" id="btnNotify">Turn on notifications</button></p>
         <div id="alertTable" class="tablewrap"></div>
       </div>
     </div>
@@ -431,56 +431,57 @@
   <!-- SETTINGS -->
   <section id="view-settings" class="view hidden">
     <div class="grid2 settings-grid">
-      <div class="settings-col">
-        <div class="card">
-          <div class="card-h"><h3>General</h3></div>
-          <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
-            <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="navy">Navy</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
-          </div>
-          <div class="form-row">
-            <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
-            <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
-            <label>Benchmark<input id="sBench"></label>
-          </div>
-          <h4>Regions you follow</h4>
-          <div class="markets" id="sRegions"></div>
-          <p class="muted sm">Only their stocks are downloaded, screened, scored for Opportunities and compared in sector ranks. Research opens any symbol, followed or not.</p>
+      <!-- In rows, so cards side by side end on the same line: General | tiles, weights | email and data, targets | save -->
+      <div class="card">
+        <div class="card-h"><h3>General</h3></div>
+        <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
+          <div class="seg" id="themeSeg"><button data-theme="dark">Dark</button><button data-theme="navy">Navy</button><button data-theme="light">Light</button><button data-theme="system">Match system</button></div>
         </div>
-        <div class="card">
-          <div class="card-h"><h3>Factor weights</h3><span class="muted sm">Balanced = 20% each</span></div>
-          <div id="weightSliders"></div>
-          <button class="btn ghost sm" id="btnBalanced">Reset to balanced</button>
+        <div class="form-row">
+          <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
+          <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
+          <label>Benchmark<input id="sBench"></label>
         </div>
-        <div class="card">
-          <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
-          <h4>Asset classes (%)</h4>
-          <div class="form-row" id="targetInputs"></div>
-          <div class="form-row"><label>Core share of the portfolio %<input type="number" id="sCore" min="0" max="100" step="5"></label></div>
-        </div>
+        <h4 style="margin-top: 29px">Regions you follow</h4>
+        <div class="markets chips" id="sRegions"></div>
+        <p class="muted sm">Only their stocks are downloaded, screened, scored for Opportunities and compared in sector ranks. Research opens any symbol, followed or not.</p>
       </div>
-      <div class="settings-col">
+      <div class="card set-tiles">
+        <div class="card-h"><h3>Dashboard tiles</h3><span class="muted sm">Tick the ones to show</span></div>
+        <div id="tileChoices" class="tile-choices"></div>
+        <div class="form-row">
+          <label>Custom tile: Yahoo symbol<input id="ctTicker" placeholder="e.g. ^AEX or IWDA.AS"></label>
+          <label class="grow">Name on the tile<input id="ctName" placeholder="optional, Yahoo's name if empty" maxlength="40"></label>
+          <button class="btn ghost" id="btnAddTile">Add tile</button>
+        </div>
+        <div id="ctMsg" class="muted sm"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Factor weights</h3><button class="btn ghost sm" id="btnBalanced" title="20% each">Reset to balanced</button></div>
+        <div id="weightSliders"></div>
+      </div>
+      <div class="settings-stack">
         <div class="card">
-          <div class="card-h"><h3>Dashboard tiles</h3><span class="muted sm">Tick the ones to show</span></div>
-          <div id="tileChoices" class="tile-choices"></div>
-          <div class="form-row">
-            <label>Custom tile: Yahoo symbol<input id="ctTicker" placeholder="e.g. ^AEX or IWDA.AS"></label>
-            <label class="grow">Name on the tile<input id="ctName" placeholder="optional, Yahoo's name if empty" maxlength="40"></label>
-            <button class="btn ghost" id="btnAddTile">Add tile</button>
+          <div class="card-h"><h3>Email alerts</h3><label class="switch"><input type="checkbox" id="sEmailOn" role="switch" aria-label="Email alerts"><span></span></label></div>
+          <div class="email-row">
+            <input type="email" id="sEmail" placeholder="name@example.com" autocomplete="email" maxlength="254" aria-label="Email address for alerts">
+            <button class="btn ghost" id="btnTestEmail">Send test</button>
           </div>
-          <div id="ctMsg" class="muted sm"></div>
+          <p id="emailStatus" class="muted sm"></p>
         </div>
         <div class="card">
           <div class="card-h"><h3>Data</h3></div>
-          <p class="muted sm">Your holdings, journal, alerts, watchlist and settings exist only in this app's database file. Download a copy now and then. Restoring replaces everything currently in the app.</p>
-          <div class="form-row"><a class="btn ghost" id="btnBackup" href="/api/backup" download>Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
-          <p class="muted sm">Market data is kept for a while to stay fast. Refreshing makes every price and figure download again on its next use.</p>
-          <div class="form-row"><button class="btn ghost" id="btnClearCache">Refresh all data</button></div>
+          <div class="form-row"><button class="btn ghost" id="btnClearCache">Refresh all data</button><a class="btn ghost" id="btnBackup" href="/api/backup" download style="margin-left: auto">Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
         </div>
       </div>
-    </div>
-    <div class="savebar">
-      <button class="btn" id="btnSaveSettings">Save settings</button>
-      <span id="settingsMsg" class="muted sm">Theme, custom tiles and backups take effect straight away. Everything else is kept when you save.</span>
+      <div class="card">
+        <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
+        <div class="form-row targets"><span id="targetInputs"></span><label><span>Core target % <span class="info" tabindex="0" role="img" aria-label="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it." data-tip="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it.">i</span></span><input type="number" id="sCore" min="0" max="100" step="5"></label></div>
+      </div>
+      <div class="card save-card">
+        <div><div id="settingsMsg">No unsaved changes</div><div class="muted sm">Theme and tiles change at once; the rest when you save.</div></div>
+        <div class="save-actions"><button class="btn ghost hidden" id="btnDiscard">Discard</button><button class="btn" id="btnSaveSettings">Save settings</button></div>
+      </div>
     </div>
   </section>
 </main>
