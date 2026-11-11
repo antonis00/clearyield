@@ -2921,9 +2921,17 @@ def test_ai_providers():
             llm.replies = [_chat('<think>gulf means Gulf</think>Here you go:\n```json\n{"markets": ["gulf"], "max_pe": "15", "min_div_yield": 3, "colour": "blue"}\n```')]
             # The rules' values stand (a number typed, or a word's defined meaning: "cheap" is P/E 18); the model's own
             # stricter limits don't replace them, and it's told what the words mean here
-            rules = ai._parse_rules("cheap gulf dividend payers")
-            assert ai.parse_query("cheap gulf dividend payers") == {k: v for k, v in rules.items() if k != "ignored"}
+            rules = ai._parse_rules("cheap gulf dividend payers with wide moats")
+            assert ai.parse_query("cheap gulf dividend payers with wide moats") == {k: v for k, v in rules.items() if k != "ignored"}
             assert len(llm.seen) == 1 and "low volatility/low risk/safe/defensive: max_vol 0.25" in llm.seen[0][2]["messages"][1]["content"]
+            # When the rules read every word, the model isn't asked at all
+            llm.seen.clear()
+            assert ai.parse_query("cheap gulf dividend payers") == ai._parse_rules("cheap gulf dividend payers") and not llm.seen
+            # What the model can't express is reported; with thinking on, a screen asks for low reasoning effort
+            with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_THINKING="on"):
+                llm.replies = [_chat('{"unread": ["wide moat"], "min_roe": 0.15}')]
+                got = ai.parse_query("wide moat stocks")
+                assert got == {"min_roe": 0.15, "ignored": ["wide moat"]} and llm.seen[-1][2]["reasoning_effort"] == "low", (got, llm.seen[-1][2].get("reasoning_effort"))
             # The model fills what the rules couldn't read; a sector it only rules out narrowly stays narrow
             llm.replies = [_chat('{"markets": ["Europe"], "max_vol": 0.1, "exclude_sector": "Financial Services"}')]
             got = ai.parse_query("safe stocks on the continent excluding banks")
@@ -2934,7 +2942,7 @@ def test_ai_providers():
             got = ai.parse_query("dividend payers yielding north of 4, cheap")
             assert got["min_div_yield"] == 0.04 and got["max_pe"] == 18, got
             llm.replies = [_chat('{"min_div_yield": 0.05}')]
-            assert ai.parse_query("yield above 4 percent")["min_div_yield"] == 0.04
+            assert ai.parse_query("yield above 4 percent with wide moats")["min_div_yield"] == 0.04
             # The model is given Yahoo's industry names, and an industry the rules have no word for comes from it
             llm.seen.clear()
             llm.replies = [_chat('{"industries": ["Luxury Goods", "Fashion Houses"]}')]
@@ -2946,14 +2954,14 @@ def test_ai_providers():
             # Unreadable once: asked again, and the second answer is used
             llm.seen.clear()
             llm.replies = [_chat("I think you want Gulf stocks!"), _chat('{"markets": ["US"], "sort": "growth"}')]
-            got = ai.parse_query("fast growing american companies")
+            got = ai.parse_query("fast growing american companies with moats")
             # the model still says "US": read as the country it meant
             assert got["countries"] == ["United States"] and got["sort"] == "growth" and got["min_rev_growth"] == 0.10 and "ignored" not in got, got
             assert len(llm.seen) == 2 and "couldn't be read" in llm.seen[1][2]["messages"][1]["content"]
             # Unreadable twice: the regex rules take over
             llm.seen.clear()
             llm.replies = [_chat("no idea"), (500, {}, 0)]
-            assert ai.parse_query("cheap gulf banks") == ai._parse_rules("cheap gulf banks") and len(llm.seen) == 2
+            assert ai.parse_query("cheap gulf banks with moats") == ai._parse_rules("cheap gulf banks with moats") and len(llm.seen) == 2
 
         # The Anthropic path still works, against the same stand-in
         llm.seen.clear()
