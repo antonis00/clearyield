@@ -12,3 +12,6 @@ data/
 # Browser checks
 node_modules/
 tests/browser/out/
+
+# Editor settings
+.vscode/
