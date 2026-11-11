@@ -58,6 +58,8 @@ DEFAULT_SETTINGS = {
     "custom_tiles": [],  # [{"ticker", "name"}], each checked for price history when added
     "core_target": 80,
     "regions": list(REGIONS),  # the regions you follow: only their stocks are downloaded, screened and ranked against
+    "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
+    "email_alerts": False,
 }
 
 
@@ -276,6 +278,7 @@ FACTOR_KEYS = ("value", "quality", "growth", "momentum", "risk")
 TARGET_KEYS = ("Stocks", "ETFs", "Crypto", "Other")
 _SYMBOL = re.compile(r"[A-Z0-9^=.\-]{1,24}")
 _CURRENCY = re.compile(r"[A-Z]{3}")
+_EMAIL = re.compile(r"[^@\s<>\"',;:()\[\]]+@[^@\s<>\"',;:()\[\]]+\.[A-Za-z]{2,}")  # as mailer.EMAIL
 
 
 def _num(v, lo, hi, what):
@@ -321,6 +324,21 @@ def _regions(v):
     return [r for r in REGIONS if r in v]
 
 
+def _email(v):
+    """An address, or empty for none."""
+    if not isinstance(v, str) or len(v) > 254 or (v.strip() and not _EMAIL.fullmatch(v.strip())):
+        raise ValueError("The alert email must be an address such as name@example.com.")
+    return v.strip()
+
+
+def _switch(what):
+    def check(v):
+        if not isinstance(v, bool):
+            raise ValueError(f"{what} must be on or off.")
+        return v
+    return check
+
+
 SETTING_CHECKS = {
     "base_currency": _text(_CURRENCY, "The base currency must be a three-letter code such as USD."),
     "risk_free_rate": lambda v: _num(v, -0.05, 0.3, "The risk-free rate"),
@@ -331,6 +349,8 @@ SETTING_CHECKS = {
     "custom_tiles": _custom_tiles,
     "core_target": lambda v: _num(v, 0, 100, "The core share"),
     "regions": _regions,
+    "alert_email": _email,
+    "email_alerts": _switch("Email alerts"),
 }
 
 

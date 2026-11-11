@@ -44,7 +44,7 @@ Optional: copy `.env.example` to `.env` and add an `ANTHROPIC_API_KEY` to turn o
 | **Screener** | 95-ticker universe across 5 markets; numeric filters or a plain-language query ("cheap profitable dividend stocks in the Gulf") |
 | **Portfolio** | Ledger of buys, sales and dividends, entered one at a time or pasted as a list, and matched first in, first out. Multi-currency holdings converted to your base currency, unrealised and realised P&L at the FX rate on each date, annual return (XIRR), your actual performance vs benchmark over the past year, volatility/Sharpe/Sortino/beta/drawdown, allocation by asset class/region/sector/currency, looking through funds where Yahoo has the data, concentration warnings, rebalancing vs target allocation, estimated dividend income; core and satellite buckets (broad index funds are core by default, switchable per holding) with the split against your target, each bucket's share of the swings, and whether your satellites beat the core over the time you held both |
 | **Backtest** | Buy & hold, MA crossover, RSI mean reversion, absolute momentum and monthly DCA, with trades filled at the next day's open and trading costs |
-| **Journal & Alerts** | Record thesis, invalidation condition, stop/target and review date for every decision, with a scorecard of how your buy and add decisions did against the benchmark, overall and by the stance when recorded; alerts on price, daily move, RSI or score, shown in the tab title and as optional browser notifications while the page is open. Both feed the digest |
+| **Journal & Alerts** | Record thesis, invalidation condition, stop/target and review date for every decision, with a scorecard of how your buy and add decisions did against the benchmark, overall and by the stance when recorded; alerts on price, daily move, RSI or score, shown in the tab title, as optional browser notifications while the page is open, and optionally by email (your own mail account's SMTP server in `.env`, switched on in Settings). Both feed the digest |
 | **Settings** | Theme, factor weights (balanced by default), base currency, risk-free rate, benchmark, target allocation, core share target, dashboard tiles, backup and restore |
 
 ## How the scores work
@@ -94,7 +94,7 @@ python tests/run_all.py        # everything
 
 ```
 backend/   main.py (API) · data.py (Yahoo + cache + FX + demo) · scoring.py · indicators.py
-           portfolio.py · ledger.py (transactions) · backtest.py · insights.py (screener, compare, DCF, alerts, digest, scorecard)
+           portfolio.py · ledger.py (transactions) · backtest.py · insights.py (screener, compare, DCF, alerts, digest, scorecard) · mailer.py (alert emails)
            ai.py · db.py · universe.py
 frontend/  index.html · app.js · styles.css · vendor/ (charting libraries, bundled for offline use)
 tests/     test_smoke.py · check_live.py · run_all.py · browser/ (walk through every screen in Chrome)

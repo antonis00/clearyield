@@ -1659,11 +1659,60 @@ function loadSettings() {
   $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${esc(k)} ${factorInfo(k)}</label><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-w="${esc(k)}"><span>${Math.round(v * 100)}%</span></div>`).join("");
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
-  $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)}<input type="number" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
+  $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)} %<input type="number" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
   $("#sCore").value = s.core_target;
   $("#sRegions").innerHTML = state.meta.regions.map((r) => `<label><input type="checkbox" data-region="${esc(r)}" ${(s.regions || state.meta.regions).includes(r) ? "checked" : ""}> ${esc(r)}</label>`).join("");
   renderTileChoices(new Set(s.dashboard_tiles));
+  $("#sEmail").value = s.alert_email || ""; $("#sEmailOn").checked = !!s.email_alerts;
+  emailSwitched(); renderEmailStatus(); markUnsaved();
 }
+// What Save would change, compared in the form's own units (whole-percent sliders, sets for ticked boxes), so the save
+// card can say when something is unsaved. Theme, custom tiles and backups apply at once and aren't part of it.
+function settingsShown() {
+  const num = (v) => (String(v).trim() === "" ? null : Math.round(Number(v) * 1e6) / 1e6), set = (a) => [...a].sort();
+  return { base: $("#sBase").value, rf: num($("#sRf").value), bench: $("#sBench").value.trim().toUpperCase() || "SPY",
+    w: $$("[data-w]").map((r) => Number(r.value)), tg: $$("[data-tgt]").map((i) => num(i.value)), core: num($("#sCore").value),
+    regions: set($$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region)),
+    tiles: set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile)),
+    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked };
+}
+function settingsSaved() {
+  const s = state.meta.settings, num = (v) => Math.round(Number(v) * 1e6) / 1e6;
+  return { base: s.base_currency, rf: num((s.risk_free_rate * 100).toFixed(2)), bench: s.benchmark,
+    w: Object.values(s.weights).map((v) => Math.round(v * 100)), tg: Object.values(s.targets).map(num), core: num(s.core_target),
+    regions: [...(s.regions || state.meta.regions)].sort(), tiles: [...s.dashboard_tiles].sort(),
+    email: s.alert_email || "", emailOn: !!s.email_alerts };
+}
+function markUnsaved() {
+  const dirty = JSON.stringify(settingsShown()) !== JSON.stringify(settingsSaved()), msg = $("#settingsMsg");
+  $(".save-card").classList.toggle("dirty", dirty);
+  $("#btnDiscard").classList.toggle("hidden", !dirty);
+  if (dirty) msg.textContent = "Unsaved changes";
+  else if (!/^Saved/.test(msg.textContent)) msg.textContent = "No unsaved changes";
+}
+$("#view-settings").addEventListener("input", markUnsaved);
+$("#view-settings").addEventListener("change", markUnsaved);
+$("#btnDiscard").onclick = () => { $("#settingsMsg").textContent = ""; loadSettings(); toast("Changes discarded"); };
+// Says whether email can go out at all (the mail server is in .env) and whether it's on
+// The line under the address shows only a test's result
+function renderEmailStatus(note) {
+  $("#emailStatus").textContent = note || "";
+}
+// The address and test only matter while the switch is on
+function emailSwitched() {
+  const on = $("#sEmailOn").checked;
+  $(".email-row").classList.toggle("off", !on);
+  $("#sEmail").disabled = $("#btnTestEmail").disabled = !on;
+}
+$("#sEmailOn").onchange = () => { emailSwitched(); renderEmailStatus(); if ($("#sEmailOn").checked && !$("#sEmail").value) $("#sEmail").focus(); };
+$("#btnTestEmail").onclick = async () => {
+  const to = $("#sEmail").value.trim(), b = $("#btnTestEmail");
+  if (!to) return toast("Enter the address to send to.");
+  b.disabled = true; renderEmailStatus(`Sending a test email to ${to}…`);
+  try { await api("/api/email/test", { method: "POST", body: { to } }); renderEmailStatus(`Test sent to ${to}. Not there in a minute? Look in spam.`); }
+  catch (err) { renderEmailStatus(err.message); }
+  finally { b.disabled = false; }
+};
 // Ticks you haven't saved yet are kept when a custom tile is added or removed
 function renderTileChoices(shown) {
   $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label title="${esc(t.ticker)}"><input type="checkbox" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}${t.custom ? ` <button class="rm" data-rmtile="${esc(t.ticker)}" title="Remove this custom tile">×</button>` : ""}</label>`).join("");
@@ -1679,6 +1728,7 @@ function tilesChanged(r, ticked) {
   state.meta.settings.custom_tiles = r.settings.custom_tiles; state.meta.settings.dashboard_tiles = r.settings.dashboard_tiles;
   const known = new Set(r.tiles.map((t) => t.ticker));
   renderTileChoices(new Set([...ticked].filter((t) => known.has(t)))); // a removed tile drops out; a new one arrives ticked
+  markUnsaved();
 }
 $("#btnAddTile").onclick = async () => {
   const ticker = $("#ctTicker").value.trim();
@@ -1695,7 +1745,7 @@ $("#btnAddTile").onclick = async () => {
   finally { btn.disabled = false; }
 };
 ["#ctTicker", "#ctName"].forEach((id) => $(id).onkeydown = (e) => { if (e.key === "Enter") $("#btnAddTile").click(); });
-$("#btnBalanced").onclick = () => $$("[data-w]").forEach((r) => { r.value = 20; r.nextElementSibling.textContent = "20%"; });
+$("#btnBalanced").onclick = () => { $$("[data-w]").forEach((r) => { r.value = 20; r.nextElementSibling.textContent = "20%"; }); markUnsaved(); };
 // The sidebar's status icons: lit green when a service is in use, greyed when it isn't. The logos are files in
 // frontend/icons, so the real ones can replace the stand-ins without touching the code.
 const statusIcon = (on, img, alt, tip) => `<span class="st ${on ? "on" : "off"}" role="img" aria-label="${esc(tip)}" data-tip="${esc(tip)}" data-icon="${esc(alt)}"><i style="--icon: url('/static/icons/${img}')"></i></span>`;
@@ -1808,7 +1858,7 @@ function openConverter() {
 $("#btnSaveSettings").onclick = async () => {
   if ($("#sRf").value.trim() === "") return toast("Enter a risk-free rate.");
   const core = Number($("#sCore").value);
-  if ($("#sCore").value.trim() === "" || !(core >= 0 && core <= 100)) return toast("The core share is a percentage from 0 to 100.");
+  if ($("#sCore").value.trim() === "" || !(core >= 0 && core <= 100)) return toast("The core target is a percentage from 0 to 100.");
   if (!$$("[data-w]").some((r) => Number(r.value) > 0)) return toast("Give at least one factor some weight.");
   const w = Object.fromEntries($$("[data-w]").map((r) => [r.dataset.w, Number(r.value)]));
   const tot = Object.values(w).reduce((a, b) => a + b, 0) || 1;
@@ -1818,12 +1868,15 @@ $("#btnSaveSettings").onclick = async () => {
     dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile),
     core_target: Number($("#sCore").value), regions: $$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region) };
   if (!body.regions.length) return toast("Follow at least one region.");
+  Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked });
+  if (body.email_alerts && !body.alert_email) return toast("Enter the email address to send alerts to.");
+  if (body.alert_email && !$("#sEmail").checkValidity()) return toast("The alert email must be an address such as name@example.com.");
   const regionsBefore = (state.meta.settings.regions || []).join();
   state.meta.settings = await api("/api/settings", { method: "POST", body });
   if (state.meta.settings.regions.join() !== regionsBefore) {  // other regions: other markets and countries to offer
     state.meta = await api("/api/meta"); renderMarketChoices(); state.opp = null;
   }
-  renderModeBadge(); loadSettings(); $("#settingsMsg").textContent = "Saved. Weights were normalised to 100%."; toast("Settings saved");
+  $("#settingsMsg").textContent = "Saved"; renderModeBadge(); loadSettings(); toast("Settings saved");
 };
 $("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Everything will refresh on its next use"); };
 

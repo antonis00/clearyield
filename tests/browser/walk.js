@@ -688,6 +688,27 @@ const SLOW = 150000;
   expect("settings: navy chosen, reaches the charts and is remembered", (await bg()) === "rgb(9, 20, 48)" && navyGrid === "#172a52"
     && (await p.evaluate(() => document.documentElement.dataset.theme)) === "navy", navyGrid);
   await nav("settings");
+  // The save card says when something is unsaved, and Discard puts the saved values back
+  const saveMsg = () => txt("#settingsMsg");
+  const asiaWas = await p.isChecked('#sRegions [data-region="Asia-Pacific"]');
+  expect("settings: nothing unsaved on arrival", /No unsaved changes|Saved/.test(await saveMsg()) && await p.isHidden("#btnDiscard"), await saveMsg());
+  await p.click('#sRegions label:has([data-region="Asia-Pacific"])');
+  expect("settings: a change shows as unsaved", (await saveMsg()) === "Unsaved changes" && await p.isVisible("#btnDiscard"), await saveMsg());
+  await p.click("#btnDiscard");
+  expect("settings: discard puts it back", (await p.isChecked('#sRegions [data-region="Asia-Pacific"]')) === asiaWas && /No unsaved changes/.test(await saveMsg()) && await p.isHidden("#btnDiscard"), await saveMsg());
+  // Email alerts: the check servers have no mail server, so the card says what to add; on needs an address; the switch saves
+  expect("settings: email alerts start off, with no message", !(await txt("#emailStatus")) && !(await p.isChecked("#sEmailOn")) && (await p.isDisabled("#sEmail")), await txt("#emailStatus"));
+  await p.check("#sEmailOn"); await p.fill("#sEmail", ""); await p.click("#btnSaveSettings"); await p.waitForTimeout(300);
+  expect("settings: email alerts need an address", /email address/.test(await txt("#toast")) && !(await p.evaluate(() => state.meta.settings.email_alerts)), await txt("#toast"));
+  await p.locator("#sEmail").pressSequentially("me@example.com"); await saveSettings();
+  expect("settings: email alerts turned on and kept", (await p.evaluate(() => [state.meta.settings.email_alerts, state.meta.settings.alert_email].join()))
+    === "true,me@example.com" && (await p.isChecked("#sEmailOn")) && (await p.inputValue("#sEmail")) === "me@example.com");
+  refusalExpected = /\/api\/email\/test$/;
+  await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/email/test"), { timeout: SLOW }), p.click("#btnTestEmail")]); await p.waitForTimeout(200);
+  refusalExpected = null;
+  expect("settings: a test email without a mail server says why", /isn't set up/.test(await txt("#emailStatus")), await txt("#emailStatus"));
+  await p.uncheck("#sEmailOn"); await saveSettings();
+  expect("settings: email alerts turned off, address kept", (await p.evaluate(() => state.meta.settings.email_alerts)) === false && (await p.inputValue("#sEmail")) === "me@example.com");
   expect("favicon", (await p.request.get(new URL("favicon.ico", BASE).href)).ok());
   // The base currency's icon opens the converter: it converts, and swapping turns the rate round
   await p.click("#modeBadge .st.cur");

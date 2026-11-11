@@ -69,6 +69,7 @@ def with_server(demo, command):
         env = {**os.environ, "CLEARYIELD_DB": str(Path(tmp) / "check.db")}
         env.pop("ANTHROPIC_API_KEY", None)
         env["AI_PROVIDER"], env["WEB_SEARCH"], env["CLEARYIELD_WARM"] = "none", "off", "0"  # the browser checks expect rule-based briefs, not a wait on a model from .env
+        env["SMTP_HOST"] = ""  # a check that fires an alert never emails you
         env["CLEARYIELD_DEMO"] = "1" if demo else "0"
         if not demo:  # sector ranks against the first three markets only, so a run doesn't download the whole list
             env["CLEARYIELD_PEER_MARKETS"] = "Europe,Middle East & Africa"

@@ -16,6 +16,7 @@ for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING")
     os.environ.pop(_k, None)
 os.environ["AI_PROVIDER"] = "none"  # set before .env is read, which never overrides what's already set
 os.environ["WEB_SEARCH"] = "off"  # nor a Tavily key from .env; the tests that need web search set it themselves
+os.environ["SMTP_HOST"] = ""  # nor your mail server: no test ever emails you; the email tests use a fake server
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import warnings  # noqa: E402
@@ -830,6 +831,181 @@ def test_fired_alerts_stay_in_the_digest_until_dismissed():
         row = [a for a in c.get("/api/alerts").json() if a["id"] == aid][0]
         assert row["active"] == 0 and row["message"]
         assert c.post("/api/alerts/99999/dismiss").status_code == 200
+
+
+class _FakeSMTP:
+    """A real SMTP server on this computer, standing in for a mail provider. Each message arrives in `received` as
+    (sender, recipients, text); with `refuse_login`, it offers AUTH and refuses every password."""
+
+    def __init__(self, refuse_login=False):
+        import socketserver
+        import threading
+        self.received, fake = [], self
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self):
+                say = lambda line: self.wfile.write((line + "\r\n").encode())  # noqa: E731
+                say("220 fake ESMTP")
+                sender, rcpts = None, []
+                for raw in self.rfile:
+                    line = raw.decode().rstrip("\r\n")
+                    cmd = line[:4].upper()
+                    if cmd in ("EHLO", "HELO"):
+                        say("250-fake" if refuse_login else "250 fake")
+                        if refuse_login:
+                            say("250 AUTH PLAIN LOGIN")
+                    elif cmd == "AUTH":
+                        say("535 5.7.8 Username and Password not accepted")
+                    elif cmd == "MAIL":
+                        sender, rcpts = line.split(":", 1)[1].split()[0].strip("<>"), []
+                        say("250 OK")
+                    elif cmd == "RCPT":
+                        rcpts.append(line.split(":", 1)[1].strip().strip("<>"))
+                        say("250 OK")
+                    elif cmd == "DATA":
+                        say("354 go on")
+                        body = []
+                        for d in self.rfile:
+                            if d in (b".\r\n", b".\n"):
+                                break
+                            body.append(d.decode())
+                        fake.received.append((sender, rcpts, "".join(body)))
+                        say("250 queued")
+                    elif cmd == "QUIT":
+                        say("221 bye")
+                        return
+                    else:
+                        say("250 OK")
+
+        self.server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def env(self):
+        return {"SMTP_HOST": "127.0.0.1", "SMTP_PORT": str(self.port), "SMTP_SECURITY": "none", "SMTP_FROM": "alerts@example.com"}
+
+    def close(self):
+        self.server.shutdown(); self.server.server_close()
+
+
+def _smtp_env(**env):
+    """Set SMTP_* variables for one block, and put back what was there."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def block():
+        keys = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_SECURITY")
+        before = {k: os.environ.get(k) for k in keys}
+        for k in keys:
+            os.environ.pop(k, None)
+        os.environ.update(env)
+        try:
+            yield
+        finally:
+            for k, v in before.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+    return block()
+
+
+def test_alert_emails():
+    """Triggered alerts are emailed when that's on in Settings, once per check, and never when it's off."""
+    import email
+    from email import policy
+
+    from backend import mailer
+    _reset()
+    mail = _FakeSMTP()
+    try:
+        with TestClient(app) as c:
+            # Not set up: Settings says what to add, a test email is refused with the same sentence, nothing is stored
+            with _smtp_env(SMTP_HOST=""):
+                st = c.get("/api/meta").json()["email"]
+                assert st["ready"] is False and "SMTP_HOST" in st["problem"] and st["server"] is None, st
+                r = c.post("/api/email/test", json={"to": "me@example.com"})
+                assert r.status_code == 400 and "isn't set up" in r.text, r.text
+            with _smtp_env(SMTP_HOST="smtp.example.com", SMTP_USER="me@example.com", SMTP_PASSWORD="my_password"):
+                assert "SMTP_PASSWORD" in mailer.status()["problem"], "a placeholder password counts as not set up"
+            with _smtp_env(SMTP_HOST="smtp.example.com", SMTP_PORT="465", SMTP_USER="me@example.com", SMTP_PASSWORD="s3cret-pw"):
+                cfg = mailer.config()
+                assert cfg["security"] == "ssl" and cfg["sender"] == "me@example.com" and cfg["problem"] is None, cfg
+                assert "s3cret" not in str(mailer.status()) and "me@example.com" not in str(mailer.status()), "no user or password on the page"
+
+            # The settings: checked like every other, and on needs an address
+            for bad in ({"alert_email": "not an address"}, {"alert_email": 5}, {"alert_email": "a@b.c<script>"}, {"email_alerts": "yes"},
+                        {"email_alerts": True}, {"email_alerts": True, "alert_email": " "}):
+                r = c.post("/api/settings", json=bad)
+                assert r.status_code == 400, (bad, r.text)
+            s = c.get("/api/settings").json()
+            assert s["alert_email"] == "" and s["email_alerts"] is False, s
+
+            with _smtp_env(**mail.env()):
+                assert c.get("/api/meta").json()["email"] == {"ready": True, "problem": None, "server": f"127.0.0.1:{mail.port}"}
+                # A test email goes to the address typed, saved or not
+                r = c.post("/api/email/test", json={"to": "me@example.com"})
+                assert r.status_code == 200 and r.json()["to"] == "me@example.com", r.text
+                assert len(mail.received) == 1 and mail.received[0][:2] == ("alerts@example.com", ["me@example.com"])
+                assert "ClearYield test email" in mail.received[0][2]
+                assert c.post("/api/email/test", json={"to": "nope"}).status_code == 400
+                mail.received.clear()
+
+                # Off (the default): an alert fires and nothing is sent
+                c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 0.01})
+                assert len(c.post("/api/alerts/check").json()) == 1 and mail.received == []
+
+                # On: one email for everything that fired in one check, with each alert and a link to the stock
+                s = c.post("/api/settings", json={"alert_email": " me@example.com ", "email_alerts": True}).json()
+                assert s["alert_email"] == "me@example.com" and s["email_alerts"] is True
+                c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 0.01})
+                c.post("/api/alerts", json={"ticker": "MSFT", "kind": "price_above", "value": 0.01})
+                c.post("/api/alerts", json={"ticker": "MSFT", "kind": "price_above", "value": 1e12})  # doesn't fire
+                fired = c.post("/api/alerts/check").json()
+                assert len(fired) == 2 and len(mail.received) == 1, (fired, mail.received)
+                msg = email.message_from_string(mail.received[0][2], policy=policy.default)
+                text = msg.get_content()
+                assert msg["Subject"] == "ClearYield: 2 alerts triggered" and msg["To"] == "me@example.com", msg["Subject"]
+                assert all(f["message"] in text for f in fired) and "#research/AAPL" in text and "#research/MSFT" in text, text
+                assert "not financial advice" in text
+                # Each alert fires once, so the next check sends nothing
+                assert c.post("/api/alerts/check").json() == [] and len(mail.received) == 1
+
+                # One alert: its message is the subject
+                c.post("/api/alerts", json={"ticker": "NVDA", "kind": "price_above", "value": 0.01})
+                c.post("/api/alerts/check")
+                assert email.message_from_string(mail.received[-1][2], policy=policy.default)["Subject"].startswith("ClearYield alert: NVDA at "), mail.received[-1]
+
+                # Turned off again: nothing more is sent, and the address is kept for next time
+                s = c.post("/api/settings", json={"email_alerts": False}).json()
+                assert s["alert_email"] == "me@example.com" and s["email_alerts"] is False
+                c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 0.01})
+                n = len(mail.received)
+                assert len(c.post("/api/alerts/check").json()) == 1 and len(mail.received) == n
+
+            # A mail server that can't be reached: the check still answers and the alert is still in the digest
+            c.post("/api/settings", json={"email_alerts": True})
+            with _smtp_env(**{**mail.env(), "SMTP_PORT": "1"}):
+                c.post("/api/alerts", json={"ticker": "AAPL", "kind": "price_above", "value": 0.01})
+                r = c.post("/api/alerts/check")
+                assert r.status_code == 200 and len(r.json()) == 1
+                assert "error" in mailer.send_alerts([{"ticker": "AAPL", "message": "AAPL test"}], c.get("/api/settings").json())
+                assert any(i["text"].startswith("Alert:") for i in c.get("/api/digest").json()["items"])
+        # A refused password names the likely fix
+        strict = _FakeSMTP(refuse_login=True)
+        try:
+            with _smtp_env(**strict.env(), SMTP_USER="me@example.com", SMTP_PASSWORD="wrong"):
+                try:
+                    mailer.send("me@example.com", "x", "y")
+                    assert False, "a refused login must fail"
+                except ValueError as e:
+                    assert "refused the user name or password" in str(e) and "app password" in str(e), e
+                assert strict.received == []
+        finally:
+            strict.close()
+    finally:
+        mail.close()
+        _reset()
 
 
 def test_journal_stops_work_for_any_ticker():
