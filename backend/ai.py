@@ -565,11 +565,15 @@ FILTER_SPEC = {
 # rules found a value it stands: a model left to choose picks its own, often stricter, limits and empties the screen.
 MEANINGS = ("cheap/undervalued/value: max_pe 18. low debt: max_de 0.5. profitable/quality: min_roe 0.12. dividend/income: "
             "min_div_yield 0.025. growth/growing: min_rev_growth 0.10. momentum/trending: min_momentum 60. low volatility/low "
-            "risk/safe/defensive: max_vol 0.25 (these words describe risk, not a sector). mega cap: min_mcap 200e9. large "
-            "cap/big/blue chip: min_mcap 10e9. mid cap: min_mcap 2e9 and max_mcap 10e9. small cap: max_mcap 2e9. oversold: "
-            "max_rsi 30. overbought: min_rsi 70. near the 52-week high: max_off_high 0.05. near the 52-week low: max_above_low "
-            "0.1. beaten down: min_off_high 0.25. below book value: max_pb 1. beat the market: beat_market true. largest: "
-            "sort size. Only set a sector when the request names an industry. Use a number the request gives in place of these.")
+            "risk/safe/defensive/steady/stable/quiet: max_vol 0.25 (these words describe risk, not a sector). mega cap: "
+            "min_mcap 200e9. large cap/big/blue chip: min_mcap 10e9. mid cap: min_mcap 2e9 and max_mcap 10e9. small cap: "
+            "max_mcap 2e9. oversold: max_rsi 30. overbought: min_rsi 70. near the 52-week high: max_off_high 0.05. near the "
+            "52-week low: max_above_low 0.1. beaten down: min_off_high 0.25. below book value: max_pb 1. beat the market: "
+            "beat_market true. doubled over the past year: min_ret1y 1. largest: sort size. Only set a sector when the "
+            "request names an industry. Only set countries when the request names a country or the Gulf (the Middle East is "
+            "the region, not the Gulf). Use a number the request gives in place of these. Set only what the request asks "
+            "for: never add a limit of your own (a market cap, a country, a score) to stand for a word with no meaning here; "
+            "put that word under unread instead.")
 
 # Regions, and the funds and crypto groups, as the Screener's markets
 MARKET_WORDS = {"North America": ["north america", "north american"], "Europe": ["europe", "european", "eu"],
@@ -624,7 +628,7 @@ INDUSTRY_WORDS = {
     "Oil & Gas Refining": ["refiners", "refining"], "Oil & Gas Midstream": ["pipelines", "midstream"], "Oil & Gas Equipment": ["oil services", "oilfield services"],
     "Thermal Coal": ["coal"], "Gold": ["gold miners", "gold", "gold stocks"], "Copper": ["copper"], "Steel": ["steel", "steelmakers"],
     "Aluminum": ["aluminium", "aluminum"], "Chemicals": ["chemicals", "chemical companies"], "Agricultural Inputs": ["fertilizer", "fertiliser", "fertilizers", "fertilisers"],
-    "Aerospace & Defense": ["defense", "defence", "defense stocks", "defence stocks", "aerospace", "arms makers"],
+    "Aerospace & Defense": ["defense", "defence", "defense stocks", "defence stocks", "aerospace", "arms makers", "weapons", "weapons makers", "defense contractors", "defence contractors"],
     "Airlines": ["airlines", "airline"], "Airports": ["airports"], "Railroads": ["railroads", "railways", "rail"],
     "Marine Shipping": ["shipping", "shipping companies"], "Integrated Freight & Logistics": ["logistics", "freight", "parcel"],
     "Conglomerates": ["conglomerates"], "Engineering & Construction": ["construction", "engineering"],
@@ -634,10 +638,10 @@ INDUSTRY_WORDS = {
 }
 # Words the rules act on, and words that don't change a screen, so neither is reported as not understood
 RULE_WORDS = {"banking", "strong", "fast", "high", "p/e", "pe", "ratio", "yield", "yielding", "dividend", "dividends", "income", "growth", "growing", "revenue", "cheap", "undervalued", "value",
-              "low", "debt", "no", "profitable", "quality", "momentum", "trending", "uptrend", "vol", "volatility", "risk", "safe", "defensive", "under", "below",
+              "low", "debt", "no", "profitable", "quality", "momentum", "trending", "uptrend", "vol", "volatility", "risk", "safe", "defensive", "steady", "stable", "quiet", "calm", "boring", "under", "below",
               "above", "over", "less", "than", "more", "at", "least", "most", "of", "us", "real", "estate", "middle", "east"}
 FILLER_WORDS = {"stock", "stocks", "share", "shares", "company", "companies", "name", "names", "equities", "market", "markets", "listed", "with", "and", "or", "in",
-                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "give", "get", "tell", "list", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous", "trading", "trades"}
+                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "give", "get", "tell", "list", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous", "trading", "trades", "year", "years", "annually", "per"}
 
 
 FRACTIONS = ("min_div_yield", "min_rev_growth", "min_roe", "max_vol", "min_off_high", "max_off_high", "max_above_low")
@@ -880,6 +884,10 @@ _PHRASES = [
      r"(?:or more\s+)?(?:(?:so far\s+)?this\s+year|year[ -]to[ -]date|ytd)\b", "ytd", None),
 ]
 _DOWN_WORDS = ("down", "fell", "fallen", "lost", "dropped", "declined")
+# "doubled over the past year" (+100%), "tripled" (+200%), "halved this year" (-50%)
+_MULTIPLES = {"doubled": 1.0, "tripled": 2.0, "halved": -0.5}
+_PERIODS = [(r"(?:(?:over|in|during)\s+)?(?:the\s+)?(?:past|last)\s+(?:year|12 months|twelve months)\b", "ret1y"),
+            (r"(?:(?:so far\s+)?this\s+year|year[ -]to[ -]date|ytd)\b", "ytd")]
 
 
 def _typed_limits(t):
@@ -898,6 +906,11 @@ def _typed_limits(t):
             else:  # a return: "up 20%" is at least +20%, "down 30%" at most -30%
                 down = m.group("dir") in _DOWN_WORDS
                 found[("max_" if down else "min_") + key] = (-n if down else n) / 100
+            t = t[:m.start()] + " " + t[m.end():]
+    for period, key in _PERIODS:
+        if m := re.search(rf"\b(?:have\s+|has\s+)?(?P<w>{'|'.join(_MULTIPLES)})\s+{period}", t):
+            v = _MULTIPLES[m.group("w")]
+            found[("max_" if v < 0 else "min_") + key] = v
             t = t[:m.start()] + " " + t[m.end():]
     stop = r"(?!\b(?:and|with|but)\b)[^\d\n,;]"
     for (lo, hi), subj, way, kind in LIMITS:
@@ -1073,7 +1086,7 @@ def _rules(t):
         if unset("min_momentum"):
             f["min_momentum"] = 60
         f.setdefault("sort", "momentum")
-    if _has(t, "low vol", "low volatility", "low risk", "safe", "defensive"):
+    if _has(t, "low vol", "low volatility", "low risk", "safe", "defensive", "steady", "stable", "quiet", "calm", "boring"):
         if unset("max_vol"):
             f["max_vol"] = 0.25
         f.setdefault("sort", "risk")
