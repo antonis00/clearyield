@@ -127,6 +127,16 @@ def ok(payload):
     return JSONResponse(clean(payload))
 
 
+def _auto_backup():
+    """This week's automatic backup, if it's due (db.auto_backup). A failure is logged and never stops the app."""
+    try:
+        written = db.auto_backup()
+        if written:
+            log.info("automatic backup written: %s", written)
+    except Exception as e:
+        log.warning("automatic backup failed: %s", e)
+
+
 async def _alert_loop():
     while True:
         await asyncio.sleep(ALERT_INTERVAL)
@@ -137,6 +147,7 @@ async def _alert_loop():
                 log.info("ALERT: %s", a["message"])
             await asyncio.to_thread(mailer.send_alerts, fired, settings)  # before the slower score recording
             await asyncio.to_thread(insights.record_today, settings)
+            await asyncio.to_thread(_auto_backup)  # due once a week; a running app needn't be restarted for it
         except Exception as e:
             log.warning("alert check failed: %s", e)
 
@@ -150,6 +161,7 @@ async def lifespan(app):
             log.info("removed %d cache entries not refreshed for %d days", gone, db.CACHE_KEEP_DAYS)
     except Exception as e:  # never stop the app over housekeeping
         log.warning("cache pruning failed: %s", e)
+    _auto_backup()
     tasks = [asyncio.create_task(_alert_loop())]
     if not data.DEMO and os.environ.get("CLEARYIELD_WARM", "1") != "0":
         tasks.append(asyncio.create_task(_warm_loop()))
@@ -280,7 +292,7 @@ def meta():
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
                "settings": settings, "markets": [*insights.followed(settings), "ETFs", "Crypto"], "stockMarkets": insights.followed(settings), "regions": REGIONS,
                "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "currencies": data.CURRENCIES, "alertKinds": insights.ALERT_KINDS,
-               "email": mailer.status(), "startup": startup.status(), "strategies": backtest.STRATEGIES})
+               "email": mailer.status(), "startup": startup.status(), "autoBackup": db.auto_backup_status(), "strategies": backtest.STRATEGIES})
 
 
 @app.get("/api/search")
