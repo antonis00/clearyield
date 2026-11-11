@@ -16,6 +16,7 @@ for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING")
     os.environ.pop(_k, None)
 os.environ["AI_PROVIDER"] = "none"  # set before .env is read, which never overrides what's already set
 os.environ["WEB_SEARCH"] = "off"  # nor a Tavily key from .env; the tests that need web search set it themselves
+os.environ["CLEARYIELD_STARTUP_DIR"] = str(Path(tempfile.mkdtemp()) / "Startup")  # never your real Startup folder
 os.environ["SMTP_HOST"] = ""  # nor your mail server: no test ever emails you; the email tests use a fake server
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -1006,6 +1007,64 @@ def test_alert_emails():
     finally:
         mail.close()
         _reset()
+
+
+def test_start_with_windows():
+    """The switch adds a shortcut that runs the app windowless at sign-in, and removes it again."""
+    import subprocess
+
+    from backend import startup
+    folder = Path(os.environ["CLEARYIELD_STARTUP_DIR"])
+    with TestClient(app) as c:
+        assert c.get("/api/meta").json()["startup"] == {"supported": True, "enabled": False}
+        assert c.post("/api/startup", json={"enabled": "yes"}).status_code == 400
+        assert c.post("/api/startup", json={"enabled": True}).json() == {"supported": True, "enabled": True}
+        lnk = folder / startup.NAME
+        assert lnk.exists()
+        read = subprocess.run(["powershell", "-NoProfile", "-Command", f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}'); "
+                               "$s.TargetPath; $s.Arguments; $s.WorkingDirectory"], capture_output=True, text=True).stdout.splitlines()
+        assert read[0].strip().lower().endswith("pythonw.exe") and read[1].strip() == "-m backend.background", read
+        assert Path(read[2].strip()) == Path(__file__).resolve().parent.parent, read
+        assert c.post("/api/startup", json={"enabled": True}).json()["enabled"] is True, "asking twice is fine"
+        assert c.post("/api/startup", json={"enabled": False}).json() == {"supported": True, "enabled": False}
+        assert not lnk.exists() and c.post("/api/startup", json={"enabled": False}).status_code == 200
+
+
+def test_background_start_and_stop():
+    """What the shortcut runs: the app with no window, its output in a log; a second start leaves the first be; and
+    /api/stop ends it, for run.bat --restart."""
+    import socket
+    import subprocess
+    import time
+    import urllib.request
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
+    tmp = Path(tempfile.mkdtemp())
+    env = {**os.environ, "CLEARYIELD_PORT": str(port), "CLEARYIELD_LOG": str(tmp / "server.log"), "CLEARYIELD_DB": str(tmp / "bg.db"),
+           "CLEARYIELD_DEMO": "1", "CLEARYIELD_WARM": "0", "AI_PROVIDER": "none", "SMTP_HOST": "", "WEB_SEARCH": "off"}
+    root = Path(__file__).resolve().parent.parent
+    first = subprocess.Popen([sys.executable, "-m", "backend.background"], cwd=root, env=env)
+    try:
+        url = f"http://127.0.0.1:{port}"
+        for _ in range(100):
+            try:
+                assert urllib.request.urlopen(url + "/api/meta", timeout=2).status == 200
+                break
+            except Exception:
+                time.sleep(0.2)
+        else:
+            raise AssertionError("the background app never answered: " + (tmp / "server.log").read_text(encoding="utf-8")[-2000:])
+        second = subprocess.run([sys.executable, "-m", "backend.background"], cwd=root, env=env, timeout=60)
+        assert second.returncode == 0 and first.poll() is None, "a second start leaves the first running"
+        log = (tmp / "server.log").read_text(encoding="utf-8")
+        assert "starting in the background" in log and "already answers" in log, log[-1500:]
+        req = urllib.request.Request(url + "/api/stop", method="POST")
+        assert urllib.request.urlopen(req, timeout=5).status == 200
+        first.wait(timeout=15)
+    finally:
+        if first.poll() is None:
+            first.kill()
 
 
 def test_journal_stops_work_for_any_ticker():

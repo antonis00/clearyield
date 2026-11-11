@@ -24,6 +24,8 @@ Then open http://localhost:8001. The first run installs the dependencies.
 
 To try it with made-up data and no internet, use `./run.sh --demo` or `run.bat --demo`.
 
+On Windows, **Settings → Start with Windows** runs it in the background whenever you sign in, with no window, so alerts and emails keep working with the page closed (its log is `data/server.log`). `run.bat` then just opens the page; after an update, `run.bat --restart` replaces the background copy with the new code.
+
 Or manually:
 
 ```bash

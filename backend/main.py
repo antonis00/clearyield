@@ -96,7 +96,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, simulate  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, simulate, startup  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
 
@@ -280,7 +280,7 @@ def meta():
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
                "settings": settings, "markets": [*insights.followed(settings), "ETFs", "Crypto"], "stockMarkets": insights.followed(settings), "regions": REGIONS,
                "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "currencies": data.CURRENCIES, "alertKinds": insights.ALERT_KINDS,
-               "email": mailer.status(), "strategies": backtest.STRATEGIES})
+               "email": mailer.status(), "startup": startup.status(), "strategies": backtest.STRATEGIES})
 
 
 @app.get("/api/search")
@@ -891,6 +891,32 @@ def settings_set(body: dict = Body(...)):
         return ok(db.set_settings(body))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------- start with Windows
+@app.get("/api/startup")
+def startup_get():
+    return ok(startup.status())
+
+
+@app.post("/api/startup")
+def startup_set(body: dict = Body(...)):
+    if not isinstance(body.get("enabled"), bool):
+        raise HTTPException(400, "Say whether to start with Windows: enabled true or false.")
+    try:
+        return ok(startup.enable() if body["enabled"] else startup.disable())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/stop")
+def stop():
+    """Stop this copy of the app, for `run.bat --restart` to replace one running in the background with new code.
+    Only this computer can ask (the middleware), and a page on another site can't."""
+    import threading
+    log.info("stopping, as asked")
+    threading.Timer(0.5, lambda: os._exit(0)).start()  # after the reply has gone
+    return ok({"stopping": True})
 
 
 # ---------------------------------------------------------------- backup

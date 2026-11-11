@@ -688,6 +688,13 @@ const SLOW = 150000;
   expect("settings: navy chosen, reaches the charts and is remembered", (await bg()) === "rgb(9, 20, 48)" && navyGrid === "#172a52"
     && (await p.evaluate(() => document.documentElement.dataset.theme)) === "navy", navyGrid);
   await nav("settings");
+  // Start with Windows applies at once (the check servers point it at a temporary folder, never the real one)
+  expect("settings: start with Windows is offered, off", await p.isVisible("#startupOpt") && !(await p.isChecked("#sStartup")));
+  await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/startup"), { timeout: SLOW }), p.click("#startupOpt .switch")]); await p.waitForTimeout(200);
+  const stOn = await p.evaluate(async () => (await (await fetch("/api/startup")).json()).enabled);
+  expect("settings: start with Windows turns on at once", stOn && /sign in to Windows/.test(await txt("#toast")) && /No unsaved|Saved/.test(await txt("#settingsMsg")), await txt("#toast"));
+  await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/startup"), { timeout: SLOW }), p.click("#startupOpt .switch")]); await p.waitForTimeout(200);
+  expect("settings: and off again", !(await p.evaluate(async () => (await (await fetch("/api/startup")).json()).enabled)) && !(await p.isChecked("#sStartup")));
   // The save card says when something is unsaved, and Discard puts the saved values back
   const saveMsg = () => txt("#settingsMsg");
   const asiaWas = await p.isChecked('#sRegions [data-region="Asia-Pacific"]');
