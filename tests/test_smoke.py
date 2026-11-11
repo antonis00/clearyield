@@ -1112,6 +1112,44 @@ def test_score_check_is_hand_calculated():
         assert r["regions"] and r["kinds"]["momentum"]["summary"] and len(r["caveats"]) == 4, r.get("error")
 
 
+def test_fund_costs_are_hand_calculated():
+    """What the funds cost a year: each fund's yearly cost on what you hold of it. Your own figure stands over Yahoo's,
+    a fund with none is named rather than guessed, and stocks cost nothing to hold."""
+    from backend import data, portfolio
+    _reset()
+    with TestClient(app) as c:
+        for t in ("SPY", "VTI", "AAPL"):
+            assert c.post("/api/transactions", json={"ticker": t, "kind": "buy", "shares": 10, "price": 100}).status_code == 200
+        p = c.get("/api/portfolio").json()
+        fc, pos = p["fundCosts"], {r["ticker"]: r for r in p["positions"]}
+        spy, vti = data.info("SPY")["netExpenseRatio"], data.info("VTI")["netExpenseRatio"]
+        assert 0 < spy < 0.01 and 0 < vti < 0.01, "demo funds carry a cost, in Yahoo's units once normalised"
+        expected = pos["SPY"]["value"] * spy + pos["VTI"]["value"] * vti
+        assert abs(fc["perYear"] - expected) < 1e-6 and abs(fc["ofPortfolio"] - expected / p["total"]) < 1e-12, (fc, expected)
+        assert abs(fc["ofFunds"] - expected / (pos["SPY"]["value"] + pos["VTI"]["value"])) < 1e-12
+        assert {f["ticker"] for f in fc["funds"]} == {"SPY", "VTI"} and all(f["from"] == "Yahoo" for f in fc["funds"]) and fc["unknown"] == []
+        assert pos["AAPL"]["costRatio"] is None, "a stock has no yearly cost"
+        assert fc["funds"][0]["perYear"] >= fc["funds"][1]["perYear"], "the dearest first"
+
+        # Your figure from the factsheet stands over Yahoo's
+        assert c.post("/api/settings", json={"fund_costs": {"SPY": 0.0003}}).status_code == 200
+        fc2 = c.get("/api/portfolio").json()["fundCosts"]
+        mine = next(f for f in fc2["funds"] if f["ticker"] == "SPY")
+        assert mine["ratio"] == 0.0003 and mine["from"] == "you", mine
+        assert abs(fc2["perYear"] - (pos["SPY"]["value"] * 0.0003 + pos["VTI"]["value"] * vti)) < 1e-6
+        for bad in ({"fund_costs": {"SPY": 0.5}}, {"fund_costs": {"SPY": -0.01}}, {"fund_costs": {"<b>": 0.01}}, {"fund_costs": ["SPY"]}, {"fund_costs": {"SPY": "0.2%"}}):
+            assert c.post("/api/settings", json=bad).status_code == 400, bad
+        c.post("/api/settings", json={"fund_costs": {}})
+
+    # A fund Yahoo lists no cost for (VWCE.DE, live) is named, and nothing is made up for it
+    rows = [{"ticker": "VWCE.DE", "name": "All-World", "assetClass": "ETFs", "value": 1000.0, "costRatio": None, "costFrom": None},
+            {"ticker": "AAPL", "name": "Apple", "assetClass": "Stocks", "value": 1000.0, "costRatio": None, "costFrom": None}]
+    fc3 = portfolio._fund_costs(rows, 2000.0)
+    assert fc3["perYear"] == 0 and fc3["funds"] == [] and fc3["unknown"] == [{"ticker": "VWCE.DE", "name": "All-World"}] and fc3["ofFunds"] is None
+    assert portfolio._cost_of("VWCE.DE", {"assetClass": "ETFs"}, {"fund_costs": {"VWCE.DE": 0.0014}}) == {"costRatio": 0.0014, "costFrom": "you"}
+    _reset()
+
+
 def test_journal_stops_work_for_any_ticker():
     """A stop or target applies whether or not the ticker is held or watched, without adding it to the digest's moves."""
     from fastapi.testclient import TestClient

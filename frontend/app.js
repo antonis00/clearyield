@@ -1288,6 +1288,15 @@ async function loadDashOpp() {
 /* ---------------------------------------------------------------- portfolio */
 async function loadPortfolio() {
   const t = $("#pfTable"); loading(t);
+  // What the funds cost a year, taken from their prices: shown only when you hold a fund
+  const fundCostKpi = (p) => {
+    const c = p.fundCosts;
+    if (!c || (!c.funds.length && !c.unknown.length)) return null;
+    const dearest = c.funds[0], parts = c.funds.length ? [`${pct(c.ofPortfolio, 2, false)} of the portfolio`] : [];
+    if (c.funds.length > 1 && dearest) parts.push(`most from ${esc(dearest.ticker)} (${pct(dearest.ratio, 2, false)} a year)`);
+    if (c.unknown.length) parts.push(`no figure for ${esc(c.unknown.map((u) => u.ticker).join(", "))}`);
+    return ["Fund costs / yr", c.funds.length ? money(c.perYear, p.base, 0) : "—", `${parts.join(" · ")} <a href="#" id="pfCostEdit">Set costs</a>`];
+  };
   let p;
   try { p = await api("/api/portfolio"); } catch (e) { t.innerHTML = esc(e.message); return; }
   const b = p.base;
@@ -1300,8 +1309,10 @@ async function loadPortfolio() {
     isNum(p.xirr) ? ["Annual return", cpct(p.xirr), "Your money's return a year, with timing"]
       : /^Shown after a year/.test(p.xirrWhy || "") && isNum(p.returnSoFar) ? ["Return so far", cpct(p.returnSoFar), "Not annualised: that starts after a year of history"]
       : ["Annual return", "—", esc(p.xirrWhy || "")],
-    ["Est. dividend income / yr", money(p.annualIncome, b, 0), "What your holdings paid per share in the past year"], ["Positions", p.positions.length],
+    ["Est. dividend income / yr", money(p.annualIncome, b, 0), "What your holdings paid per share in the past year"],
+    ...(fundCostKpi(p) ? [fundCostKpi(p)] : []), ["Positions", p.positions.length],
   ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
+  if ($("#pfCostEdit")) $("#pfCostEdit").onclick = (e) => { e.preventDefault(); editFundCosts(p.fundCosts); };
   // Nothing bought or sold yet: no row of zeros that looks like a result
   if (!p.positions.length && !p.closed.length && !p.missing.length) $("#pfKpis").innerHTML = `<div class="muted">No transactions yet. Add a purchase above, or paste your broker's export.</div>`;
   table(t, [
@@ -1490,6 +1501,24 @@ $$("#btMode button").forEach((b) => b.onclick = () => setBtMode(b.dataset.mode))
 function btMode() { try { const m = localStorage.getItem("btMode"); return ["portfolio", "score"].includes(m) ? m : "single"; } catch { return "single"; } }
 setBtMode(btMode(), false);
 function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) => toast(e.message)); if (btMode() === "score") loadScoreCheck(); }
+
+/* ---------------------------------------------------------------- fund costs */
+// Each fund's yearly cost: yours, from its factsheet, stands over Yahoo's (which is missing for many European funds)
+function editFundCosts(c) {
+  const mine = state.meta.settings.fund_costs || {};
+  const rows = [...c.funds, ...c.unknown].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  modal(`<h3>Fund costs</h3><p class="muted sm">The yearly cost from each fund's factsheet ("ongoing charges" or TER). Leave a box empty to use Yahoo's figure.</p>
+    <form><div class="cost-rows">${rows.map((f) => `<label><span><b>${esc(f.ticker)}</b> <span class="muted sm">${esc(f.name || "")}</span></span>
+      <span class="cost-in"><input type="number" name="${esc(f.ticker)}" min="0" max="5" step="0.01" value="${mine[f.ticker] != null ? +(mine[f.ticker] * 100).toFixed(4) : ""}"
+        placeholder="${f.from === "Yahoo" ? `Yahoo ${(f.ratio * 100).toFixed(2)}` : "e.g. 0.20"}"> %</span></label>`).join("")}</div>
+    <div class="modal-actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn">Save</button></div></form>`,
+  async (f) => {
+    const costs = { ...mine };
+    rows.forEach((r) => { const v = String(f.get(r.ticker) ?? "").trim(); if (v === "") delete costs[r.ticker]; else costs[r.ticker] = Number(v) / 100; });
+    state.meta.settings = await api("/api/settings", { method: "POST", body: { fund_costs: costs } });
+    toast("Fund costs saved"); loadPortfolio();
+  });
+}
 
 /* ---------------------------------------------------------------- score check */
 // The price-based scores rebuilt for past quarters (scorecheck.py): what each third did over the following year

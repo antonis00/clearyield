@@ -313,6 +313,15 @@ const SLOW = 150000;
   expect("portfolio: the day's change says which day", pf.dayFrom === today && pf.dayTo === today ? /^Today/i.test(dayKpi) : /^Latest day/i.test(dayKpi) && /\d/.test(dayKpi.replace(/^Latest day\s*\S+/i, "")), `${dayKpi} | ${pf.dayFrom}–${pf.dayTo}`);
   expect("portfolio: drift isn't coloured as gain or loss", !(await p.locator("#pfRebal td:nth-child(4) .up, #pfRebal td:nth-child(4) .down").count()));
   expect("portfolio: no bad text", !/undefined|NaN|\[object/.test(await txt("#view-portfolio")));
+  // Fund costs: SPY's yearly cost on what's held, and your own figure from the factsheet standing over Yahoo's
+  const costKpi = await p.evaluate(() => [...document.querySelectorAll("#pfKpis .kpi")].map((k) => k.innerText.replace(/\s+/g, " ")).find((t) => /^Fund costs/i.test(t)) || "");
+  expect("portfolio: fund costs a year, as a share of the portfolio", pf.fundCosts.funds.some((f) => f.ticker === "SPY") && /of the portfolio/.test(costKpi) && /Set costs/.test(costKpi), costKpi);
+  await p.click("#pfCostEdit"); await p.locator('#modal input[name="SPY"]').fill("0.03"); await p.click("#modal form .btn:not(.ghost)");
+  await p.waitForFunction(() => /Fund costs saved/.test(document.querySelector("#toast")?.innerText || ""), null, { timeout: SLOW }); await p.waitForTimeout(1500);
+  const mine = (await p.evaluate(async () => (await fetch("/api/portfolio")).json())).fundCosts.funds.find((f) => f.ticker === "SPY");
+  expect("portfolio: your fund cost stands over Yahoo's", mine.from === "you" && Math.abs(mine.ratio - 0.0003) < 1e-12, JSON.stringify(mine));
+  await p.click("#pfCostEdit"); await p.locator('#modal input[name="SPY"]').fill(""); await p.click("#modal form .btn:not(.ghost)"); await p.waitForTimeout(1500);
+  expect("portfolio: emptied, Yahoo's figure is back", (await p.evaluate(async () => (await fetch("/api/settings")).json())).fund_costs.SPY === undefined);
   await shot("portfolio");
   // A sale and a dividend through the form
   await p.selectOption("#hKind", "sell"); await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hShares", "100"); await p.fill("#hCost", "18"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
