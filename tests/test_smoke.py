@@ -1228,6 +1228,47 @@ def test_automatic_backups():
     _reset()
 
 
+def test_missing_ratios_come_from_the_statements():
+    """Free cash flow, debt / equity and the current ratio that Yahoo leaves empty are worked out from the company's
+    annual statements, labelled with their year; nothing Yahoo gave is overwritten, banks are left alone, and nothing
+    is made up when the statements lack it too."""
+    import pandas as pd
+
+    from backend import data, insights, scoring
+    asked = []
+    sheets = {"GAP": {"year": "2025", "totalDebt": 100.0, "equity": 400.0, "currentAssets": 300.0, "currentLiabilities": 150.0},
+              "NONE": {}}
+    real = data.balance
+    data.balance = lambda t: asked.append(t) or sheets.get(t, {})
+    try:
+        fin = [{"year": "2024", "revenue": 1e3, "netIncome": 1e2, "fcf": 80.0}, {"year": "2025", "revenue": 1.1e3, "netIncome": 1.2e2, "fcf": 90.0}]
+        base = {"assetClass": "Stocks", "industry": "Medical Care Facilities"}
+        out = insights.fill_from_statements("GAP", {**base, "freeCashflow": None, "debtToEquity": None, "currentRatio": None}, fin)
+        assert out["freeCashflow"] == 90.0 and out["debtToEquity"] == 0.25 and out["currentRatio"] == 2.0, out
+        assert out["statementYears"] == {"freeCashflow": "2025", "debtToEquity": "2025", "currentRatio": "2025"}
+        close = pd.Series(range(100, 400), index=pd.bdate_range(end="2026-06-01", periods=300), dtype=float)
+        labels = [p["label"] for v in scoring.factor_breakdown({**out, "marketCap": 1e4, "statementFx": 1.0}, close).values() for p in v]
+        assert "Debt / Equity (from the 2025 annual statements)" in labels and "Current ratio (from the 2025 annual statements)" in labels
+        assert "FCF yield (from the 2025 annual statements)" in labels, labels
+
+        # Yahoo's own figures stand; a company with no debt gets 0 without asking for its balance sheet
+        asked.clear()
+        kept = insights.fill_from_statements("GAP", {**base, "freeCashflow": 5.0, "debtToEquity": None, "totalDebt": 0, "currentRatio": 1.5}, fin)
+        assert asked == [] and kept["freeCashflow"] == 5.0 and kept["currentRatio"] == 1.5 and kept["debtToEquity"] == 0.0
+        assert kept["statementYears"] == {"debtToEquity": "no debt"}
+        assert "Debt / Equity (no debt reported)" in [p["label"] for p in scoring.factor_breakdown({**kept, "statementFx": 1.0}, close)["quality"]]
+
+        # Banks aren't scored on these, so nothing is fetched for them; and no statement means no figure
+        asked.clear()
+        bank = insights.fill_from_statements("BANK", {**base, "industry": "Banks - Regional", "debtToEquity": None, "currentRatio": None}, fin)
+        assert asked == [] and "statementYears" not in bank and bank["debtToEquity"] is None
+        none = insights.fill_from_statements("NONE", {**base, "freeCashflow": None, "debtToEquity": None, "currentRatio": None}, [])
+        assert none["debtToEquity"] is None and none["currentRatio"] is None and none["freeCashflow"] is None and "statementYears" not in none
+    finally:
+        data.balance = real
+    assert data.balance("AAPL") == {} or data.DEMO is False, "demo mode has no balance sheets to read"
+
+
 def test_journal_stops_work_for_any_ticker():
     """A stop or target applies whether or not the ticker is held or watched, without adding it to the digest's moves."""
     from fastapi.testclient import TestClient

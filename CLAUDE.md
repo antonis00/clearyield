@@ -87,7 +87,7 @@ Views, in the sidebar's order: dashboard, research, portfolio, opportunities, co
 - **Exchange rates over long spans:** `fx_series()` loads the whole rate history when the dates go back more than five years; it used to load five years and give every older date the oldest rate in them (a 2019 price at a 2021 rate). A date more than a week before the first rate gets none, rather than a wrong one.
 - **Weekly candles** for Sunday-to-Thursday markets (`.SR .QA .KW .BH .OM`, `data.SUN_THU`) group Friday to Thursday; the UAE has traded Monday to Friday since 2022.
 - **RSI** of a price that doesn't move is 50, not 100. **Portfolio risk** (volatility, drawdown, Sharpe, beta) uses each day's FX rate, like the performance chart. The Core & satellite comparison runs over the whole history, with undated lots from the first dated trade.
-- Gulf fundamentals on Yahoo are patchy. Expect `None` values, which the UI shows as "—". Abu Dhabi (ADX) isn't on Yahoo at all (no prices, not found by its search). Some Korean companies have no P/E or ROE.
+- Gulf fundamentals on Yahoo are mostly there now (Nov 2026: P/E, P/B, margins and growth for all 32 Gulf stocks). The gaps were debt / equity, the current ratio and free cash flow, and 14 of those 16 stocks are banks, where they aren't scored. `insights.fill_from_statements()` works out what Yahoo leaves empty from the company's annual statements (`data.financials()`'s FCF, `data.balance()`'s debt, equity, current assets and liabilities; Yahoo's `totalDebt` of 0 means no debt), labelled with the year in the breakdown and the brief (`statementYears`); across all 407 stocks, 37 missing figures became 7, those 7 being companies with negative equity (ABBV, MCD, PM...), where debt / equity means nothing. Expect `None` otherwise, shown as "—". Abu Dhabi (ADX) isn't on Yahoo at all (no prices, not found by its search). Some Korean companies have no P/E or ROE.
 - **Background scoring:** `main._warm_loop()` builds the sector table 20 s after start and every `WARM_EVERY` (6 h), so the day's first Screener, Opportunities or Research page doesn't wait about a minute (387 stocks cold: 69 s; warm: 6 s). Off in demo mode and when `CLEARYIELD_WARM=0` (the test servers).
 - **SQL `LIKE` in tests:** `_` matches any character and case is ignored, so `'%gsk_%'` matched "GSK.L". Use `instr()` to look for exact text.
 - The Gulf indexes `^TASI.SR` and `^GNRI.QA` return a single day of history, so the dashboard follows the KSA and QAT ETFs instead.
@@ -110,11 +110,13 @@ Views, in the sidebar's order: dashboard, research, portfolio, opportunities, co
 - Every feature passes `tests/test_smoke.py` (demo mode), the browser checks and both walks, and the live values match a raw-Yahoo calculation in `tests/check_live.py`.
 
 ## Ideas / next steps
-- Upgrade the data provider (FMP or Polygon), at least for Gulf fundamentals, behind an interface in `data.py`.
 - Sector-relative scoring: the scores still use absolute thresholds; sector ranks (`insights.sector_ranks()`) are only shown beside them.
 - The daily digest by email on a schedule, through `mailer.py` (triggered alerts are already emailed).
+- Value, quality and growth can't be checked against the past (Score check covers momentum and risk): it would need a provider with past fundamentals.
 
-Done since they were listed: insider and institutional activity (`data.ownership()`, `insights.insider_summary()`), alert emails, and the portfolio-level backtest and Monte Carlo simulation (`simulate.py`).
+Done since they were listed: insider and institutional activity (`data.ownership()`, `insights.insider_summary()`), alert emails, the portfolio-level backtest and Monte Carlo simulation (`simulate.py`), running in the background (`startup.py`), Score check (`scorecheck.py`), fund costs, the tax year (`tax.py`), automatic backups, and the fundamentals gaps (`fill_from_statements`).
+
+Considered and set aside (Nov 2026): a paid data provider. Financial Modeling Prep's free plan is US-only (250 calls a day); EODHD's free key has prices for a year but no fundamentals (about $60 a month). Neither free plan covers the Gulf, and Yahoo's own statements closed most gaps.
 
 ## Conventions
 - Keep the "decision support, not financial advice" framing, and keep scores explainable.

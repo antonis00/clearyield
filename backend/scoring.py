@@ -38,6 +38,12 @@ def factor_breakdown(info, close):
     g = info.get
     f = {k: [] for k in FACTORS}
     is_equity = info.get("assetClass") == "Stocks"
+    years = info.get("statementYears") or {}
+
+    def src(label, key):
+        """A figure worked out from the annual statements, where Yahoo had none, says so (insights.fill_from_statements)."""
+        y = years.get(key)
+        return label if not y else f"{label} (no debt reported)" if y == "no debt" else f"{label} (from the {y} annual statements)"
 
     # --- value
     if is_equity:
@@ -51,15 +57,15 @@ def factor_breakdown(info, close):
         _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), 25, 6, usable=(g("enterpriseToEbitda") or 0) > 0)
         fcf, mc, fx = g("freeCashflow"), g("marketCap"), g("statementFx", 1.0)
         # FCF is in the statement currency, market cap is not
-        _part(f["value"], "FCF yield", fcf * fx / mc if fcf is not None and mc and fx else None, 0, 0.08, "pct")
+        _part(f["value"], src("FCF yield", "freeCashflow"), fcf * fx / mc if fcf is not None and mc and fx else None, 0, 0.08, "pct")
         # --- quality
         bank = "bank" in (info.get("industry") or "").lower()
         not_bank = {"usable": not bank, "note": BANK_NOTE if bank else None}
         _part(f["quality"], "Return on equity", g("returnOnEquity"), 0, 0.30, "pct")
         _part(f["quality"], "Operating margin", g("operatingMargins"), 0, 0.30, "pct", **not_bank)
         _part(f["quality"], "Net margin", g("profitMargins"), 0, 0.25, "pct", **not_bank)
-        _part(f["quality"], "Debt / Equity", g("debtToEquity"), 2.0, 0.2, "x", **not_bank)
-        _part(f["quality"], "Current ratio", g("currentRatio"), 0.8, 2.0, "x", **not_bank)
+        _part(f["quality"], src("Debt / Equity", "debtToEquity"), g("debtToEquity"), 2.0, 0.2, "x", **not_bank)
+        _part(f["quality"], src("Current ratio", "currentRatio"), g("currentRatio"), 0.8, 2.0, "x", **not_bank)
         # --- growth
         # Several years of annual statements where there are enough; otherwise the latest quarter, labelled as such
         for name, multi, quarter, bad, good in (("Revenue growth", "revenueGrowth3y", "revenueGrowth", -0.05, 0.25),
