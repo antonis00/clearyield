@@ -173,7 +173,7 @@ class _FakeMarket:
 
     def __enter__(self):
         from backend import data
-        self.real = data.history, data.info
+        self.real = data.history, data.info, data.long_closes, data.plain_closes
 
         def history(t, period="5y"):
             s = self.prices.get(t)
@@ -181,13 +181,19 @@ class _FakeMarket:
                 raise data.DataError(f"No price data for {t}")
             return data.slice_period(s.to_frame("Close").assign(High=s, Low=s, Open=s, Volume=1.0), period)
 
+        def closes(t):  # the score research's long and quoted closes: the same fixed prices
+            s = self.prices.get(t)
+            if s is None:
+                raise data.DataError(f"No price data for {t}")
+            return s
+
         def info(t):
             return {"name": t, "currency": "USD", "assetClass": "Stocks", "region": "US", "sector": "Tech", **self.infos.get(t, {})}
-        data.history, data.info = history, info
+        data.history, data.info, data.long_closes, data.plain_closes = history, info, closes, closes
 
     def __exit__(self, *exc):
         from backend import data
-        data.history, data.info = self.real
+        data.history, data.info, data.long_closes, data.plain_closes = self.real
 
 
 def _steps(returns, end="2026-06-01"):
@@ -1088,11 +1094,11 @@ def test_score_research_arithmetic():
     assert sc.overlap_t([0.1, 0.2, 0.3, 0.4, 0.5], 3)[1] is None, "under two separate windows: no t"
     assert [sc.verdict(p, 20) for p in (0.01, 0.1, 0.4, 0.99)] == ["works", "suggestive", "no evidence", "works backwards"]
     assert sc.verdict(0.001, 11) == "not enough data", "a verdict needs twelve dates"
+    assert sc.verdict(0.001, 40, 2) == "not enough data" and sc.verdict(0.001, 40, 4) == "works", "and four separate windows"
     # Holm: the smallest p faces alpha/m, the next alpha/(m-1)...; it stops at the first that fails
     assert sc.holm([0.001, 0.02, 0.004, None], alpha=0.025) == [True, True, True, False], "0.001 <= .025/3, 0.004 <= .025/2, 0.02 <= .025"
     assert sc.holm([0.001, 0.02, 0.015], alpha=0.025) == [True, False, False], "0.015 > .025/2: it stops there"
-    assert sc.holm([0.02, 0.03], alpha=0.025) == [False, False]
-    # The hold-out split leaves a gap of h - 1 dates, so no 3-month window spans both halves
+    # The time halves leave a gap of h - 1 dates, so no 3-month window spans both
     dates = [f"2024-{m:02d}-01" for m in range(1, 11)]
     assert sc.split(dates, 3) == (dates[:3], dates[5:])
     # Spread: top third minus bottom third; tied scores are split by a fixed shuffle, not by their place in the list
@@ -1108,7 +1114,7 @@ def test_score_research_noise_passes_as_rarely_as_it_should():
 
     from backend import scorecheck as sc
     rng = random.Random(11)
-    for n in (46, 21):
+    for n in (108, 46, 21):
         hits = 0
         for _ in range(1500):
             e = [rng.gauss(0, 1) for _ in range(n + 2)]
@@ -1120,13 +1126,14 @@ def test_score_research_noise_passes_as_rarely_as_it_should():
 
 def test_score_research_uses_nothing_before_it_was_public():
     """A year's statements count from 90 days after it ends; past market value is that statement's shares times that
-    day's quoted price; quality and growth need neither price nor rate."""
+    day's quoted price; quality and growth need neither price nor rate; and the candidates read only public figures."""
     import datetime as dt
 
     from backend import scorecheck as sc
-    stmts = [{"end": "2023-12-31", "revenue": 800.0, "netIncome": 40.0, "equity": 200.0, "shares": 10.0},
+    stmts = [{"end": "2023-12-31", "revenue": 800.0, "netIncome": 40.0, "equity": 200.0, "shares": 10.0, "grossProfit": 300.0, "totalAssets": 1000.0},
              {"end": "2024-12-31", "revenue": 1000.0, "netIncome": 50.0, "operatingIncome": 120.0, "equity": 250.0, "totalDebt": 100.0,
-              "cash": 20.0, "ebitda": 160.0, "currentAssets": 300.0, "currentLiabilities": 150.0, "fcf": 30.0, "shares": 8.0}]
+              "cash": 20.0, "ebitda": 160.0, "currentAssets": 300.0, "currentLiabilities": 150.0, "fcf": 30.0, "shares": 8.0,
+              "grossProfit": 450.0, "totalAssets": 1500.0}]
     assert sc.published(stmts, dt.date(2025, 3, 30))[0]["end"] == "2023-12-31", "89 days after: not public yet"
     assert sc.published(stmts, dt.date(2025, 3, 31))[0]["end"] == "2024-12-31", "90 days after: public"
     assert sc.published(stmts, dt.date(2025, 4, 29), lag=120)[0]["end"] == "2023-12-31", "the longer lag waits longer"
@@ -1143,76 +1150,138 @@ def test_score_research_uses_nothing_before_it_was_public():
     assert early["marketCap"] == 1250.0 and abs(early["trailingPE"] - 1250 / (40 * 2)) < 1e-12, "the 2023 statement's 10 shares"
     assert "revenueGrowth" not in early, "only the 2023 year was out"
     assert "trailingPE" not in sc.info_at(base, stmts, dt.date(2024, 3, 1), price=125.0, fx=2.0), "nothing public yet: price factors only"
-    # Without a price or a rate: no value, but quality and growth still there
     noprice = sc.info_at(base, stmts, dt.date(2025, 6, 1), price=None, fx=None)
     assert "trailingPE" not in noprice and noprice["returnOnEquity"] == 0.2 and abs(noprice["revenueGrowth"] - 0.25) < 1e-12
-    # EV/EBITDA needs real debt and cash figures, not zeros put in their place
     assert sc.info_at(base, [{**stmts[1], "cash": None}], dt.date(2025, 6, 1), price=125.0, fx=2.0)["enterpriseToEbitda"] is None
     loss = sc.info_at(base, [{**stmts[1], "netIncome": -5.0}], dt.date(2025, 6, 1), price=125.0, fx=2.0)
     assert loss["trailingPE"] is None and loss["profitMargins"] < 0, "a loss scores as the worst value, as live"
+    # Candidate 1, gross profitability: 450 / 1500 = 0.3, halfway from 0 to 0.6; the 2023 year's 0.3 before that
+    assert sc.gross_profitability(base, stmts, dt.date(2025, 6, 1)) == 50.0
+    assert sc.gross_profitability(base, stmts, dt.date(2025, 3, 30)) == 50.0 and sc.gross_profitability(base, stmts, dt.date(2024, 3, 1)) is None
+    assert sc.gross_profitability({**base, "industry": "Banks - Regional"}, stmts, dt.date(2025, 6, 1)) is None, "banks: none"
+    assert sc.gross_profitability({**base, "sector": "Financial Services", "industry": "Insurance - Life"}, stmts, dt.date(2025, 6, 1)) is None, \
+        "nor insurers or other financial companies, as in Novy-Marx"
+    assert sc.gross_profitability(base, [{**stmts[1], "grossProfit": None}], dt.date(2025, 6, 1)) is None
 
 
-def _research_rows(seed=7, months=48, stocks=60):
-    """Made-up research rows: momentum carries a planted signal, value is noise, quality is momentum's real scores
-    shuffled between stocks (a placebo); the overall score mixes the signal with noise."""
+def test_score_research_quality_candidates():
+    """Candidate 2 keeps today's quality metrics but return on equity and the margins: debt and liquidity drop out."""
+    import pandas as pd
+
+    from backend import scorecheck as sc
+    from backend import scoring
+    close = pd.Series(range(100, 400), index=pd.bdate_range(end="2026-06-01", periods=300), dtype=float)
+    rec = {"assetClass": "Stocks", "industry": "Software", "returnOnEquity": 0.15, "operatingMargins": 0.15, "profitMargins": 0.25,
+           "debtToEquity": 2.0, "currentRatio": 0.8}
+    bd = scoring.factor_breakdown(rec, close)
+    # ROE 0.15 of 0-0.30 is 50; operating margin 0.15 of 0-0.30 is 50; net margin 0.25 of 0-0.25 is 100
+    assert sc.profitability_only(bd) == (50 + 50 + 100) / 3
+    assert scoring._avg(bd["quality"]) < sc.profitability_only(bd), "today's quality is pulled down by the debt and the current ratio"
+    bank = scoring.factor_breakdown({**rec, "industry": "Banks - Regional"}, close)
+    assert sc.profitability_only(bank) == 50.0, "a bank: return on equity alone, as today's rules score it"
+
+
+def _research_rows(seed=7, months=48, per_region=30):
+    """Made-up research rows over the five regions: momentum carries a planted signal, value is noise, quality is
+    momentum's real scores shuffled between stocks (a placebo); the candidates are set by each test."""
     import random
+
+    from backend import scorecheck as sc
     rng = random.Random(seed)
     rows = []
     for m in range(months):
         date = f"{2022 + m // 12}-{m % 12 + 1:02d}-01"
-        signal = [rng.gauss(0, 1) for _ in range(stocks)]
-        shuffled = signal[:]
-        rng.shuffle(shuffled)
-        for i in range(stocks):
-            s = signal[i]
-            rows.append({"date": date, "ticker": f"T{i}", "sector": f"S{i % 4}", "parts": [],
-                         "momentum": 50 + 10 * s, "value": 50 + 10 * rng.gauss(0, 1), "quality": 50 + 10 * shuffled[i], "growth": 50 + 10 * rng.gauss(0, 1),
-                         "risk": 50 + 10 * rng.gauss(0, 1), "composite": 50 + 3 * s + 7 * rng.gauss(0, 1),
-                         "momRiskAdj": s + 0.3 * rng.gauss(0, 1),  # momentum with extra noise: no better
-                         "ret3": 0.05 * s + 0.10 * rng.gauss(0, 1), "local3": 0.05 * s + 0.12 * rng.gauss(0, 1), "vol3": 0.3 + 0.05 * rng.gauss(0, 1)})
+        for reg in (*sc.DECIDE, *sc.CONFIRM):
+            signal = [rng.gauss(0, 1) for _ in range(per_region)]
+            shuffled = signal[:]
+            rng.shuffle(shuffled)
+            for i in range(per_region):
+                s = signal[i]
+                rows.append({"date": date, "ticker": f"{reg[:2]}{i}", "region": reg, "country": reg, "signal": s,
+                             "momentum": 50 + 10 * s, "value": 50 + 10 * rng.gauss(0, 1), "quality": 50 + 10 * shuffled[i],
+                             "growth": 50 + 10 * rng.gauss(0, 1), "risk": 50 + 10 * rng.gauss(0, 1), "composite": 50 + 3 * s + 7 * rng.gauss(0, 1),
+                             "quality_gp": None, "quality_profit": None, "momRiskAdj": s + 0.3 * rng.gauss(0, 1),
+                             "ret3": 0.05 * s + 0.10 * rng.gauss(0, 1), "local3": 0.05 * s + 0.12 * rng.gauss(0, 1), "vol3": 0.3 + 0.05 * rng.gauss(0, 1)})
     return rows
 
 
 def test_score_research_finds_a_signal_and_not_noise():
-    """A planted signal is found; noise and a placebo (real scores shuffled between stocks) aren't; a candidate that
-    truly ranks better is adopted and one that doesn't is turned down, with the reason."""
+    """A planted signal is found everywhere; noise and a placebo (real scores shuffled between stocks) aren't."""
     from backend import scorecheck as sc
     out = sc.judge(_research_rows())
     f = out["factors"]
-    assert f["momentum"]["verdict"] == "works" and f["momentum"]["horizons"]["3"]["meanIC"] > 0.3, f["momentum"]["horizons"]["3"]
+    assert f["momentum"]["verdict"] == "works" and f["momentum"]["decide"]["verdict"] == "works" and f["momentum"]["confirm"]["verdict"] == "works"
+    assert all(r["verdict"] == "works" for r in f["momentum"]["regions"].values()), "in each region on its own too"
     assert f["momentum"]["local"]["verdict"] == "works", "and in local currency"
-    assert f["value"]["verdict"] in ("no evidence", "suggestive", "works backwards") and f["value"]["horizons"]["3"]["p"] > 0.025
+    assert f["value"]["horizons"]["3"]["p"] > 0.025, "noise doesn't work"
     assert abs(f["quality"]["horizons"]["3"]["meanIC"]) < 0.05 and f["quality"]["verdict"] != "works", "the placebo: IC near zero"
     assert f["momentum"]["discovery"]["n"] + f["momentum"]["holdout"]["n"] == 46, "48 dates less the 2-month gap"
-    assert out["working"] == ["momentum"], "chosen by return IC on the first half"
-    cand = {c["key"]: c for c in out["candidates"]}
-    assert not cand["riskadj_momentum"]["adopted"] and cand["riskadj_momentum"]["why"], cand["riskadj_momentum"]
-    wc = cand["working_composite"]
-    assert wc["adopted"] and wc["own"]["verdict"] == "works" and wc["holm"] and wc["holdout"]["p"] < 0.05, wc["why"]
-    assert not cand["sector_value"]["adopted"], "no within-sector scores here, so nothing to adopt"
-    few = [r for r in _research_rows() if int(r["ticker"][1:]) < 10]
+    few = [r for r in _research_rows() if int(r["ticker"][2:]) < 2]
     assert sc.judge(few)["factors"]["momentum"]["horizons"]["3"]["n"] == 0, "dates with under 15 stocks don't count"
 
 
-def test_score_research_adopts_only_what_works_on_its_own():
-    """A change that makes a backwards score less backwards isn't adopted: it must rank the right way itself."""
+def test_score_research_adoption_rule():
+    """Decided on North America and Asia-Pacific, confirmed on the other three: a change that's truly better
+    everywhere is adopted; one that's better only where it's decided, or backwards on its own, isn't, and says why."""
+    import random
+
     from backend import scorecheck as sc
-    rows = _research_rows(seed=3)
-    for r in rows:  # quality ranks backwards; its "within-sector" version is less backwards, but still backwards
-        r["quality"] = 100 - r["momentum"]
-        r["quality_sector"] = 100 - (r["momentum"] * 0.3 + r["value"] * 0.7)
-    # judge() normally works the within-sector scores out from the metrics; here they're the made-up ones above
-    real = sc.sector_rank_scores
-    sc.sector_rank_scores = lambda rows: None
-    try:
-        out = sc.judge(rows)
-    finally:
-        sc.sector_rank_scores = real
-    assert out["factors"]["quality"]["verdict"] == "works backwards"
-    c = [c for c in out["candidates"] if c["key"] == "sector_quality"][0]
-    assert c["all"]["meanDiff"] > 0 and c["all"]["p"] < 0.025, "it does beat today's backwards score..."
-    assert c["own"]["verdict"] == "works backwards" and not c["adopted"], c
-    assert c["why"] == "Doesn't rank the right way on its own (works backwards).", "...but it's turned down for being backwards itself"
+    rows = _research_rows(seed=5)
+    rng = random.Random(9)
+    for r in rows:
+        r["quality"] = 50 + 10 * rng.gauss(0, 1)  # today's quality: noise
+        r["quality_gp"] = 50 + 10 * r["signal"]  # better everywhere: tracks what comes next
+        # better than today's where it's decided, but backwards where it's confirmed
+        r["quality_profit"] = 50 + 10 * (r["signal"] if r["region"] in sc.DECIDE else -r["signal"])
+    out = sc.judge(rows)
+    c = {x["key"]: x for x in out["candidates"]}
+    gp = c["quality_gp"]
+    assert gp["adopted"] and gp["holm"] and gp["ownConfirm"]["verdict"] == "works" and gp["confirm"]["p"] < 0.05, gp["why"]
+    assert all(r["meanDiff"] > 0 for r in gp["regions"].values()) and set(gp["regions"]) == set(sc.CONFIRM)
+    profit = c["quality_profit"]
+    assert profit["holm"] and not profit["adopted"], profit
+    assert profit["why"] == "On Europe, Middle East & Africa and Latin America it doesn't rank the right way on its own (works backwards)."
+    mom = c["momRiskAdj"]  # momentum with extra noise: no better than today's
+    assert not mom["adopted"] and "North America and Asia-Pacific" in mom["why"], mom["why"]
+
+    # A candidate with no result on the deciding regions still counts as one of three tests (its p as 1)
+    for r in rows:
+        r["momRiskAdj"] = None
+    gp2 = [x for x in sc.judge(rows)["candidates"] if x["key"] == "quality_gp"][0]
+    assert gp2["adopted"], "with p of about zero, 1/3 of 0.025 is still passed"
+    assert sc.holm([1.0, 0.009, 1.0], alpha=0.025) == [False, False, False], "0.009 > 0.025/3: a missing p doesn't shrink the family"
+
+    # A confirming region with too few stocks a date doesn't count, and the reason says which did
+    small = [r for r in rows if r["region"] != "Latin America" or int(r["ticker"][2:]) < 10]
+    gp3 = [x for x in sc.judge(small)["candidates"] if x["key"] == "quality_gp"][0]
+    assert gp3["countedRegions"] == ["Europe", "Middle East & Africa"] and "Regions with enough months to count: Europe, Middle East & Africa." in gp3["why"], gp3["why"]
+
+
+def test_score_research_measures_picking_within_a_country():
+    """A score that only points at the country that did well (and picks nothing within it) isn't credited with
+    picking: each outcome is measured against its country's average that month."""
+    import random
+
+    from backend import scorecheck as sc
+    rng = random.Random(21)
+    rows = []
+    for m in range(40):
+        date = f"{2022 + m // 12}-{m % 12 + 1:02d}-01"
+        winner = rng.choice(["A", "B"])  # one country's market does better each month
+        for country in ("A", "B"):
+            tilt = 60 if country == winner else 40  # the score knows which country will win, nothing about the stocks
+            for i in range(20):
+                rows.append({"date": date, "ticker": f"{country}{i}", "region": "North America", "country": country,
+                             "value": tilt + rng.gauss(0, 1), "ret3": (0.05 if country == winner else -0.05) + 0.05 * rng.gauss(0, 1),
+                             "vol3": 0.3})
+    out = sc.judge(rows)["factors"]["value"]
+    assert abs(out["horizons"]["3"]["meanIC"]) < 0.06 and out["verdict"] != "works", out["horizons"]["3"]
+    # Pooled without the country averages, the same score would look like a strong picker
+    pooled = [{**r, "country": "Everywhere"} for r in rows]
+    assert sc.judge(pooled)["factors"]["value"]["horizons"]["3"]["meanIC"] > 0.5
+    # A country with under three scored stocks is left out of the month
+    few = [{"value": 1.0, "ret3": 0.1, "ticker": "X", "country": "Lone"}, {"value": 2.0, "ret3": 0.2, "ticker": "Y", "country": "Lone"}]
+    assert sc._pairs(few, "value", 3) == []
 
 
 def test_score_research_trusts_share_counts_only_when_they_fit():
@@ -1225,47 +1294,57 @@ def test_score_research_trusts_share_counts_only_when_they_fit():
     jump = [*years[:2], {"end": "2024-12-31", "shares": 1000.0}, {"end": "2025-12-31", "shares": 1000.0}]
     assert not sc._shares_fit("X", jump, price_now=1.0, mcap_now=1000.0), "a tenfold jump: an unrestated split"
     assert not sc._shares_fit("X", [{"end": "2025-12-31", "shares": None}], price_now=1.0, mcap_now=1.0)
-    # Too few separate windows: no verdict, whatever the p-value
-    assert sc.verdict(0.001, 40, 2) == "not enough data" and sc.verdict(0.001, 40, 4) == "works"
-
-
-def test_score_research_within_sector_ranks():
-    """Within-sector percentiles, lower-is-better metrics turned round, a loss at the bottom, and the whole list used
-    for a sector with fewer than eight other stocks."""
-    from backend import scorecheck as sc
-    rows = [{"sector": "Tech", "parts": [("value", "P/E (trailing)", 10.0 + i, 40, 10)]} for i in range(10)]
-    rows.append({"sector": "Tech", "parts": [("value", "P/E (trailing)", None, 40, 10)]})  # a loss
-    rows.append({"sector": "Mining", "parts": [("value", "P/E (trailing)", 14.5, 40, 10)]})  # alone in its sector
-    sc.sector_rank_scores(rows)
-    assert rows[0]["value_sector"] == 100.0 and rows[9]["value_sector"] == 0.0, "cheapest best, dearest worst"
-    assert abs(rows[4]["value_sector"] - 100 * (1 - 4 / 9)) < 1e-9
-    assert rows[10]["value_sector"] == 0.0, "a loss is the worst"
-    assert abs(rows[11]["value_sector"] - 50.0) < 1e-9, "ranked among all eleven with a P/E: 5 of the other 10 are cheaper"
-    assert rows[0]["composite_sector"] is None, "the overall score only with all five factors"
-    eight = [{"sector": "Tech", "parts": [("value", "P/E (trailing)", 20.0 + i, 40, 10)]} for i in range(8)] + \
-            [{"sector": "Banks", "parts": [("value", "P/E (trailing)", 10.0 + i, 40, 10)]} for i in range(9)]
-    sc.sector_rank_scores(eight)
-    assert eight[0]["value_sector"] != 100.0, "seven other Tech stocks aren't enough: ranked among all seventeen"
-    assert eight[8]["value_sector"] == 100.0, "eight other banks are: the cheapest bank tops its sector"
 
 
 def test_score_research_end_to_end():
-    """Prices where steady climbers keep climbing: momentum is found to work through the whole pipeline, and the
-    route answers for the regions followed."""
+    """Prices where steady climbers keep climbing, in a deciding and a confirming region: momentum is found to work
+    through the whole pipeline; the page's route builds it in the background and then serves it."""
+    import time
+
     from backend import scorecheck as sc
-    prices = {}
-    for i in range(30):
-        drift, swing = (i - 12) * 0.00025, 0.004 if i % 2 else 0.012
-        prices[f"S{i:02d}"] = _steps([drift + (swing if d % 2 else -swing) for d in range(1300)])
-    with _FakeMarket(prices):
+    import random
+    rng = random.Random(4)
+    prices, infos = {}, {}
+    for i in range(40):  # steady climbers keep climbing, with enough day-to-day noise that months differ; 13 years
+        drift, swing = (i % 20 - 8) * 0.00025, 0.004 if i % 2 else 0.012
+        prices[f"S{i:02d}"] = _steps([drift + (swing if d % 2 else -swing) + rng.gauss(0, 0.01) for d in range(3400)])
+        infos[f"S{i:02d}"] = {"region": "North America" if i < 20 else "Europe"}
+    with _FakeMarket(prices, infos):
         out = sc.check(list(prices))
-    assert out["stocks"] == 30 and out["factors"]["momentum"]["verdict"] == "works", out["factors"]["momentum"]["horizons"]["3"]
-    assert out["factors"]["risk"]["verdict"] == "works", "the calm half stays calm"
+    m = out["factors"]["momentum"]
+    assert out["stocks"] == 40 and m["verdict"] == "works" and m["decide"]["verdict"] == "works" and m["confirm"]["verdict"] == "works", m["horizons"]["3"]
+    assert out["factors"]["risk"]["verdict"] == "works" and out["stocksByRegion"] == {"North America": 20, "Europe": 20}
+    assert out["from"] >= "2016-06-01", "ten years of prices, less the first year the scores need, not thirteen"
+    assert out["complete"] is True and out["counts"]["North America"] == {"listed": 40, "loaded": 40, "short": 0, "failed": 0, "skipped": 0}
+    # Five of the forty failing to load: evidence still, but no decision on a sample short of the one designed
+    with _FakeMarket({t: s for t, s in prices.items() if int(t[1:]) >= 5}, infos):
+        part = sc.check(list(prices))
+    assert part["complete"] is False and part["counts"]["North America"]["failed"] == 5
+    assert all(not c["adopted"] and c["why"].startswith("No decision: the run was incomplete in North America") for c in part["candidates"])
     with _FakeMarket({}):
         assert "error" in sc.check(["NOPE"])
-    with TestClient(app) as c:
-        r = c.get("/api/scorecheck").json()
-        assert r["regions"] and r["factors"]["momentum"]["horizons"]["3"]["n"] > 0 and len(r["caveats"]) == 6 and len(r["candidates"]) == 8, r.get("error")
+    # The route: the first visit starts the research in the background and says how far it's got; a complete run is
+    # then frozen, and served from then on without being run again
+    real = sc.check
+    runs = []
+    sc.check = lambda tickers: runs.append(1) or {"factors": {}, "candidates": [], "stub": len(tickers), "complete": True}
+    try:
+        with TestClient(app) as c:
+            from backend import db
+            sc.frozen_path().unlink(missing_ok=True)
+            db.cache_expire("scorecheck:r2b:all")
+            first = c.get("/api/scorecheck").json()
+            assert first["building"] is True and first["total"] > 400, first
+            for _ in range(50):
+                if not sc.PROGRESS["running"]:
+                    break
+                time.sleep(0.1)
+            done = c.get("/api/scorecheck").json()
+            assert done["stub"] > 400 and done["frozen"] is True and done["regions"] == ["North America", "Europe", "Latin America", "Middle East & Africa", "Asia-Pacific"], done
+            assert c.get("/api/scorecheck").json()["frozen"] and len(runs) == 1, "frozen: decided once, not run again"
+            sc.frozen_path().unlink(missing_ok=True)
+    finally:
+        sc.check = real
 
 
 def test_fund_costs_are_hand_calculated():

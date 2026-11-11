@@ -1561,33 +1561,51 @@ const pOf = (p) => (isNum(p) ? (p < 0.001 ? "<0.001" : p.toFixed(3)) : "—");
 const icOf = (v) => (isNum(v) ? (v >= 0 ? "+" : "") + v.toFixed(3) : "—");
 async function loadScoreCheck() {
   if (SC.loading) return;
-  SC.loading = true; $("#scCaveats").innerHTML = ""; $("#scCands").innerHTML = ""; $("#scMethod").textContent = "";
-  loading($("#scTable"), "Scoring the stocks you follow as they stood each month of the past years… The first time, this downloads four years of statements per company: a few minutes.");
-  try { SC.data = await api("/api/scorecheck"); } catch (e) { $("#scTable").innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; } finally { SC.loading = false; }
-  const d = SC.data;
+  SC.loading = true;
+  if (!SC.data) { ["#scCaveats", "#scCands", "#scRegions"].forEach((id) => { $(id).innerHTML = ""; }); $("#scMethod").textContent = ""; }
+  let d;
+  try { d = await api("/api/scorecheck"); } catch (e) { $("#scTable").innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; } finally { SC.loading = false; }
+  // Built in the background the first time: say how far it's got, and look again while the tab is open
+  if (d.building) {
+    const what = { starting: "Starting", downloading: "Downloading ten years of prices and four years of statements", scoring: "Scoring every month", judging: "Judging" }[d.stage] || "Preparing";
+    $("#scTable").innerHTML = d.error ? `<div class="muted">${esc(d.error)} It will try again in a few minutes.</div>`
+      : `<div class="muted"><span class="spinner"></span>${what}: ${d.done} of ${d.total} stocks${d.elapsed ? ` · ${Math.round(d.elapsed / 60)} min so far` : ""}. The first run takes a while, waiting whenever Yahoo asks for a pause; it carries on if you leave the page.</div>`;
+    clearTimeout(SC.poll);
+    SC.poll = setTimeout(() => { if (!$("#btScore").classList.contains("hidden") && !$("#view-backtest").classList.contains("hidden")) loadScoreCheck(); }, 5000);
+    return;
+  }
+  SC.data = d;
   if (d.error) { $("#scTable").innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
-  const h = String(d.primaryHorizon);
-  $("#scMeta").textContent = `${d.stocks} stocks · ${d.from.slice(0, 7)} to ${d.to.slice(0, 7)} · ${d.regions.join(", ")}`;
-  $("#scMethod").textContent = `Every month, the stocks you follow were scored as they stood that day, by today's rules, using only what was public then. `
-    + `Each score is judged by how well it ranked what came next over ${h} months: the rank IC is 0 for no better than chance and 1 for perfect (0.05 is already useful in practice), `
-    + `averaged over the months. The p-value is the chance of an IC this high if the score ranked no better than chance, allowing for the months overlapping: under 0.025 counts as working, under 0.16 as suggestive. `
-    + `Risk is judged on the swings that followed, not the return. Each verdict is checked again with returns in local currency and, for company figures, a 120-day publication delay.`;
+  const h = String(d.primaryHorizon), dec = d.decideRegions.join(" & "), con = d.confirmRegions.join(", ");
+  const byReg = Object.entries(d.stocksByRegion || {}).map(([r, n]) => `${r} ${n}`).join(", ");
+  $("#scMeta").textContent = `${d.stocks} stocks · ${d.from.slice(0, 7)} to ${d.to.slice(0, 7)}${d.checked ? ` · run ${d.checked.slice(0, 10)}` : ""}`
+    + (d.frozen ? " · the decision run, kept as it is" : d.complete === false ? " · incomplete: evidence only, no decision" : "");
+  $("#scMethod").textContent = `Every month of the past ten years, every stock in the list (${byReg}) was scored as it stood that day, by today's rules, using only what was public then. `
+    + `Each score is judged by how well it ranked what came next over ${h} months: the rank IC is 0 for no better than chance and 1 for perfect (0.05 is already useful in practice), worked out within each group of regions every month. `
+    + `The p-value is the chance of an IC this high if the score ranked no better than chance, allowing for the months overlapping: under 0.025 counts as working, under 0.16 as suggestive. `
+    + `Risk is judged on the swings that followed, not the return. Company figures go back four years, prices ten.`;
   const rows = Object.entries(d.factors);
   const same = (f) => [f.local, f.lag120].filter(Boolean).every((x) => x.verdict === f.verdict);
-  $("#scTable").innerHTML = `<table><tr><th>Score</th><th>Verdict</th><th class="num">Rank IC, ${h} m</th><th class="num">p</th><th class="num">Months right</th>
-      <th class="num">Top third vs bottom, ${h} m</th><th class="num">IC 1 m</th><th class="num">IC 12 m</th><th class="num">t first half / second half</th><th>Checks</th></tr>
+  const pill = (v) => `<span class="pill ${SC_TONE[v] || ""}">${esc(v)}</span>`;
+  $("#scTable").innerHTML = `<table><tr><th>Score</th><th>Everywhere</th><th class="num">Rank IC, ${h} m</th><th class="num">p</th><th class="num">Months right</th>
+      <th class="num">Top third vs bottom</th><th>${esc(dec)}</th><th>${esc(con)}</th><th class="num">IC 1 m / 12 m</th><th>Checks</th></tr>
     ${rows.map(([k, f]) => { const s = f.horizons[h];
-      return `<tr><td>${esc(f.label)}</td><td><span class="pill ${SC_TONE[f.verdict] || ""}">${esc(f.verdict)}</span></td><td class="num">${icOf(s.meanIC)}</td>
-        <td class="num">${pOf(s.p)}</td><td class="num">${isNum(s.positive) ? pct(s.positive, 0, false) : "—"}${s.n ? ` <span class="muted sm">of ${s.n}</span>` : ""}</td>
+      return `<tr><td>${esc(f.label)}</td><td>${pill(f.verdict)}</td><td class="num">${icOf(s.meanIC)}</td><td class="num">${pOf(s.p)}</td>
+        <td class="num">${isNum(s.positive) ? pct(s.positive, 0, false) : "—"}${s.n ? ` <span class="muted sm">of ${s.n}</span>` : ""}</td>
         <td class="num">${isNum(s.spread) ? (k === "risk" ? `${pct(s.spread, 1, false)} calmer` : cpct(s.spread)) : "—"}</td>
-        <td class="num">${icOf(f.horizons["1"].meanIC)}</td><td class="num">${icOf(f.horizons["12"].meanIC)}</td>
-        <td class="num">${tStat(f.discovery.t)} / ${tStat(f.holdout.t)}</td>
-        <td class="muted sm">${same(f) ? "same in local currency" + (f.lag120 ? " and at 120 days" : "") : `local currency: ${esc(f.local.verdict)}${f.lag120 ? `; 120 days: ${esc(f.lag120.verdict)}` : ""}`}</td></tr>`; }).join("")}</table>
-    <p class="muted sm">First half ${esc(d.discovery?.join(" to ") || "—")}, second half ${esc(d.holdout?.join(" to ") || "—")}. ${d.withStatements} of ${d.stocks} stocks had published statements for the latest month (${d.withValue} with a value score: share counts that don't fit a listing are left out).${d.skipped ? ` ${d.skipped} skipped while Yahoo asked for a pause.` : ""}</p>`;
-  $("#scCands").innerHTML = `<table><tr><th>Change</th><th>Compared with</th><th class="num">Its own IC</th><th class="num">Gain over today's, all months</th><th class="num">p</th><th class="num">Gain, second half</th><th class="num">p</th><th>Result</th></tr>
-    ${d.candidates.map((c) => `<tr><td>${esc(c.label)}</td><td>${esc(c.against || "")}</td>
-      <td class="num">${c.own ? `${icOf(c.own.meanIC)} <span class="muted sm">${esc(c.own.verdict)}</span>` : "—"}</td>
-      <td class="num">${icOf(c.all?.meanDiff)}</td><td class="num">${pOf(c.all?.p)}</td><td class="num">${icOf(c.holdout?.meanDiff)}</td><td class="num">${pOf(c.holdout?.p)}</td>
+        <td>${pill(f.decide.verdict)} <span class="muted sm">${icOf(f.decide.meanIC)}</span></td><td>${pill(f.confirm.verdict)} <span class="muted sm">${icOf(f.confirm.meanIC)}</span></td>
+        <td class="num">${icOf(f.horizons["1"].meanIC)} / ${icOf(f.horizons["12"].meanIC)}</td>
+        <td class="muted sm">${same(f) ? "same in local currency" + (f.lag120 ? " and at 120 days" : "") : `local currency: ${esc(f.local.verdict)}${f.lag120 ? `; 120 days: ${esc(f.lag120.verdict)}` : ""}`}; first half / second half t ${tStat(f.discovery.t)} / ${tStat(f.holdout.t)}</td></tr>`; }).join("")}</table>
+    <p class="muted sm">${d.withStatements} of ${d.stocks} stocks had published statements for the latest month (${d.withValue} with a value score: share counts that don't fit a listing are left out).
+      Loaded: ${Object.entries(d.counts || {}).map(([r, c]) => `${esc(r)} ${c.loaded} of ${c.listed}${c.short ? ` (${c.short} under a year old)` : ""}${c.failed ? `, ${c.failed} failed` : ""}${c.skipped ? `, ${c.skipped} skipped` : ""}`).join("; ")}.</p>`;
+  const regs = Object.keys(rows[0][1].regions);
+  $("#scRegions").innerHTML = `<table><tr><th>Score</th>${regs.map((r) => `<th>${esc(r)}</th>`).join("")}</tr>
+    ${rows.map(([, f]) => `<tr><td>${esc(f.label)}</td>${regs.map((r) => `<td>${pill(f.regions[r].verdict)} <span class="muted sm">${icOf(f.regions[r].meanIC)}</span></td>`).join("")}</tr>`).join("")}</table>`;
+  $("#scCands").innerHTML = `<table><tr><th>Change</th><th>Compared with</th><th class="num">Its own IC, everywhere</th><th class="num">Gain, ${esc(dec)}</th><th class="num">p</th>
+      <th>On its own, ${esc(con)}</th><th class="num">Gain there</th><th class="num">p</th><th>Result</th></tr>
+    ${d.candidates.map((c) => `<tr><td>${esc(c.label)}</td><td>${esc(c.against)}</td><td class="num">${icOf(c.own.meanIC)}</td>
+      <td class="num">${icOf(c.decide.meanDiff)}</td><td class="num">${pOf(c.decide.p)}</td><td>${pill(c.ownConfirm.verdict)}</td>
+      <td class="num">${icOf(c.confirm.meanDiff)}</td><td class="num">${pOf(c.confirm.p)}</td>
       <td><span class="pill ${c.adopted ? "on" : ""}">${c.adopted ? "adopted" : "not adopted"}</span> <span class="muted sm">${esc(c.why)}</span></td></tr>`).join("")}</table>`;
   $("#scKind").innerHTML = rows.map(([key, f]) => `<button data-sc="${key}" class="${key === SC.kind ? "on" : ""}">${esc(f.label)}</button>`).join("");
   $$("#scKind button").forEach((b) => b.onclick = () => { SC.kind = b.dataset.sc; $$("#scKind button").forEach((x) => x.classList.toggle("on", x === b)); scChart(); });

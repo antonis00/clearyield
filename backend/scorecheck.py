@@ -1,17 +1,21 @@
-"""Do the scores rank stocks by what happens next? The research in docs/score-research.md, as code.
+"""Do the scores rank stocks by what happens next? The research in docs/score-research.md (round 2), as code.
 
-Every month-start of the past years, each followed stock is scored with today's rules (`scoring.factor_breakdown`)
-fed only what was public that day: prices up to the day, and annual statements once they'd been out 90 days. Each
-score is judged by its rank IC (Spearman correlation with what followed: the return, or for risk the swings),
-averaged over the months. The following windows overlap (3 months, sampled monthly), so the t-statistic scales the
-variance by the overlap and is judged against Student's t with as many degrees of freedom as there are separate
-windows: measured on made-up noise, that passes t >= 2 about as often as it should, where Newey-West didn't with
-this few months. Candidate changes, fixed in advance, must work on their own, beat today's score after a Holm
-correction for testing several, and beat it again on a hold-out half of the months nobody looked at first."""
+Every month-start of the past ten years, every stock in the list is scored with today's rules
+(`scoring.factor_breakdown`) fed only what was public that day: prices up to the day, and annual statements once
+they'd been out 90 days. Each score is judged by its rank IC (Spearman correlation with what followed: the return, or
+for risk the swings), worked out within each group of regions on each date and averaged over the months. The windows
+overlap (3 months, sampled monthly), so the t-statistic scales the variance by the overlap and is judged against
+Student's t with as many degrees of freedom as there are separate windows (calibrated: noise passes about 2% of the
+time against 2.5% intended). Three candidate changes, fixed in advance, are decided on North America and Asia-Pacific
+(after Holm's correction for three tests) and must be confirmed on Europe, the Middle East & Africa and Latin America."""
 import datetime as dt
 import hashlib
+import json
 import logging
 import math
+import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -19,38 +23,57 @@ import pandas as pd
 
 from . import data, db, scoring
 from . import indicators as ind
+from .universe import country_of, region_of
 
 log = logging.getLogger("clearyield.scorecheck")
 
 LAG_DAYS = 90               # a fiscal year's statements count as public this long after it ends
 ROBUST_LAG_DAYS = 120       # a longer lag, as a robustness check (EU and UK rules allow four months)
+YEARS = 10                  # of prices, for momentum and risk
 HORIZONS = (1, 3, 12)       # months ahead
 PRIMARY = 3                 # the horizon decisions rest on
-MIN_STOCKS = 15             # fewest stocks a date needs for its IC to count
-MIN_DATES = 12              # fewest dates a half (or a whole) needs for a verdict
+MIN_STOCKS = 15             # fewest stocks a date (in a group or region) needs for its IC to count
+MIN_COUNTRY = 3             # fewest scored stocks a country needs on a date to count (outcomes are against its average)
+COMPLETE_SHARE = 0.95       # a run decides only if every region loaded at least this share of its listed stocks
+MIN_DATES = 12              # fewest dates for a verdict
 MIN_DF = 4                  # fewest separate windows (degrees of freedom) for a verdict
 SHARE_BAND = (2 / 3, 1.5)   # the statement's shares times the price must be this close to today's market value
-MIN_PEERS = 8               # fewest other stocks in a sector for a within-sector rank; fewer, the whole list
 MIN_HISTORY = 252           # a year of prices before a date, as the price-based scores need
 ALPHA = 0.05                # two-sided: a one-sided p under 0.025 "works"
 SUGGEST_P = 0.16            # one-sided p under this (about t >= 1) is "suggestive"
+PATIENCE = 15 * 60          # how long a download waits while Yahoo asks for a pause, before the stock is skipped
+DECIDE = ("North America", "Asia-Pacific")                         # decisions rest on these regions...
+CONFIRM = ("Europe", "Middle East & Africa", "Latin America")      # ...and are confirmed on these
 FACTORS = ("value", "quality", "growth", "momentum", "risk")
 FUNDAMENTAL = ("value", "quality", "growth")
 LABELS = {"value": "Value", "quality": "Quality", "growth": "Growth (1-year)", "momentum": "Momentum", "risk": "Risk (calm)",
           "composite": "Overall score"}
-CACHE_HOURS = 12
+# The round 2 candidates (docs/score-research.md): (row key, label, the live score it would replace)
+CANDIDATES = [("quality_gp", "Quality as gross profitability", "quality"),
+              ("quality_profit", "Quality as profitability only", "quality"),
+              ("momRiskAdj", "Momentum adjusted for risk", "momentum")]
+GP_BAD, GP_GOOD = 0.0, 0.6  # gross profit / total assets scored 0 at 0 and 100 at 0.6
+PROFIT_LABELS = ("Return on equity", "Operating margin", "Net margin")
+CACHE_HOURS = 24            # an incomplete run is shown this long (evidence only, no decision); a complete one is frozen
 CAVEATS = [
     "Each past date is scored with today's rules, fed only what was public that day: prices up to it, and a year's "
     "statements from 90 days after the year ended (also checked at 120 days). Beta and forward estimates have no "
     "past figure, so they're left out.",
-    "Value, quality and growth rest on Yahoo's last four annual statements: tested over a shorter span than momentum "
-    "and risk, on annual figures that are older than the live ones. Growth here is one year's; the live score uses "
-    "three years where it can, which four statements can't test.",
+    "Momentum and risk are tested over ten years of prices; value, quality and growth only over Yahoo's last four "
+    "annual statements, on annual figures older than the live ones. Growth here is one year's; the live score uses "
+    "three years where it can.",
     "The overall score counts only stocks with all five factors, so it starts once two years of statements are out.",
-    "The stocks are today's list, chosen today: companies that failed or left since are missing.",
+    "The stocks are today's list, chosen today: companies that failed or left since are missing, which weighs more "
+    "over ten years than four.",
     "Returns are in US dollars with dividends, so a currency's fall isn't read as a stock signal; local-currency "
     "results are shown beside them. Past market values are the shares in that year's statement times that day's price.",
-    "Past patterns are no promise: a score that ranked well for a few years can stop.",
+    "Decisions use North America and Asia-Pacific; Europe, the Middle East & Africa and Latin America confirm. Both "
+    "cover the same years, so a worldwide turn touches both: each score's own months are also split in halves. The "
+    "quality candidates rest on 2023-26 everywhere, so they're confirmed across stocks, not across time.",
+    "Each stock's outcome is measured against the average of its country that month, so a country's market or "
+    "currency doing well isn't read as the score picking well. Countries with fewer than three scored stocks that "
+    "month are left out.",
+    "Past patterns are no promise: a score that ranked well for some years can stop.",
 ]
 
 
@@ -117,7 +140,7 @@ def overlap_t(values, h):
 
 def verdict(p, n, df=MIN_DF):
     """Plain words for a one-sided p-value (small: the score ranks the right way). Too few months, or too few separate
-    windows among them (12-month windows over four years make one or two), give no verdict."""
+    windows among them, give no verdict."""
     if p is None or n < MIN_DATES or df < MIN_DF:
         return "not enough data"
     if p < ALPHA / 2:
@@ -185,9 +208,22 @@ def info_at(base, stmts, day, price, fx, lag=LAG_DAYS):
     return out
 
 
-def _parts(bd):
-    """Every metric that scored, as (factor, label, value, bad, good): the raw material for within-sector ranks."""
-    return [(f, p["label"], p["value"], p["bad"], p["good"]) for f, ps in bd.items() for p in ps if p["score"] is not None]
+def gross_profitability(base, stmts, day, lag=LAG_DAYS):
+    """Candidate 1: gross profit / total assets from the statement public that day, scored 0-100 (GP_BAD to GP_GOOD).
+    None for financial companies (banks, insurers, asset managers: Novy-Marx leaves them out, and their gross profit and
+    assets don't compare) or without the figures. Adopting it would take banks' quality score away."""
+    if base.get("sector") == "Financial Services" or "bank" in (base.get("industry") or "").lower():
+        return None
+    last, _ = published(stmts, day, lag)
+    if not last or last.get("grossProfit") is None or not last.get("totalAssets") or last["totalAssets"] <= 0:
+        return None
+    return scoring.lin(last["grossProfit"] / last["totalAssets"], GP_BAD, GP_GOOD)
+
+
+def profitability_only(bd):
+    """Candidate 2: today's quality metrics without debt / equity and the current ratio, averaged as now."""
+    parts = [p["score"] for p in bd["quality"] if p["score"] is not None and p["label"] in PROFIT_LABELS]
+    return sum(parts) / len(parts) if parts else None
 
 
 # ---------------------------------------------------------------- the panel
@@ -213,18 +249,36 @@ def _shares_fit(t, stmts, price_now, mcap_now):
     return True
 
 
+def _wait_for_yahoo():
+    """While Yahoo asks for a pause, wait (up to PATIENCE in all); False if the pause outlasts it."""
+    waited = 0.0
+    while data.rate_limited_for() > 0:
+        if waited >= PATIENCE:
+            return False
+        pause = min(30.0, data.rate_limited_for())
+        time.sleep(pause)
+        waited += pause
+    return True
+
+
 def _load(t):
-    """Everything one stock needs, or None: closes (adjusted, local and in dollars), quoted closes in the main unit,
-    today's record and statements. A stock whose statement shares don't match its listing (an ADR or a second
-    listing) keeps its price-based scores but gets no value score."""
+    """Everything one stock needs, or why not: "skipped" (Yahoo's pause outlasted PATIENCE), "short" (under a year of
+    prices: a recent listing, left out by design) or "failed" (no data, no rate, an error), each counted. Ten years of
+    adjusted closes (local and in dollars), quoted closes in the main unit, today's record and statements. A stock
+    whose statement shares don't fit its listing keeps its other scores but gets no value score."""
     try:
-        h = data.history(t, "5y")["Close"].dropna()
+        if not _wait_for_yahoo():
+            return "skipped"
+        h = data.long_closes(t).dropna()
+        h = h[h.index >= h.index[-1] - pd.DateOffset(years=YEARS)]
         inf = data.info(t)
-        if inf.get("assetClass") != "Stocks" or len(h) < MIN_HISTORY + 21:
-            return None
+        if inf.get("assetClass") != "Stocks":
+            return "failed"
+        if len(h) < MIN_HISTORY + 21:
+            return "short"
         rate = data.fx_series(inf.get("currency"), "USD", h.index)
         if rate is None:
-            return None
+            return "failed"
         stmts = data.statements(t)
         divisor = data.MINOR_UNITS.get(inf.get("currency"), (None, 1.0))[1]
         quoted = data.plain_closes(t) / divisor if stmts else None
@@ -232,10 +286,10 @@ def _load(t):
             quoted = None  # the statement's shares aren't this listing's, or a year's count can't be trusted
         return {"ticker": t, "close": h, "usd": (h * rate).dropna(), "quoted": quoted, "info": inf, "stmts": stmts}
     except data.DataError:
-        return None
+        return "failed"
     except Exception as e:  # one stock's surprise mustn't stop the whole research
-        log.warning("score research skipped %s: %s", t, e)
-        return None
+        log.warning("score research couldn't load %s: %s", t, e)
+        return "failed"
 
 
 def _forward(series, d, end):
@@ -248,49 +302,63 @@ def _forward(series, d, end):
     return float(path.iloc[-1] / path.iloc[0] - 1), float(path.pct_change().std() * math.sqrt(252))
 
 
-def panel(tickers, patience=120):
+PROGRESS = {"running": False, "done": 0, "total": 0, "stage": "", "started": None, "finished": 0.0, "error": None}
+RETRY_AFTER = 10 * 60  # after a failed run, wait this long before the page starts another
+
+
+def panel(tickers):
     """One row per (date, stock): the five factor scores and the composite as today's rules would have given them
-    (fundamentals also at the longer lag), the candidates' inputs, and what followed over each horizon. Downloads stop
-    while Yahoo asks for a long pause."""
-    loaded, skipped = [], 0
-    with ThreadPoolExecutor(4) as pool:
-        for got in pool.map(lambda t: _load(t) if data.rate_limited_for() < patience else "skipped", tickers):
-            if got == "skipped":
-                skipped += 1  # Yahoo asked for a long pause: said in the results, not dropped silently
-            elif got:
+    (fundamentals also at the longer lag), the candidates, the region, and what followed over each horizon."""
+    loaded, counts = [], {}
+    PROGRESS.update({"done": 0, "total": len(tickers), "stage": "downloading"})
+    with ThreadPoolExecutor(3) as pool:
+        for t, got in zip(tickers, pool.map(_load, tickers)):
+            PROGRESS["done"] += 1
+            c = counts.setdefault(region_of(t), {"listed": 0, "loaded": 0, "short": 0, "failed": 0, "skipped": 0})
+            c["listed"] += 1
+            if isinstance(got, dict):
                 loaded.append(got)
+                c["loaded"] += 1
+            else:
+                c[got] += 1  # every stock that didn't load is counted, by reason
     if not loaded:
-        return [], 0, skipped
+        return [], 0, counts
+    PROGRESS.update({"done": 0, "total": len(loaded), "stage": "scoring"})
     last = max(s["close"].index[-1] for s in loaded)
     first = min(s["close"].index[0] for s in loaded)
     dates = [d for d in _month_starts(first + pd.DateOffset(days=365), last) if d + pd.DateOffset(months=1) <= last]
     rows = []
     for s in loaded:
+        PROGRESS["done"] += 1
         close, usd, quoted, inf, stmts = s["close"], s["usd"], s["quoted"], s["info"], s["stmts"]
         quote_main = data.main_unit(inf.get("currency")) or inf.get("currency")
         for d in dates:
             upto = close[close.index <= d]
             if len(upto) < MIN_HISTORY:
                 continue
+            day = d.date()
+            has_stmts = bool(stmts) and published(stmts, day, LAG_DAYS)[0] is not None
             price, fx = None, None
-            if stmts and quoted is not None:
+            if has_stmts and quoted is not None:
                 q = quoted[quoted.index <= d]
                 price = float(q.iloc[-1]) if not q.empty else None
                 try:
-                    fx = data.fx_on(inf.get("financialCurrency") or quote_main, quote_main, d.date().isoformat())
+                    fx = data.fx_on(inf.get("financialCurrency") or quote_main, quote_main, day.isoformat())
                 except data.DataError:
                     fx = None
-            row = {"date": d.date().isoformat(), "ticker": s["ticker"], "sector": inf.get("sector") or "Unknown"}
-            for lag, suffix in ((LAG_DAYS, ""), (ROBUST_LAG_DAYS, "_lag120")):
-                bd = scoring.factor_breakdown(info_at(inf, stmts, d.date(), price, fx, lag), upto)
-                scores = {f: scoring._avg(bd[f]) for f in FACTORS}
-                if not suffix:
-                    row.update(scores)
-                    row["parts"] = _parts(bd)
-                    # The overall score only where all five factors are there, so it means the same thing on every date
-                    row["composite"] = scoring.combine(scores) if all(v is not None for v in scores.values()) else None
-                else:
-                    row.update({f + suffix: scores[f] for f in FUNDAMENTAL})
+            row = {"date": day.isoformat(), "ticker": s["ticker"], "region": inf.get("region") or "Unknown",
+                   "country": country_of(s["ticker"]) or inf.get("country") or "Unknown"}  # where it's listed: its currency
+            bd = scoring.factor_breakdown(info_at(inf, stmts, day, price, fx), upto)
+            scores = {f: scoring._avg(bd[f]) for f in FACTORS}
+            row.update(scores)
+            # The overall score only where all five factors are there, so it means the same thing on every date
+            row["composite"] = scoring.combine(scores) if all(v is not None for v in scores.values()) else None
+            if has_stmts:  # fundamentals again with a longer publication lag, as a check
+                late = scoring.factor_breakdown(info_at(inf, stmts, day, price, fx, ROBUST_LAG_DAYS), upto)
+                row.update({f + "_lag120": scoring._avg(late[f]) for f in FUNDAMENTAL})
+                row["quality_gp"] = gross_profitability(inf, stmts, day)
+                row["quality_gp_lag120"] = gross_profitability(inf, stmts, day, ROBUST_LAG_DAYS)
+                row["quality_profit"] = profitability_only(bd)
             r12, r1, vol = ind.ret_over(upto, 252), ind.ret_over(upto, 21), ind.volatility(upto)
             row["momRiskAdj"] = ((1 + r12) / (1 + r1) - 1) / vol if r12 is not None and r1 is not None and vol else None
             for h in HORIZONS:
@@ -304,47 +372,34 @@ def panel(tickers, patience=120):
                 if local is not None:
                     row[f"local{h}"] = local
             rows.append(row)
-    return rows, len(loaded), skipped
-
-
-# ---------------------------------------------------------------- candidate: within-sector ranks
-def sector_rank_scores(rows):
-    """Each row's factors scored by within-sector percentiles of the same metrics today's rules use (the whole list
-    where a sector has fewer than MIN_PEERS other stocks with the metric), averaged into factors exactly as now. Added
-    to each row as `<factor>_sector`, and `composite_sector` where all five are there. `rows` must be one date's."""
-    by_metric = {}
-    for i, r in enumerate(rows):
-        for f, label, value, bad, good in r["parts"]:
-            by_metric.setdefault((f, label), []).append((i, r["sector"], value, good > bad))
-    per_row = [{f: [] for f in FACTORS} for _ in rows]
-    for (f, _), items in by_metric.items():
-        for i, sector, value, higher_better in items:
-            if value is None:  # a loss where P/E would be: the worst, as today's rule scores it 0
-                per_row[i][f].append(0.0)
-                continue
-            peers = [v for _, s, v, _ in items if s == sector and v is not None]
-            pool = peers if len(peers) - 1 >= MIN_PEERS else [v for _, _, v, _ in items if v is not None]
-            below = sum(v < value for v in pool) + 0.5 * (sum(v == value for v in pool) - 1)
-            pct = below / (len(pool) - 1) if len(pool) > 1 else 0.5
-            per_row[i][f].append(100 * (pct if higher_better else 1 - pct))
-    for r, scores in zip(rows, per_row):
-        fs = {f: (sum(v) / len(v) if v else None) for f, v in scores.items()}
-        r.update({f"{f}_sector": s for f, s in fs.items()})
-        r["composite_sector"] = scoring.combine(fs) if all(v is not None for v in fs.values()) else None
+    return rows, len(loaded), counts
 
 
 # ---------------------------------------------------------------- judging
 def _outcome(factor, h, on="return"):
     """The row key and sign of a factor's outcome. Risk promises a calmer ride: its outcome is the swings, sign
-    reversed, so a positive IC is good for every factor, unless `on` asks for the return."""
-    if factor.startswith("risk") and on != "return-for-all":
+    reversed, so a positive IC is good for every factor."""
+    if factor.startswith("risk"):
         return f"vol{h}", -1
     return (f"local{h}" if on == "local" else f"ret{h}"), 1
 
 
 def _pairs(rows, factor, h, on="return"):
+    """(score, outcome, ticker) for one date, the outcome measured against the average of the stock's country among
+    those scored, so a country's market or currency doing well isn't read as the score picking well. Countries with
+    fewer than MIN_COUNTRY scored stocks are left out: they say nothing about picking within a country."""
     key, sign = _outcome(factor, h, on)
-    return [(r[factor], sign * r[key], r["ticker"]) for r in rows if r.get(factor) is not None and r.get(key) is not None]
+    scored = [r for r in rows if r.get(factor) is not None and r.get(key) is not None]
+    by_country = {}
+    for r in scored:
+        by_country.setdefault(r.get("country", "Unknown"), []).append(r)
+    out = []
+    for members in by_country.values():
+        if len(members) < MIN_COUNTRY:
+            continue
+        avg = sum(sign * m[key] for m in members) / len(members)
+        out += [(m[factor], sign * m[key] - avg, m["ticker"]) for m in members]
+    return out
 
 
 def _spread(pairs, date=""):
@@ -389,102 +444,155 @@ def split(dates, h):
     return dates[:max(0, half - (h - 1))], dates[half:]
 
 
-def compare(by_date, candidate, today, h, dates):
-    """The candidate's IC minus today's, date by date, over `dates` where both have one: {n, meanDiff, t, p}."""
-    sub = {d: by_date[d] for d in dates}
-    a = {d: ic for d, ic, *_ in daily_stats(sub, candidate, h)}
-    b = {d: ic for d, ic, *_ in daily_stats(sub, today, h)}
+def compare(by_date, candidate, today, h):
+    """The candidate's IC minus today's, date by date, on the same stocks (rows where both scored): {n, meanDiff, t, p}."""
+    same = {d: [r for r in rows if r.get(candidate) is not None and r.get(today) is not None] for d, rows in by_date.items()}
+    a = {d: ic for d, ic, *_ in daily_stats(same, candidate, h)}
+    b = {d: ic for d, ic, *_ in daily_stats(same, today, h)}
     diffs = [a[d] - b[d] for d in sorted(set(a) & set(b))]
     mean, t, df = overlap_t(diffs, h)
-    return {"n": len(diffs), "meanDiff": mean, "t": t, "p": p_one_sided(t, df) if len(diffs) >= MIN_DATES else None}
+    return {"n": len(diffs), "meanDiff": mean, "t": t, "p": p_one_sided(t, df) if len(diffs) >= MIN_DATES and df >= MIN_DF else None}
+
+
+def _group(rows, regions=None):
+    """Rows by date, for the given regions (all when None)."""
+    out = {}
+    for r in rows:
+        if regions is None or r["region"] in regions:
+            out.setdefault(r["date"], []).append(r)
+    return out
 
 
 def judge(rows, h=PRIMARY):
-    """The research on a panel of rows (see `panel`): each score's evidence and the candidates' results."""
-    by_date = {}
-    for r in rows:
-        by_date.setdefault(r["date"], []).append(r)
-    for d_rows in by_date.values():
-        sector_rank_scores(d_rows)
-    keys = [*FACTORS, "composite"]
-    primary_dates = sorted(d for d, rs in by_date.items() if any(r.get(f"ret{h}") is not None for r in rs))
-    disc, hold = split(primary_dates, h)
-    on = lambda ds: {d: by_date[d] for d in ds}  # noqa: E731
+    """The research on a panel of rows (see `panel`): each score's evidence, worldwide, by group of regions and by
+    region, over time halves and robustness checks; and the three candidates against the adoption rule."""
+    everywhere, decide, confirm = _group(rows), _group(rows, DECIDE), _group(rows, CONFIRM)
+    by_region = {reg: _group(rows, (reg,)) for reg in (*DECIDE, *CONFIRM)}
+    only = lambda by, ds: {d: by[d] for d in ds if d in by}  # noqa: E731
     factors = {}
-    for f in keys:
-        factors[f] = {"label": LABELS[f], "horizons": {str(k): summarise(daily_stats(by_date, f, k), k) for k in HORIZONS},
-                      "discovery": summarise(daily_stats(on(disc), f, h), h), "holdout": summarise(daily_stats(on(hold), f, h), h),
-                      "local": summarise(daily_stats(by_date, f, h, "local"), h),
-                      "byDate": [{"date": d, "ic": ic} for d, ic, *_ in daily_stats(by_date, f, h)]}
+    for f in [*FACTORS, "composite"]:
+        # The halves split this score's own months (company figures start in 2023, prices in 2017)
+        disc, hold = split([d for d, *_ in daily_stats(everywhere, f, h)], h)
+        factors[f] = {"label": LABELS[f], "horizons": {str(k): summarise(daily_stats(everywhere, f, k), k) for k in HORIZONS},
+                      "decide": summarise(daily_stats(decide, f, h), h), "confirm": summarise(daily_stats(confirm, f, h), h),
+                      "regions": {reg: summarise(daily_stats(by, f, h), h) for reg, by in by_region.items()},
+                      "discovery": summarise(daily_stats(only(everywhere, disc), f, h), h), "holdout": summarise(daily_stats(only(everywhere, hold), f, h), h),
+                      "local": summarise(daily_stats(everywhere, f, h, "local"), h),
+                      "byDate": [{"date": d, "ic": ic} for d, ic, *_ in daily_stats(everywhere, f, h)]}
+        factors[f]["halves"] = [disc[0], disc[-1], hold[0], hold[-1]] if disc and hold else None
         if f in FUNDAMENTAL:
-            factors[f]["lag120"] = summarise(daily_stats(by_date, f + "_lag120", h), h)
+            factors[f]["lag120"] = summarise(daily_stats(everywhere, f + "_lag120", h), h)
         factors[f]["verdict"] = factors[f]["horizons"][str(h)]["verdict"]
 
-    # The overall score from the factors that predict returns, chosen on the discovery half alone (risk judged on its
-    # return too here: what it predicts about swings isn't what this candidate is about)
-    ret_works = {f: summarise(daily_stats(on(disc), f, h, "return-for-all"), h) for f in FACTORS}
-    working = [f for f in FACTORS if ret_works[f]["verdict"] == "works"]
-    for r in rows:
-        vals = {f: r.get(f) for f in working}
-        # Only where the overall score it's compared with exists, so both rank the same stocks on the same dates
-        r["composite_working"] = scoring.combine(vals) if working and r.get("composite") is not None and all(v is not None for v in vals.values()) else None
-
-    plan = [*[(f"sector_{f}", f"Within-sector ranks: {LABELS[f]}", f"{f}_sector", f) for f in keys],
-            ("riskadj_momentum", "Momentum adjusted for risk", "momRiskAdj", "momentum"),
-            ("working_composite", "Overall score from the factors that predict returns" + (f" ({', '.join(LABELS[f] for f in working)})" if working else ""),
-             "composite_working", "composite")]
     candidates = []
-    for key, label, cand, today in plan:
-        c = {"key": key, "label": label, "against": LABELS[today], "factor": cand}
-        if key == "working_composite" and not working:
-            c.update({"adopted": False, "why": "No factor predicted returns on the first half, so there's nothing to build it from."})
-        else:
-            c.update({"own": summarise(daily_stats(by_date, cand, h), h), "ownHoldout": summarise(daily_stats(on(hold), cand, h), h),
-                      "discovery": compare(by_date, cand, today, h, disc), "holdout": compare(by_date, cand, today, h, hold),
-                      "all": compare(by_date, cand, today, h, primary_dates)})
-        candidates.append(c)
-    # Testing several changes: each improvement must pass Holm's correction over all of them
-    tested = [c for c in candidates if "all" in c]
-    holm_ok = dict(zip((c["key"] for c in tested), holm([c["all"]["p"] for c in tested])))
-    for c in tested:
-        works_alone, holds_up = c["own"]["verdict"] == "works", (c["ownHoldout"]["meanIC"] or 0) > 0
-        gain = c["all"]["meanDiff"]
-        hold_ok = c["holdout"]["p"] is not None and c["holdout"]["p"] < ALPHA
-        c["holm"] = holm_ok[c["key"]]
-        c["adopted"] = works_alone and holds_up and c["holm"] and hold_ok
+    for key, label, today in CANDIDATES:
+        candidates.append({"key": key, "label": label, "against": LABELS[today],
+                           "own": summarise(daily_stats(everywhere, key, h), h), "ownConfirm": summarise(daily_stats(confirm, key, h), h),
+                           "decide": compare(decide, key, today, h), "confirm": compare(confirm, key, today, h),
+                           "regions": {reg: compare(by_region[reg], key, today, h) for reg in CONFIRM},
+                           **({"lag120": summarise(daily_stats(everywhere, key + "_lag120", h), h)} if key == "quality_gp" else {})})
+    holm_ok = holm([c["decide"]["p"] if c["decide"]["p"] is not None else 1.0 for c in candidates])  # a missing p counts as 1: still three tests
+    names = {"decide": " and ".join(DECIDE), "confirm": ", ".join(CONFIRM[:-1]) + " and " + CONFIRM[-1]}
+    for c, passed in zip(candidates, holm_ok):
+        gain_d, gain_c = c["decide"]["meanDiff"], c["confirm"]["meanDiff"]
+        counted = {reg: cmp for reg, cmp in c["regions"].items() if cmp["n"] >= MIN_DATES}
+        negative = [reg for reg, cmp in counted.items() if (cmp["meanDiff"] or 0) <= 0]
+        works_c = c["ownConfirm"]["verdict"] == "works"
+        conf_ok = c["confirm"]["p"] is not None and c["confirm"]["p"] < ALPHA
+        c["holm"] = passed
+        c["countedRegions"] = sorted(counted)
+        c["adopted"] = passed and works_c and conf_ok and not negative
         # The first rule it failed, in plain words
-        c["why"] = ("Works on its own, beats today's score after the correction for testing several, and again on the second half." if c["adopted"]
-                    else f"Doesn't rank the right way on its own ({c['own']['verdict']})." if not works_alone
-                    else "Works over all months, but not on the second half." if not holds_up
-                    else "Ranks no better than today's score." if gain is None or gain <= 0
-                    else f"Ranks a little better than today's score (IC {gain:+.3f}), but not by enough to survive the correction for testing several changes." if not c["holm"]
-                    else "Its gain over today's score isn't confirmed on the second half.")
-    return {"factors": factors, "candidates": candidates, "dates": len(by_date), "from": min(by_date), "to": max(by_date),
-            "primaryHorizon": h, "discovery": [disc[0], disc[-1]] if disc else None, "holdout": [hold[0], hold[-1]] if hold else None,
-            "working": working, "caveats": CAVEATS}
+        c["why"] = ("Beats today's score on " + names["decide"] + " after the correction for three tests, works on its own on "
+                    + names["confirm"] + " and beats today's score there too, in every region." if c["adopted"]
+                    else f"On {names['decide']} it ranks no better than today's score." if gain_d is None or gain_d <= 0
+                    else f"On {names['decide']} it ranks a little better than today's score (IC {gain_d:+.3f}), but not by enough to pass the correction for three tests." if not passed
+                    else f"On {names['confirm']} it doesn't rank the right way on its own ({c['ownConfirm']['verdict']})." if not works_c
+                    else f"Its gain over today's score isn't confirmed on {names['confirm']} (IC {gain_c:+.3f})." if not conf_ok
+                    else f"Its gain over today's score is negative in {', '.join(negative)}.")
+        if counted != c["regions"]:  # say which confirming regions the "every region" rule rested on
+            c["why"] += f" Regions with enough months to count: {', '.join(sorted(counted)) or 'none'}."
+    return {"factors": factors, "candidates": candidates, "dates": len(everywhere), "from": min(everywhere), "to": max(everywhere),
+            "primaryHorizon": h, "decideRegions": list(DECIDE), "confirmRegions": list(CONFIRM), "caveats": CAVEATS}
 
 
-def check(tickers, weights=None):
-    """The whole research over `tickers` (see docs/score-research.md). `weights` aren't used: the evidence is about
-    each score, and weights stay the owner's choice."""
-    rows, loaded, skipped = panel(tickers)
+def check(tickers):
+    """The whole research over `tickers` (see docs/score-research.md)."""
+    rows, loaded, counts = panel(tickers)
+    skipped = sum(c["skipped"] for c in counts.values())
     if not rows:
         return {"error": "No price history to check against." + (f" {skipped} stocks were skipped while Yahoo asked for a pause: try again later." if skipped else "")}
+    PROGRESS["stage"] = "judging"
     out = judge(rows)
+    # A run missing part of the list decides on a different sample than the one designed: evidence, no decision
+    short_of = [r for r, c in counts.items() if c["skipped"] or c["loaded"] < COMPLETE_SHARE * (c["listed"] - c["short"])]
+    out["complete"] = not short_of
+    if short_of:
+        for c in out["candidates"]:
+            c["adopted"] = False
+            c["why"] = f"No decision: the run was incomplete in {', '.join(short_of)} (see the counts). " + c["why"]
     latest = [r for r in rows if r["date"] == out["to"]]
-    out.update({"stocks": loaded, "skipped": skipped, "withStatements": sum(r.get("quality") is not None for r in latest),
-                "withValue": sum(r.get("value") is not None for r in latest)})
+    per_region = {}
+    for r in latest:
+        per_region[r["region"]] = per_region.get(r["region"], 0) + 1
+    out.update({"stocks": loaded, "skipped": skipped, "counts": counts, "withStatements": sum(r.get("quality") is not None for r in latest),
+                "withValue": sum(r.get("value") is not None for r in latest), "stocksByRegion": per_region})
     return out
 
 
-def cached_check(tickers, weights, key):
-    """The research, kept CACHE_HOURS: it reads five years of prices and four years of statements for every stock."""
-    k = f"scorecheck:v3:{key}"
-    hit = db.cache_get(k, CACHE_HOURS * 3600)
-    if hit is not None:
-        return hit
-    out = check(tickers, weights)
-    out["checked"] = dt.datetime.now().isoformat(timespec="minutes")
-    if "error" not in out:
-        db.cache_set(k, out)
-    return out
+# ---------------------------------------------------------------- run in the background
+_lock = threading.Lock()
+
+
+def frozen_path():
+    """Where the complete run the decision rests on is kept, for good (beside the database, not in the cache, which
+    forgets entries after 90 days)."""
+    return db.DB_PATH.parent / "research" / "score-round2.json"
+
+
+def frozen():
+    try:
+        return json.loads(frozen_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def cached_or_start(tickers, key):
+    """The decision run if there is one (complete runs are frozen: the decision is made once, not redrawn every day
+    until something passes); else an incomplete run from the last CACHE_HOURS (evidence, no decision); else starts the
+    research in the background (one at a time) and says how far it's got. A first run downloads ten years of prices
+    and four years of statements for every stock, which takes a while and waits whenever Yahoo asks for a pause."""
+    k = f"scorecheck:r2b:{key}"  # r2b: after the review's fixes (an earlier run under r2 used the method before them)
+    with _lock:  # checked inside the lock, so a request arriving as a build finishes doesn't start another
+        done = frozen() or db.cache_get(k, CACHE_HOURS * 3600)
+        if done is not None:
+            return done
+        failed_lately = PROGRESS["error"] and time.time() - PROGRESS["finished"] < RETRY_AFTER
+        if failed_lately and not PROGRESS["running"]:
+            return {"building": False, "error": PROGRESS["error"] + " It will be tried again in a few minutes."}
+        if not PROGRESS["running"]:
+            PROGRESS.update({"running": True, "error": None, "started": time.time(), "done": 0, "total": len(tickers), "stage": "starting"})
+            threading.Thread(target=_build, args=(tickers, k), daemon=True).start()
+    return {"building": True, **{x: PROGRESS[x] for x in ("done", "total", "stage")},
+            "elapsed": round(time.time() - (PROGRESS["started"] or time.time()))}
+
+
+def _build(tickers, k):
+    try:
+        out = check(tickers)
+        out["checked"] = dt.datetime.now().isoformat(timespec="minutes")
+        if "error" in out:
+            PROGRESS["error"] = out["error"]
+        elif out.get("complete"):
+            path = frozen_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({**out, "frozen": True}, default=str), encoding="utf-8")
+            os.replace(tmp, path)
+        else:
+            db.cache_set(k, out)
+    except Exception as e:  # the page says so, and the next visit after RETRY_AFTER tries again
+        log.exception("score research failed")
+        PROGRESS["error"] = f"The research stopped: {e}"
+    finally:
+        PROGRESS.update({"running": False, "finished": time.time()})

@@ -205,4 +205,33 @@ local-currency check, and all the method tests.
 
 ## Round 2 changes after the fact
 
-(none yet)
+### Round 2b (11 Nov 2026): after an independent review of the round 2 code, before any round 2 result was seen
+
+A run with the code as first written was started before the review came back; its output was never looked at, and
+it's stored under a name the page doesn't read. Every change below was decided from the review alone.
+
+1. **Outcomes are measured against the country's average that month.** As designed, each month's IC was one ranking
+   across many countries with dollar returns, so a score leaning towards the country whose market or currency did
+   well (the US against Japan, say) would look like a good stock picker. Now each stock's outcome (return, or swings
+   for risk) is taken against the average of the scored stocks in its country of listing that month; countries with
+   fewer than three scored stocks that month are left out. This applies to every IC: everywhere, by group, by region.
+   It departs from the design's "worked out within each group".
+2. **A decision needs a complete run.** Every stock that doesn't load is counted, by reason (Yahoo's pause, a recent
+   listing with under a year of prices, a failure). If any were skipped, or a region loaded under 95% of its listed
+   stocks (recent listings aside), the run shows its evidence but adopts nothing.
+3. **The decision is made once.** The first complete run is kept as it is (beside the database, not in the cache)
+   and shown from then on; it isn't recomputed daily, which would let a decision flip until something passed.
+4. **Holm stays at three tests**: a candidate with no p on the deciding regions counts as p = 1.
+5. **"Every confirming region with at least 15 stocks a date"** is read as: a region counts when it has at least 12
+   months with 15 or more stocks scored by both the candidate and today's score. The reason given names the regions
+   that counted whenever one didn't.
+6. **Each score's time halves split its own months.** Company figures start in 2023 and prices in 2017, so one split
+   for all left value, quality, growth and both quality candidates with nothing in the first half. The quality
+   candidates rest on 2023-26 everywhere: confirmed across stocks, not across time (said in the caveats).
+7. **Gross profitability leaves out all financial companies** (sector "Financial Services": banks, insurers, asset
+   managers), as Novy-Marx does; their gross profit and assets don't compare. Adopting it would take banks' quality
+   score away (today they're scored on return on equity), and the design should have said so. It's also checked at
+   the 120-day lag.
+8. **The background build**: the cache is checked again inside the lock (so two runs can't start together), and a
+   failed run is shown as a failure, not as "building".
+
