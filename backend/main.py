@@ -96,7 +96,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, simulate, startup  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, mailer, portfolio, scorecheck, simulate, startup  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
 
@@ -573,6 +573,21 @@ def fx(src: str = "EUR", dst: str = "USD"):
 def progress():
     """How far the long scorings under way have got (the day's first downloads), for the page's loader."""
     return ok(insights.progress())
+
+
+@app.get("/api/scorecheck")
+def score_check():
+    """Would the price-based scores have picked winners among the stocks you follow? (scorecheck.py)"""
+    settings = db.get_settings()
+    regions, w = insights.followed(settings), settings["weights"]
+    key = f"{','.join(regions)}:{w.get('momentum', 0):.3f}:{w.get('risk', 0):.3f}"
+    out = scorecheck.cached_check(universe_tickers(regions), w, key)
+    return ok({**out, "regions": regions})
+
+
+def universe_tickers(regions):
+    from .universe import tickers_for
+    return tickers_for(regions)
 
 
 @app.get("/api/opportunities")

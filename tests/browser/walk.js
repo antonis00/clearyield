@@ -365,6 +365,16 @@ const SLOW = 150000;
   expect("portfolio sim: the future shows a range, the goal and its assumptions", /Middle outcome/i.test(fut) && /Bad 1 in 10/i.test(fut) && /Reaches the goal/i.test(fut)
     && /Assumes/.test(fut) && /12-month blocks/.test(fut) && !/undefined|NaN/.test(fut) && (await canvasDrawn("#mcChart")), fut.slice(0, 120));
   await shot("portfolio-sim");
+  // Score check: the price-based scores rebuilt for past quarters, a verdict for each and the thirds behind it
+  await p.click("#btMode button[data-mode=score]");
+  await p.waitForFunction(() => document.querySelector("#scTable table") || /No price|Not enough/.test(document.querySelector("#scTable").innerText), null, { timeout: SLOW });
+  const sc = await p.evaluate(() => ({ verdicts: [...document.querySelectorAll("#scVerdicts li")].map((l) => l.innerText), rows: document.querySelectorAll("#scTable tr").length,
+    meta: document.querySelector("#scMeta").innerText, caveats: document.querySelectorAll("#scCaveats li").length }));
+  expect("score check: a verdict per score, with the thirds and caveats", sc.verdicts.length === 3 && sc.verdicts.every((v) => /quarters/.test(v)) && sc.rows === 10
+    && /stocks · quarters from/.test(sc.meta) && sc.caveats === 4, JSON.stringify(sc).slice(0, 200));
+  await p.click(".sc-detail summary"); await p.click('#scKind [data-sc="risk"]'); await p.waitForTimeout(300);
+  expect("score check: quarter by quarter, risk shown as volatility", (await canvasDrawn("#scChart")) && await p.evaluate(() => /volatility/.test(state.charts.scChart.data.datasets[0].label)));
+  await shot("score-check");
   await p.click("#btMode button[data-mode=single]");
   expect("portfolio sim: back to a single asset", !(await p.evaluate(() => document.querySelector("#btSingle").classList.contains("hidden"))));
 
