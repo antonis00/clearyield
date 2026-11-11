@@ -932,6 +932,7 @@ function webLinks(s) {
 }
 function renderAskSetup() {
   const a = state.meta?.aiInfo;
+  requestAnimationFrame(() => $("#askInput").focus({ preventScroll: true }));  // ready to type, as in a chat
   if (!a?.on) $("#askStatus").textContent = a?.problem ? `AI isn't set up: ${a.problem}` : "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example), then restart the app.";
 }
 // A step as the page lists it, with its pages for a web search
@@ -962,7 +963,8 @@ function linkTickers(root, steps) {
   }
 }
 // The conversation: follow-ups carry the earlier answers (by their ids, kept on the server with their data); "New
-// conversation" starts afresh. Answers of one conversation stack in order, the newest conversation on top.
+// conversation" clears the page and starts afresh. It reads like a chat: questions and answers in order, the question
+// box kept at the bottom of the window (in the middle, with the explanation, before the first question).
 state.askThread = [];
 function askCard(q, r) {
   const card = document.createElement("div"); card.className = "card ask-answer";
@@ -976,12 +978,15 @@ function askCard(q, r) {
 document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches?.(".ask-stock")) openStock(e.target.dataset.stock); });
 function askThreadEl() {
   let t = $("#askAnswers .ask-thread.current");
-  if (!t) { t = document.createElement("div"); t.className = "ask-thread current"; $("#askAnswers").prepend(t); }
+  if (!t) { t = document.createElement("div"); t.className = "ask-thread current"; $("#askAnswers").append(t); }
   return t;
 }
+const askLayout = () => $("#view-ask").classList.toggle("ask-empty", !$("#askAnswers").children.length);
+// The box grows with the question, up to a few lines, then scrolls
+function askGrow() { const i = $("#askInput"); i.style.height = "auto"; i.style.height = `${Math.min(i.scrollHeight, 200)}px`; }
 function newAskConversation() {
   state.askThread = [];
-  $$("#askAnswers .ask-thread.current").forEach((t) => t.classList.remove("current"));
+  $("#askAnswers").innerHTML = ""; askLayout(); $("#askStatus").textContent = "";
   $("#askNew").classList.add("hidden"); $("#askInput").placeholder = ASK_PLACEHOLDER; $("#askInput").focus();
 }
 const ASK_PLACEHOLDER = "e.g. Which European stock would add the most diversification to my portfolio without much risk?";
@@ -993,8 +998,8 @@ async function runAsk() {
   const thread = askThreadEl(), live = document.createElement("div");
   live.className = "card ask-live";
   live.innerHTML = `<div class="ask-q">${state.askThread.length ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><ol class="ask-live-steps"></ol><div class="ask-now"><span class="spinner"></span><span class="ask-now-text">Starting…</span><span class="muted sm ask-clock"></span></div>`;
-  thread.append(live); $("#askInput").value = "";
-  live.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  thread.append(live); $("#askInput").value = ""; askGrow(); askLayout();
+  live.scrollIntoView({ behavior: "smooth", block: "start" });
   const show = (j) => {
     const evs = j.events || [], done = evs.filter((e) => e.step), list = $(".ask-live-steps", live);
     // only the new steps are added, so each fades in once (redrawing the list restarted it and kept them all faint)
@@ -1013,14 +1018,17 @@ async function runAsk() {
     }
     if (j.status === "error") throw new Error(j.error);
     const r = { ...j.result, seconds: Math.round(j.elapsed) };
-    live.replaceWith(askCard(q, r));
+    const card = askCard(q, r);
+    live.replaceWith(card);
+    card.scrollIntoView({ behavior: "smooth", block: "start" });  // to where the answer begins: answers are long
     state.askThread = [...state.askThread, r.id].slice(-3);
     $("#askNew").classList.remove("hidden"); $("#askInput").placeholder = "Ask a follow-up, or start a new conversation";
-  } catch (e) { live.remove(); if (!thread.children.length) thread.remove(); status.textContent = e.message; $("#askInput").value = q; } finally { btn.disabled = false; }
+  } catch (e) { live.remove(); if (!thread.children.length) thread.remove(); askLayout(); status.textContent = e.message; $("#askInput").value = q; askGrow(); } finally { btn.disabled = false; }
 }
 $("#askGo").onclick = runAsk;
 $("#askNew").onclick = newAskConversation;
-$("#askInput").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); runAsk(); } };
+$("#askInput").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); runAsk(); } };
+$("#askInput").oninput = askGrow;
 
 /* ---------------------------------------------------------------- opportunities */
 // One scoring of the stocks feeds the page and the dashboard card. It's kept for five minutes, so moving between

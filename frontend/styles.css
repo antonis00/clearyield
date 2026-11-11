@@ -295,9 +295,25 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .part-note { font-size: 11px; color: var(--muted); padding: 2px 0 6px; grid-column: 1 / -1; }
 
 /* Ask StockPilot */
-.ask-row { align-items: flex-end; }
-.ask-row label.grow { flex: 1; }
-.ask-row label.grow input { width: 100%; }
+/* Ask reads like a chat: the conversation in order, the question box kept at the bottom of the window. Before the
+   first question, the explanation and the box sit together in the middle. */
+#view-ask:not(.hidden) { display: flex; flex-direction: column; min-height: calc(100vh - 92px); }
+main:has(#view-ask:not(.hidden)) { padding-bottom: 0; }
+#askAnswers { flex: 1; }
+#view-ask.ask-empty { justify-content: center; padding-bottom: 12vh; }
+#view-ask.ask-empty #askAnswers { flex: 0; }
+#view-ask:not(.ask-empty) .ask-intro { display: none; }
+.ask-intro { text-align: center; margin-bottom: 18px; }
+.ask-intro h2 { margin: 0 0 6px; font-size: 22px; }
+.ask-intro p { margin: 0 auto; max-width: 560px; }
+.ask-composer { position: sticky; bottom: 0; z-index: 15; background: var(--bg); padding: 10px 0 16px; }
+#view-ask:not(.ask-empty) .ask-composer::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 18px; background: linear-gradient(transparent, var(--bg)); pointer-events: none; }
+.ask-box { display: flex; align-items: flex-end; gap: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 8px 8px 14px; }
+.ask-box:focus-within { border-color: var(--accent); }
+.ask-box textarea { flex: 1; resize: none; border: 0; background: transparent; padding: 6px 0; max-height: 200px; overflow-y: auto; line-height: 1.5; }
+.ask-under { display: flex; align-items: center; gap: 10px; min-height: 26px; margin-top: 6px; padding: 0 4px; }
+.ask-under .ask-keys { margin-left: auto; }
+.ask-answer, .ask-live { scroll-margin-top: 92px; }
 .ask-q { font-weight: 600; margin-bottom: 8px; }
 .ask-steps { margin: 10px 0 4px; font-size: 12px; color: var(--muted); }
 .ask-steps summary { cursor: pointer; }
