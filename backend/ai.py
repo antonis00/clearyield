@@ -591,7 +591,7 @@ RULE_WORDS = {"banking", "strong", "fast", "high", "p/e", "pe", "ratio", "yield"
               "low", "debt", "no", "profitable", "quality", "momentum", "trending", "uptrend", "vol", "volatility", "risk", "safe", "defensive", "under", "below",
               "above", "over", "less", "than", "more", "at", "least", "most", "of", "us", "real", "estate", "middle", "east"}
 FILLER_WORDS = {"stock", "stocks", "share", "shares", "company", "companies", "name", "names", "equities", "market", "markets", "listed", "with", "and", "or", "in",
-                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "give", "get", "tell", "list", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous"}
+                "the", "a", "an", "for", "from", "that", "have", "has", "is", "are", "me", "show", "find", "give", "get", "tell", "list", "best", "good", "great", "top", "style", "payers", "paying", "pay", "pays", "generous", "famous", "trading", "trades"}
 
 
 FRACTIONS = ("min_div_yield", "min_rev_growth", "min_roe", "max_vol")
@@ -666,7 +666,7 @@ def parse_query(text):
     literally asked for; a model, when one is set up, adds to them and overrides where it read a value. Small local
     models in particular drop words like "cheap" or "low debt", so their reply alone would screen less than was asked.
     An unusable reply is asked for once more, and after that the rules stand alone."""
-    rules = _parse_rules(text.lower())
+    rules, typed, aside = _rules(text.lower())
     if available():
         prompt = ("Convert this stock screen request into a JSON object using only these keys (omit unused ones): "
                   + json.dumps(FILTER_SPEC) + "\nWhat words mean here: " + MEANINGS
@@ -675,27 +675,110 @@ def parse_query(text):
             try:
                 raw = complete(prompt if attempt == 0 else prompt + "\nYour last reply couldn't be read. Reply with one JSON object and nothing else.",
                                system="You convert screening requests into strict JSON filters.", max_tokens=300)
-                filters = _tidy_filters(_first_json_object(raw))
+                filters = {k: v for k, v in _tidy_filters(_first_json_object(raw)).items() if k not in aside}
                 if filters:
-                    # The rules' values stand (a number you typed, or a word's defined meaning); the model fills in
-                    # what they couldn't read, such as a market or sector named in other words
-                    merged = {**filters, **{k: v for k, v in rules.items() if k != "ignored"}}
+                    # A number you typed stands. A word's defined meaning ("cheap" is P/E 18) stands over the model's
+                    # own limit, unless the model's is a number in the request, which it read where the rules
+                    # didn't. The model fills in what the rules couldn't read, such as a market named in other words.
+                    said = _numbers_in(text)
+                    merged = {**filters, **{k: v for k, v in rules.items()
+                                            if k != "ignored" and (k in typed or not _is_said(k, filters.get(k), said))}}
                     if merged.get("sector") and merged.get("sector") == merged.get("exclude_sector"):
                         merged.pop("sector")
                     if "exclude_industry" in rules and "exclude_sector" not in rules:  # "excluding banks" rules out banks, not every financial company
                         merged.pop("exclude_sector", None)
+                    if aside:  # a limit pointing the way the screen can't filter is still reported
+                        merged["ignored"] = list(aside.values())
                     return merged
             except Exception:
                 continue
     return rules
 
 
+def _numbers_in(text):
+    return {float(x) for x in re.findall(r"\d+(?:\.\d+)?", text)}
+
+
+def _is_said(key, value, said):
+    """Whether a limit's value is a number written in the request (a share as its percentage: 0.04 as 4)."""
+    if not isinstance(value, (int, float)):
+        return False
+    shown = value * 100 if key in FRACTIONS else value
+    return any(abs(shown - n) < 1e-6 for n in said)
+
+
 def _has(t, *words):
     return any(re.search(rf"(?<![\w/.]){re.escape(w)}(?![\w/])", t) for w in words)
 
 
+# Limits a typed number can set: the key, the words that name it, which way its limit naturally points, and whether it's
+# a share (4% or 0.04). "15x earnings", "4 percent" and "3%+" are written out first in the forms these read.
+_LESS = r"under|below|less than|lower than|cheaper than|at most|max(?:imum)?|up to|no (?:more|higher) than|or (?:less|lower|below|under)|<=?"
+_MORE = r"over|above|more than|higher than|greater than|at least|min(?:imum)?|or (?:more|higher|above|better)|\+|>=?"
+_LESS_RE = re.compile(rf"(?:^|[^a-z])(?:{_LESS})(?![a-z])")
+_MORE_RE = re.compile(rf"(?:^|[^a-z])(?:{_MORE})(?![a-z])")
+LIMITS = [
+    ("max_pe", r"p/?e(?:\s+ratio)?|price[ /-]to[ /-]earnings(?:\s+ratio)?|earnings multiple", "max", False),
+    ("min_div_yield", r"(?:dividend\s+)?yield(?:s|ing)?|dividends?|pay(?:s|ing)?", "min", True),
+    ("min_rev_growth", r"(?:revenue|sales)\s+growth|grow(?:th|ing)", "min", True),
+    ("min_roe", r"roe|return on equity", "min", True),
+    ("max_de", r"debt[ /-]to[ /-]equity(?:\s+ratio)?|d/e|debt", "max", False),
+    ("max_vol", r"volatility|vol", "max", True),
+    ("min_momentum", r"momentum(?:\s+score)?", "min", False),
+    ("min_score", r"(?:overall\s+|composite\s+)?score", "min", False),
+]
+_OP = rf"(?:{_LESS}|{_MORE})"
+_TAIL = r"(?P<after>\s*(?:\+|or (?:more|higher|above|better|less|lower|below|under)\b))?"
+
+
+def _reads_as_limit(m, key, share):
+    """A number is a limit when it says so: a share needs a % or a word like "above" ("top 10 dividend stocks" isn't a
+    10% yield), and a number before the metric needs one of those too ("15x earnings" is written "15 pe" and counts)."""
+    d = m.groupdict()
+    op = bool(_LESS_RE.search(" " + (d.get("mid") or "") + " ") or _MORE_RE.search(" " + (d.get("mid") or "") + " ") or d.get("op") or d.get("after"))
+    if share and not d.get("pct") and not op:
+        return False
+    return "mid" in d or op or bool(d.get("pct")) or key == "max_pe"
+
+
+def _typed_limits(t):
+    """Numbers typed for a limit, either way round ("yield above 4%", "at least 4% yield", "under 15x earnings").
+    Returns the limits, a note for each limit pointing the way the screen can't apply ("P/E above 30"), and the text
+    with what was read blanked out, so what's left can be reported as not understood."""
+    t = re.sub(r"\s*\b(?:percent|per cent|pct)\b", "%", t)
+    t = re.sub(r"(\d+(?:\.\d+)?)\s*(?:x|times)\s+(?:(?:trailing|forward)\s+)?(?:earnings|eps|profits?)\b", r"\1 pe", t)
+    t = re.sub(rf"\b({_LESS})\s*(\d+(?:\.\d+)?)\s*x\b", r"\1 \2 pe", t)
+    found, aside = {}, []
+    stop = r"(?!\b(?:and|with|but)\b)[^\d\n,;]"
+    for key, subj, way, share in LIMITS:
+        if key == "min_score":  # "quality score" is a factor's, not the overall score
+            subj = r"(?<!value )(?<!quality )(?<!growth )(?<!momentum )(?<!risk )" + f"(?:{subj})"
+        forms = (rf"\b(?:{subj})\b(?P<mid>{stop}{{0,25}}?)(?P<n>\d+(?:\.\d+)?)\s*(?P<pct>%)?{_TAIL}",
+                 rf"(?:(?P<op>{_OP})\s*)?(?P<n>\d+(?:\.\d+)?)\s*(?P<pct>%)?{_TAIL}\s*(?:(?!(?:and|with|but|or)\b)[a-z]+\s+){{0,2}}?\b(?:{subj})\b")
+        for form in forms:
+            m = next((m for m in re.finditer(form, t) if _reads_as_limit(m, key, share)), None)
+            if not m:
+                continue
+            ops = (m.groupdict().get("mid") or "") + " " + (m.groupdict().get("op") or "") + " " + (m.group("after") or "")
+            points = "max" if _LESS_RE.search(ops) else "min" if _MORE_RE.search(ops) else way
+            n = float(m.group("n"))
+            v = n / 100 if share and (m.group("pct") or n > 1) else n / 100 if key == "max_de" and m.group("pct") else n
+            if points != way or (key in ("min_score", "min_momentum") and n > 100):
+                aside.append((key, " ".join(m.group(0).split())))  # "yield under 2%" asks for what the screen doesn't filter
+            else:
+                found[key] = v
+            t = t[:m.start()] + " " + t[m.end():]
+            break
+    return found, aside, t
+
+
 def _parse_rules(t):
     """Keyword rules, matching whole words. Anything they can't act on comes back under "ignored" to show the user."""
+    return _rules(t)[0]
+
+
+def _rules(t):
+    """The rules' reading, the keys set from numbers typed (which nothing overrides), and those set aside."""
     f, ignored = {}, []
 
     # Set aside what can't be honoured, rather than reading "not cheap" as cheap or dividend growth as yield
@@ -717,6 +800,10 @@ def _parse_rules(t):
         return set_aside(m) if neg in ("not", "non") else m.group(0)
     t = re.sub(r"\b(not|non|no|excluding|except|without)[ -](\w+)", rule_out, t)
     t = re.sub(r"\bdividend growth\b", set_aside, t)
+    said = t
+    typed, aside, t = _typed_limits(t)
+    f.update(typed)
+    ignored += [phrase for _, phrase in aside]
 
     from .universe import COUNTRY_GROUPS, REGION_OF_COUNTRY
     # "Latin American", "North American" and "South American" hold "American", which isn't the US there
@@ -742,38 +829,39 @@ def _parse_rules(t):
     if _has(t, "bank", "banks", "banking"):
         f["industry"] = "Banks"
 
-    pe = r"p/?e(?:\s+ratio)?"
-    below = r"(?:under|below|<=?|less than|at most)"
-    if m := re.search(rf"\b{pe}\s*(?:of\s*|{below}\s*|=\s*)(\d+(?:\.\d+)?)|{below}\s*(\d+(?:\.\d+)?)\s*{pe}\b", t):
-        f["max_pe"] = float(m.group(1) or m.group(2))
-    if m := re.search(r"\b(?:yield\w*|dividends?)\b[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
-        f["min_div_yield"] = float(m.group(1)) / 100
-    elif _has(t, "dividend", "dividends", "income", "yield"):
+    # What words mean here (MEANINGS), where no number was typed for the same limit; a typed number always stands
+    unset = lambda k: k not in typed and k not in dict(aside)  # noqa: E731
+    if _has(t, "dividend", "dividends", "income", "yield", "yielding") and unset("min_div_yield"):
         f["min_div_yield"] = 0.025
         f["sort"] = "divYield"
-    if m := re.search(r"\bgrowth\b[^\d]{0,20}(\d+(?:\.\d+)?)\s*%", t):
-        f["min_rev_growth"] = float(m.group(1)) / 100
+    elif "min_div_yield" in typed and _has(said, "dividend", "dividends", "income"):  # "dividend stocks yielding 4%+"
+        f["sort"] = "divYield"
+    if "min_rev_growth" in typed:
         f.setdefault("sort", "growth")
-    elif _has(t, "growth", "growing"):
+    elif _has(t, "growth", "growing") and unset("min_rev_growth"):
         f["min_rev_growth"] = 0.10
         f.setdefault("sort", "growth")
     if _has(t, "cheap", "undervalued", "value"):
-        f.setdefault("max_pe", 18)
+        if unset("max_pe"):
+            f["max_pe"] = 18
         f.setdefault("sort", "value")
-    if _has(t, "low debt", "no debt"):
+    if _has(t, "low debt", "no debt") and unset("max_de"):
         f["max_de"] = 0.5
     if _has(t, "profitable", "quality"):
-        f["min_roe"] = 0.12
+        if unset("min_roe"):
+            f["min_roe"] = 0.12
         f.setdefault("sort", "quality")
     if _has(t, "momentum", "trending", "uptrend"):
-        f["min_momentum"] = 60
+        if unset("min_momentum"):
+            f["min_momentum"] = 60
         f.setdefault("sort", "momentum")
     if _has(t, "low vol", "low volatility", "low risk", "safe", "defensive"):
-        f["max_vol"] = 0.25
+        if unset("max_vol"):
+            f["max_vol"] = 0.25
         f.setdefault("sort", "risk")
 
     known = RULE_WORDS | FILLER_WORDS | {w for ws in (*MARKET_WORDS.values(), *COUNTRY_WORDS.values(), *GROUP_WORDS.values(), *SECTOR_WORDS.values()) for w in ws}
     ignored += [w for w in re.findall(r"[a-z][a-z/.'-]*", t) if w.strip(".'") not in known]
     if ignored:
         f["ignored"] = list(dict.fromkeys(ignored))
-    return f
+    return f, set(typed), dict(aside)

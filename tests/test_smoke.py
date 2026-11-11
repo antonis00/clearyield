@@ -936,6 +936,21 @@ def test_plain_language_parser_reads_what_was_written():
     assert p("large cap stocks")["ignored"] == ["large", "cap"]
     assert p("low risk")["max_vol"] == 0.25
     assert "ignored" not in p("cheap profitable dividend stocks in the gulf")
+    # Numbers however they're written: percent, "x"/"times earnings", before or after the metric, "or more", "+"
+    assert p("yield above 4 percent") == {"min_div_yield": 0.04}
+    assert p("big pharma paying 3% or more")["min_div_yield"] == 0.03
+    assert p("at least 4% dividend yield")["min_div_yield"] == 0.04 and p("yield 5%+")["min_div_yield"] == 0.05
+    for q in ("semiconductor stocks under 25 times earnings", "cheaper than 25x earnings", "trading below 25x", "P/E of 25 or less"):
+        assert p(q)["max_pe"] == 25.0 and "ignored" not in p(q), (q, p(q))
+    assert p("15% roe and 3% yield") == {"min_roe": 0.15, "min_div_yield": 0.03}
+    assert p("debt to equity under 1") == {"max_de": 1.0} and p("volatility under 20%") == {"max_vol": 0.2}
+    assert p("score above 70") == {"min_score": 70.0} and p("momentum above 70")["min_momentum"] == 70.0
+    # A typed number stands over a word's meaning ("low debt" is 0.5 only when no number is given)
+    assert p("low debt stocks with debt/equity below 0.3")["max_de"] == 0.3
+    assert p("cheap stocks under 12 pe")["max_pe"] == 12.0
+    # A count isn't a limit, and a limit pointing the way the screen can't filter is reported, not flipped
+    assert p("top 10 dividend stocks")["min_div_yield"] == 0.025
+    assert p("yield under 2%") == {"ignored": ["yield under 2%"]} and p("p/e above 30") == {"ignored": ["p/e above 30"]}
 
 
 def test_screener_sector_filter():
@@ -2831,6 +2846,16 @@ def test_ai_providers():
             llm.replies = [_chat('{"markets": ["Europe"], "max_vol": 0.1, "exclude_sector": "Financial Services"}')]
             got = ai.parse_query("safe stocks on the continent excluding banks")
             assert got["markets"] == ["Europe"] and got["max_vol"] == 0.25 and got["exclude_industry"] == "Banks" and "exclude_sector" not in got, got
+            # A number the rules couldn't read but the model did is the model's; a number typed and read by the rules
+            # stands over the model's; a limit set aside stays aside and is still reported
+            llm.replies = [_chat('{"min_div_yield": 0.04, "max_pe": 30}')]
+            got = ai.parse_query("dividend payers yielding north of 4, cheap")
+            assert got["min_div_yield"] == 0.04 and got["max_pe"] == 18, got
+            llm.replies = [_chat('{"min_div_yield": 0.05}')]
+            assert ai.parse_query("yield above 4 percent")["min_div_yield"] == 0.04
+            llm.replies = [_chat('{"min_div_yield": 0.02, "markets": ["Europe"]}')]
+            got = ai.parse_query("european stocks with yield under 2%")
+            assert "min_div_yield" not in got and got["ignored"] == ["yield under 2%"], got
             # Unreadable once: asked again, and the second answer is used
             llm.seen.clear()
             llm.replies = [_chat("I think you want Gulf stocks!"), _chat('{"markets": ["US"], "sort": "growth"}')]
