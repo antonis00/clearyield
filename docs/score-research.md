@@ -155,3 +155,54 @@ and found these, all fixed before the run that's quoted:
 6. **The adoption rule, as stated above, no longer compares on the discovery half**: it's all months plus the hold-out
    alone. That differs from the original "discovery, then confirm" design and is recorded here as such.
 7. This section and the main text now describe the method in use, with what each replaced marked in place.
+
+---
+
+# Round 2: design (pre-registered 11 Nov 2026, before any round 2 data was fetched)
+
+Round 1 (Europe, 93 stocks, four years) adopted nothing, and the reviewer's point stands: with so little data,
+"not shown to be better" isn't "shown to be no better". Round 2 adds data and independent confirmation, and tests at
+most three changes, each with a published basis, so a pass means more than one lucky period in one region.
+
+## What changes from round 1
+
+1. **Every stock in the list**: all five regions (407 stocks), whatever Settings follows.
+2. **Ten years of prices** for momentum and risk (Yahoo's full history, cut to ten years). Company figures stay at
+   Yahoo's four annual statements, so value, quality and growth gain stocks but not years.
+3. **Confirmation on other continents.** Decisions rest on **North America and Asia-Pacific** (220 stocks); they're
+   confirmed on **Europe, the Middle East & Africa and Latin America** (187 stocks), which play no part in deciding.
+   Each date's IC is worked out within each group separately. The time halves of round 1 are still reported.
+4. **Three candidates only, each from published research:**
+   1. *Quality as gross profitability*: gross profit / total assets (Novy-Marx, 2013), in place of today's quality
+      metrics. Scored 0 at 0 and 100 at 0.6. Banks have no gross profit and get none, as now.
+   2. *Quality as profitability only*: today's quality without debt / equity and the current ratio, so return on
+      equity and the two margins (profitability predicts returns in the Fama-French five-factor work; leverage and
+      liquidity have no comparable record).
+   3. *Momentum adjusted for risk*: the 12-1 month return divided by volatility (in the spirit of Barroso and
+      Santa-Clara, 2015). Round 1's near miss, retested unchanged on new stocks and years.
+
+## Adoption rule
+
+All three, at the 3-month horizon:
+- on the **deciding regions**, the gain over today's score (date by date, same stocks) passes Holm's correction for
+  the three candidates (one-sided 0.025 overall);
+- on the **confirming regions**, the candidate works on its own (p < 0.025) and its gain over today's score has
+  p < 0.05;
+- the gain is positive in every confirming region with at least 15 stocks a date.
+
+## Unchanged from round 1
+
+Point-in-time records and the 90-day lag (120 days as a check), past market value from statement shares and quoted
+prices, rank IC, the overlap-aware t on Student's t, the 12-month and 4-window minimums, dollar returns with a
+local-currency check, and all the method tests.
+
+## Known limits added
+
+- Ten years of today's list: survivorship and hindsight in choosing the list weigh more over ten years than four.
+- Asia-Pacific and Latin America have more missing company figures on Yahoo; the stocks scored each date are reported.
+- The deciding and confirming regions overlap in time, so a worldwide regime (2022's rate shock) touches both; the
+  time halves are shown as well for that reason.
+
+## Round 2 changes after the fact
+
+(none yet)
