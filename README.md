@@ -1,8 +1,8 @@
-# StockPilot
+# ClearYield
 
 A personal investing dashboard that runs on your own computer: live prices, charts, explainable scores, a screener, a transaction ledger with real performance, backtesting, a decision journal and alerts. It covers US, European and Gulf stocks, ETFs and crypto, using Yahoo Finance data.
 
-> **Decision support, not financial advice.** Scores and signals summarise data; they do not predict prices. StockPilot never places trades. Use it to structure your own thinking.
+> **Decision support, not financial advice.** Scores and signals summarise data; they do not predict prices. ClearYield never places trades. Use it to structure your own thinking.
 
 - **Every score explains itself.** Each one traces back to named metrics, with the values that score 0 and 100 shown on the page.
 - **Your data stays with you.** It runs on your machine in a single SQLite file, with no account and no login, and only answers on localhost.
@@ -74,12 +74,12 @@ Edit `backend/universe.py` to change the screener universe.
 
 ## Notes and limits
 
-- Data comes from Yahoo Finance via `yfinance`. It is free, unofficial and occasionally delayed or incomplete, especially for Gulf fundamentals. Responses are cached in `data/stockpilot.db`. Use **Settings → Refresh all data** to force fresh data. If Yahoo fails, the app keeps using the last data it has and says so.
+- Data comes from Yahoo Finance via `yfinance`. It is free, unofficial and occasionally delayed or incomplete, especially for Gulf fundamentals. Responses are cached in `data/clearyield.db`. Use **Settings → Refresh all data** to force fresh data. If Yahoo fails, the app keeps using the last data it has and says so.
 - The performance chart follows your actual transactions and each day's FX rate over the past year. Risk figures instead apply today's holdings to the past year, because they describe what you own now.
 - Yahoo data is for personal use. Check the terms before sharing or redistributing data from the app.
 - Sales are matched to your oldest shares first. Check whether that matches the rule that applies to you before using the figures for tax.
 - Dividends are recorded by hand, and fees are included in the price you enter.
-- Your holdings and journal exist only in `data/stockpilot.db`, which git ignores. Use **Settings → Download backup** to keep a copy.
+- Your holdings and journal exist only in `data/clearyield.db`, which git ignores. Use **Settings → Download backup** to keep a copy.
 
 ## Tests
 

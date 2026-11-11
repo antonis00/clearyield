@@ -166,7 +166,7 @@ def complete(user, system=SYSTEM, max_tokens=900, temperature=0, effort=None):
         r.raise_for_status()
         text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
     else:
-        headers = {"content-type": "application/json", "X-Title": "StockPilot"}
+        headers = {"content-type": "application/json", "X-Title": "ClearYield"}
         body = {"model": c["model"], "max_tokens": max_tokens, "temperature": temperature, "stream": False,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         if c["thinking"] == "off":
@@ -314,13 +314,13 @@ def brief_data(ctx):
                                        "Annual growth rate, 5 years": _f_pct(st.get("ret5yCagr")), "Volatility, 1 year (annualised)": _f_pct(st.get("vol1y")),
                                        "Largest fall from a peak, 1 year": _f_pct(st.get("maxDD1y")), "Sharpe ratio, 1 year": _f_num(st.get("sharpe1y")),
                                        "Beta": _f_num(i.get("beta"))},
-        "StockPilot scores": {"Composite": f"{sc['composite']:.1f} out of 100" if sc.get("composite") is not None else "not scored",
+        "ClearYield scores": {"Composite": f"{sc['composite']:.1f} out of 100" if sc.get("composite") is not None else "not scored",
                               "Stance": sc.get("stance"),
                               **{f"{k.capitalize()} factor": (f"{v:.1f} out of 100" if v is not None else "doesn't apply or no data") for k, v in sc["factors"].items()}},
     }
     out = {g: {k: v for k, v in rows.items() if v not in (None, "")} for g, rows in groups.items()}
     out["What the scores mean"] = SCORE_KEY
-    out["Signals found by StockPilot"] = [s["text"] for s in sc.get("signals") or []]
+    out["Signals found by ClearYield"] = [s["text"] for s in sc.get("signals") or []]
     # A bank's free cash flow swings with its deposits and loans, and its debt is what it lends from, so neither says
     # much about it: they're left out, and the model is told why, instead of reading them as warning signs
     bank = is_bank(i)

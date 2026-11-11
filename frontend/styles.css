@@ -299,7 +299,7 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 /* Why some metrics aren't scored, under the first of them */
 .part-note { font-size: 11px; color: var(--muted); padding: 2px 0 6px; grid-column: 1 / -1; }
 
-/* Ask StockPilot */
+/* Ask ClearYield */
 /* Ask reads like a chat: the conversation in order, the question box kept at the bottom of the window. Before the
    first question, the explanation and the box sit together in the middle. */
 #view-ask:not(.hidden) { display: flex; flex-direction: column; min-height: calc(100vh - 92px); }

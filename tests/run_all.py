@@ -66,12 +66,12 @@ def with_server(demo, command):
     fails, the server's own log comes back with it, since it would otherwise go with the temporary folder."""
     port = free_port()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        env = {**os.environ, "STOCKPILOT_DB": str(Path(tmp) / "check.db")}
+        env = {**os.environ, "CLEARYIELD_DB": str(Path(tmp) / "check.db")}
         env.pop("ANTHROPIC_API_KEY", None)
-        env["AI_PROVIDER"], env["WEB_SEARCH"], env["STOCKPILOT_WARM"] = "none", "off", "0"  # the browser checks expect rule-based briefs, not a wait on a model from .env
-        env["STOCKPILOT_DEMO"] = "1" if demo else "0"
+        env["AI_PROVIDER"], env["WEB_SEARCH"], env["CLEARYIELD_WARM"] = "none", "off", "0"  # the browser checks expect rule-based briefs, not a wait on a model from .env
+        env["CLEARYIELD_DEMO"] = "1" if demo else "0"
         if not demo:  # sector ranks against the first three markets only, so a run doesn't download the whole list
-            env["STOCKPILOT_PEER_MARKETS"] = "Europe,Middle East & Africa"
+            env["CLEARYIELD_PEER_MARKETS"] = "Europe,Middle East & Africa"
         log_path = Path(tmp) / "server.log"
         log = open(log_path, "w", encoding="utf-8")
         server = subprocess.Popen([sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(port), "--log-level", "warning"],

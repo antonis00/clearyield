@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
-os.environ.setdefault("STOCKPILOT_WARM", "0")
+os.environ.setdefault("CLEARYIELD_WARM", "0")
 from backend import main  # noqa: E402,F401  loads .env and the certificates
 from backend import ai  # noqa: E402
 
