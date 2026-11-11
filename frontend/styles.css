@@ -121,6 +121,7 @@ label.block { margin: 8px 0; }
 #chartNote:not(:empty) { margin: -4px 0 8px; }
 .toggles { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
 .markets { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.scr-handoff, .ask-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .scr-more { margin: 2px 0 8px; }
 .scr-more summary { cursor: pointer; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .scr-more summary:hover { color: var(--text); }

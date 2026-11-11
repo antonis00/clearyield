@@ -916,7 +916,13 @@ async function runScreen(body) {
     // Yahoo's industry names, shortened where several share a start ("Insurance - Life", "Insurance - Diversified": Insurance)
     const inds = (v) => (Array.isArray(v) ? [...new Set(v.map((n) => n.split(" - ")[0]))] : [v]).join(", ");
     const kinds = [f.industry ? `${inds(f.industry)} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${[].concat(f.exclude_sector).join(", ")}` : "", f.exclude_industry ? `Not ${inds(f.exclude_industry)}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
-    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
+    // Hand-offs to Ask: a sentence with parts no filter can express goes there whole; the matches can be asked about
+    const aiOn = state.meta?.aiInfo?.on, top = d.rows.slice(0, 5).map((r) => r.ticker);
+    const handoff = aiOn ? [f.ignored?.length && body.query ? '<button class="btn ghost sm" id="scrToAsk" title="Ask can reason about what the filters can\'t express">Ask StockPilotAI instead</button>' : "",
+      d.rows.length ? '<button class="btn ghost sm" id="scrAskAbout" title="Opens Ask with a question about these matches, ready to edit">Ask about these</button>' : ""].join("") : "";
+    $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}${handoff ? `<div class="scr-handoff">${handoff}</div>` : ""}`;
+    $("#scrToAsk")?.addEventListener("click", () => askWith(body.query, true));
+    $("#scrAskAbout")?.addEventListener("click", () => askWith(`Of the Screener's ${d.rows.length} matches${body.query ? ` for "${body.query}"` : ""} (best first: ${top.join(", ")}), which would suit my portfolio best, and why?`));
     table(el, [
       { k: "ticker", label: "Ticker", fmt: symCell }, { k: "country", label: "Country", fmt: (v, r) => `<span class="clip" title="${esc(v || r.region)}">${esc(v || r.region)}</span>` }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
       { k: "price", label: "Price", num: 1, fmt: priceOf }, { k: "ret1y", label: "1Y", num: 1, fmt: (v) => cpct(v) },
@@ -998,6 +1004,19 @@ function askCard(q, r) {
     <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}, ${secs}${r.waited ? `${r.waited} s of it waiting for the AI's allowance` : "no waiting"}</summary><ol>${r.steps.map(askStepLi).join("") || "<li>Answered without looking anything up.</li>"}</ol></details>
     ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
   linkTickers($(".brief", card), r.steps);
+  // A screen the answer ran opens in the Screener, where every match shows (the answer saw the top ten)
+  const screens = r.steps.filter((s) => s.tool === "screen" && s.ok);
+  if (screens.length) {
+    const row = document.createElement("div"); row.className = "ask-actions";
+    screens.forEach((s, i) => {
+      const b = document.createElement("button"); b.className = "btn ghost sm";
+      b.textContent = `Open ${screens.length > 1 ? `screen ${i + 1}` : "this screen"} in the Screener`;
+      b.title = s.args?.question ? `"${s.args.question}"` : "The filters the answer used";
+      b.onclick = () => openScreen(s);
+      row.append(b);
+    });
+    $(".ask-steps", card).before(row);
+  }
   return card;
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches?.(".ask-stock")) openStock(e.target.dataset.stock); });
@@ -1049,6 +1068,23 @@ async function runAsk() {
     state.askThread = [...state.askThread, r.id].slice(-3);
     $("#askNew").classList.remove("hidden"); $("#askInput").placeholder = "Ask a follow-up, or start a new conversation";
   } catch (e) { live.remove(); if (!thread.children.length) thread.remove(); askLayout(); status.textContent = e.message; $("#askInput").value = q; askGrow(); } finally { btn.disabled = false; }
+}
+// Opens Ask with a question: sent at once, or left in the box to edit (the Screener's "Ask about these")
+function askWith(question, send = false) {
+  show("ask");
+  if (state.askThread.length) newAskConversation();  // a different subject from the conversation on the page
+  $("#askInput").value = question; askGrow();
+  requestAnimationFrame(() => { const i = $("#askInput"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); });
+  if (send) runAsk();
+}
+// An answer that ran a screen opens it in the Screener, where every match shows
+function openScreen(step) {
+  const a = step.args || {};
+  show("screener");
+  if (a.question) { $("#scrQuery").value = a.question; return runScreen({ markets: selectedMarkets(), query: a.question }); }
+  $("#scrQuery").value = "";
+  fillFilterForm(a.filters || {});
+  runScreen({ markets: a.filters?.markets || selectedMarkets(), filters: a.filters || {} });
 }
 $("#askGo").onclick = runAsk;
 $("#askNew").onclick = newAskConversation;
