@@ -390,16 +390,22 @@ const SLOW = 150000;
   expect("portfolio sim: the future shows a range, the goal and its assumptions", /Middle outcome/i.test(fut) && /Bad 1 in 10/i.test(fut) && /Reaches the goal/i.test(fut)
     && /Assumes/.test(fut) && /12-month blocks/.test(fut) && !/undefined|NaN/.test(fut) && (await canvasDrawn("#mcChart")), fut.slice(0, 120));
   await shot("portfolio-sim");
-  // Score check: the price-based scores rebuilt for past quarters, a verdict for each and the thirds behind it
+  // Score check: each score's evidence (rank IC, t, verdict) and the changes tested, adopted or not, with why.
+  // Demo only: live, a fresh server would download four years of statements and prices for every followed stock,
+  // hundreds of requests a run, which is what gets the computer refused by Yahoo. tests/test_smoke.py checks the method.
+  if (MODE === "demo") {
   await p.click("#btMode button[data-mode=score]");
-  await p.waitForFunction(() => document.querySelector("#scTable table") || /No price|Not enough/.test(document.querySelector("#scTable").innerText), null, { timeout: SLOW });
-  const sc = await p.evaluate(() => ({ verdicts: [...document.querySelectorAll("#scVerdicts li")].map((l) => l.innerText), rows: document.querySelectorAll("#scTable tr").length,
-    meta: document.querySelector("#scMeta").innerText, caveats: document.querySelectorAll("#scCaveats li").length }));
-  expect("score check: a verdict per score, with the thirds and caveats", sc.verdicts.length === 3 && sc.verdicts.every((v) => /quarters/.test(v)) && sc.rows === 10
-    && /stocks · quarters from/.test(sc.meta) && sc.caveats === 4, JSON.stringify(sc).slice(0, 200));
+  await p.waitForFunction(() => document.querySelector("#scTable table") || /No price|Not enough/.test(document.querySelector("#scTable").innerText), null, { timeout: SLOW * 3 });
+  const sc = await p.evaluate(() => ({ rows: [...document.querySelectorAll("#scTable tr")].slice(1).map((r) => r.innerText.replace(/\s+/g, " ")),
+    cands: [...document.querySelectorAll("#scCands tr")].slice(1).map((r) => r.innerText.replace(/\s+/g, " ")),
+    meta: document.querySelector("#scMeta").innerText, method: document.querySelector("#scMethod").innerText, caveats: document.querySelectorAll("#scCaveats li").length }));
+  expect("score check: each score with its verdict, rank IC and t", sc.rows.length === 6 && sc.rows.every((r) => /works|suggestive|no evidence|works backwards|not enough data/.test(r))
+    && /^Overall score/.test(sc.rows[5]) && /stocks · \d{4}-\d\d to \d{4}-\d\d/.test(sc.meta) && /rank IC/.test(sc.method) && sc.caveats === 6, JSON.stringify(sc).slice(0, 300));
+  expect("score check: the eight changes tested, each adopted or not with why", sc.cands.length === 8 && sc.cands.every((r) => /adopted/.test(r)) && !/undefined|NaN/.test(sc.cands.join(" ")), sc.cands.slice(0, 2).join(" | "));
   await p.click(".sc-detail summary"); await p.click('#scKind [data-sc="risk"]'); await p.waitForTimeout(300);
-  expect("score check: quarter by quarter, risk shown as volatility", (await canvasDrawn("#scChart")) && await p.evaluate(() => /volatility/.test(state.charts.scChart.data.datasets[0].label)));
+  expect("score check: month by month, a score's IC per date", (await canvasDrawn("#scChart")) && await p.evaluate(() => /Risk \(calm\): rank IC/.test(state.charts.scChart.data.datasets[0].label)));
   await shot("score-check");
+  }
   await p.click("#btMode button[data-mode=single]");
   expect("portfolio sim: back to a single asset", !(await p.evaluate(() => document.querySelector("#btSingle").classList.contains("hidden"))));
 

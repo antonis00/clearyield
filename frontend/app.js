@@ -1487,7 +1487,7 @@ $("#btnBt").onclick = async () => {
 // One mix feeds both: how it did (a day-by-day backtest) and what it might do (paths drawn from its own months).
 const PM = { loaded: false, base: "USD" };
 const BT_HINT = { single: "One asset, one trading rule.", portfolio: "A mix of assets: how it did, and a range of what it might do.",
-  score: "Whether the price-based scores would have sorted the stocks you follow, quarter by quarter." };
+  score: "Whether each score ranked the stocks you follow by what came next, month by month, and which changes would help." };
 function setBtMode(mode, load = true) {
   $$("#btMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
   $("#btSingle").classList.toggle("hidden", mode !== "single");
@@ -1552,40 +1552,55 @@ function editFundCosts(c) {
 }
 
 /* ---------------------------------------------------------------- score check */
-// The price-based scores rebuilt for past quarters (scorecheck.py): what each third did over the following year
+// The score research (scorecheck.py, docs/score-research.md): each score's rank IC against what followed, and the
+// changes tested against today's scores on a discovery half and a hold-out half of the months
 const SC = { data: null, kind: "momentum" };
-const THIRD = { top: "Top third", middle: "Middle third", bottom: "Bottom third" };
+const SC_TONE = { works: "on", suggestive: "", "no evidence": "warn", "works backwards": "warn", "not enough data": "" };
+const tStat = (t) => (isNum(t) ? t.toFixed(1) : "—");
+const pOf = (p) => (isNum(p) ? (p < 0.001 ? "<0.001" : p.toFixed(3)) : "—");
+const icOf = (v) => (isNum(v) ? (v >= 0 ? "+" : "") + v.toFixed(3) : "—");
 async function loadScoreCheck() {
   if (SC.loading) return;
-  SC.loading = true; $("#scVerdicts").innerHTML = ""; $("#scCaveats").innerHTML = "";
-  loading($("#scTable"), "Scoring the stocks you follow at every quarter of the past years…");
+  SC.loading = true; $("#scCaveats").innerHTML = ""; $("#scCands").innerHTML = ""; $("#scMethod").textContent = "";
+  loading($("#scTable"), "Scoring the stocks you follow as they stood each month of the past years… The first time, this downloads four years of statements per company: a few minutes.");
   try { SC.data = await api("/api/scorecheck"); } catch (e) { $("#scTable").innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; } finally { SC.loading = false; }
   const d = SC.data;
   if (d.error) { $("#scTable").innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
-  const kinds = Object.entries(d.kinds).filter(([, k]) => k.summary), first = kinds[0]?.[1].summary;
-  if (!first) { $("#scTable").innerHTML = `<div class="muted">Not enough history to check yet.</div>`; return; }
-  $("#scMeta").textContent = `${d.stocks} stocks · quarters from ${first.from.slice(0, 7)} to ${first.to.slice(0, 7)} · ${d.regions.join(", ")}`;
-  $("#scVerdicts").innerHTML = kinds.map(([, k]) => `<li class="${/sorted well/.test(k.summary.verdict) ? "t1" : /wrong way/.test(k.summary.verdict) ? "t-1" : ""}">${esc(k.summary.verdict)}</li>`).join("");
-  $("#scTable").innerHTML = `<table><tr><th>Score</th><th>Third, by score that day</th><th class="num">Return the next year</th><th class="num">Volatility</th><th class="num">Worst fall</th></tr>
-    ${kinds.map(([, k]) => ["top", "middle", "bottom"].map((g, i) => `<tr${i === 0 ? ' class="sc-first"' : ""}><td>${i === 0 ? esc(k.label) : ""}</td><td>${THIRD[g]}</td>
-      <td class="num">${cpct(k.summary[g].ret)}</td><td class="num">${pct(k.summary[g].vol, 0, false)}</td><td class="num">${pct(k.summary[g].dd, 0)}</td></tr>`).join("")).join("")}</table>
-    <p class="muted sm">Averages over ${first.periods} quarters; each quarter's thirds hold about ${Math.round(d.kinds[kinds[0][0]].dates.at(-1).n / 3)} stocks.</p>`;
-  $("#scKind").innerHTML = kinds.map(([key, k]) => `<button data-sc="${key}" class="${key === SC.kind ? "on" : ""}">${esc(k.label)}</button>`).join("");
+  const h = String(d.primaryHorizon);
+  $("#scMeta").textContent = `${d.stocks} stocks · ${d.from.slice(0, 7)} to ${d.to.slice(0, 7)} · ${d.regions.join(", ")}`;
+  $("#scMethod").textContent = `Every month, the stocks you follow were scored as they stood that day, by today's rules, using only what was public then. `
+    + `Each score is judged by how well it ranked what came next over ${h} months: the rank IC is 0 for no better than chance and 1 for perfect (0.05 is already useful in practice), `
+    + `averaged over the months. The p-value is the chance of an IC this high if the score ranked no better than chance, allowing for the months overlapping: under 0.025 counts as working, under 0.16 as suggestive. `
+    + `Risk is judged on the swings that followed, not the return. Each verdict is checked again with returns in local currency and, for company figures, a 120-day publication delay.`;
+  const rows = Object.entries(d.factors);
+  const same = (f) => [f.local, f.lag120].filter(Boolean).every((x) => x.verdict === f.verdict);
+  $("#scTable").innerHTML = `<table><tr><th>Score</th><th>Verdict</th><th class="num">Rank IC, ${h} m</th><th class="num">p</th><th class="num">Months right</th>
+      <th class="num">Top third vs bottom, ${h} m</th><th class="num">IC 1 m</th><th class="num">IC 12 m</th><th class="num">t first half / second half</th><th>Checks</th></tr>
+    ${rows.map(([k, f]) => { const s = f.horizons[h];
+      return `<tr><td>${esc(f.label)}</td><td><span class="pill ${SC_TONE[f.verdict] || ""}">${esc(f.verdict)}</span></td><td class="num">${icOf(s.meanIC)}</td>
+        <td class="num">${pOf(s.p)}</td><td class="num">${isNum(s.positive) ? pct(s.positive, 0, false) : "—"}${s.n ? ` <span class="muted sm">of ${s.n}</span>` : ""}</td>
+        <td class="num">${isNum(s.spread) ? (k === "risk" ? `${pct(s.spread, 1, false)} calmer` : cpct(s.spread)) : "—"}</td>
+        <td class="num">${icOf(f.horizons["1"].meanIC)}</td><td class="num">${icOf(f.horizons["12"].meanIC)}</td>
+        <td class="num">${tStat(f.discovery.t)} / ${tStat(f.holdout.t)}</td>
+        <td class="muted sm">${same(f) ? "same in local currency" + (f.lag120 ? " and at 120 days" : "") : `local currency: ${esc(f.local.verdict)}${f.lag120 ? `; 120 days: ${esc(f.lag120.verdict)}` : ""}`}</td></tr>`; }).join("")}</table>
+    <p class="muted sm">First half ${esc(d.discovery?.join(" to ") || "—")}, second half ${esc(d.holdout?.join(" to ") || "—")}. ${d.withStatements} of ${d.stocks} stocks had published statements for the latest month (${d.withValue} with a value score: share counts that don't fit a listing are left out).${d.skipped ? ` ${d.skipped} skipped while Yahoo asked for a pause.` : ""}</p>`;
+  $("#scCands").innerHTML = `<table><tr><th>Change</th><th>Compared with</th><th class="num">Its own IC</th><th class="num">Gain over today's, all months</th><th class="num">p</th><th class="num">Gain, second half</th><th class="num">p</th><th>Result</th></tr>
+    ${d.candidates.map((c) => `<tr><td>${esc(c.label)}</td><td>${esc(c.against || "")}</td>
+      <td class="num">${c.own ? `${icOf(c.own.meanIC)} <span class="muted sm">${esc(c.own.verdict)}</span>` : "—"}</td>
+      <td class="num">${icOf(c.all?.meanDiff)}</td><td class="num">${pOf(c.all?.p)}</td><td class="num">${icOf(c.holdout?.meanDiff)}</td><td class="num">${pOf(c.holdout?.p)}</td>
+      <td><span class="pill ${c.adopted ? "on" : ""}">${c.adopted ? "adopted" : "not adopted"}</span> <span class="muted sm">${esc(c.why)}</span></td></tr>`).join("")}</table>`;
+  $("#scKind").innerHTML = rows.map(([key, f]) => `<button data-sc="${key}" class="${key === SC.kind ? "on" : ""}">${esc(f.label)}</button>`).join("");
   $$("#scKind button").forEach((b) => b.onclick = () => { SC.kind = b.dataset.sc; $$("#scKind button").forEach((x) => x.classList.toggle("on", x === b)); scChart(); });
   $("#scCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
   scChart();
 }
-// Quarter by quarter: the following year's return of the top and bottom thirds (volatility for the risk score, which
-// promises a calmer ride rather than more return)
+// Month by month: each date's rank IC for one score, green above zero and red below
 function scChart() {
-  const k = SC.data?.kinds[SC.kind];
-  if (!k?.dates.length) return;
-  const m = SC.kind === "risk" ? "vol" : "ret", what = m === "vol" ? "volatility the next year" : "return the next year";
-  mkChart("scChart", { type: "line", data: { labels: k.dates.map((r) => r.date.slice(0, 7)), datasets: [
-    { label: `Top third: ${what}`, data: k.dates.map((r) => r.top[m] * 100), borderColor: C("--up"), borderWidth: 2, pointRadius: 2 },
-    { label: `Bottom third: ${what}`, data: k.dates.map((r) => r.bottom[m] * 100), borderColor: C("--down"), borderWidth: 2, pointRadius: 2 }] },
-    options: { interaction: { mode: "index", intersect: false }, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}%` } } },
-      scales: { y: { ticks: { callback: (v) => `${v}%` } } } } });
+  const f = SC.data?.factors[SC.kind];
+  if (!f?.byDate.length) return;
+  mkChart("scChart", { type: "bar", data: { labels: f.byDate.map((r) => r.date.slice(0, 7)), datasets: [{ label: `${f.label}: rank IC over the next ${SC.data.primaryHorizon} months`,
+    data: f.byDate.map((r) => r.ic), backgroundColor: f.byDate.map((r) => (r.ic >= 0 ? C("--up") : C("--down"))) }] },
+    options: { plugins: { tooltip: { callbacks: { label: (c) => `IC ${icOf(c.parsed.y)}` } } }, scales: { y: { ticks: { callback: (v) => v.toFixed(2) } } } } });
 }
 
 function pmRow(ticker = "", weight = "") {
