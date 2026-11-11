@@ -182,6 +182,22 @@ MACRO = {
 }
 DEFAULT_TILES = ["^GSPC", "^IXIC", "^STOXX50E", "KSA", "QAT", "^VIX", "^TNX", "GC=F", "CL=F", "BTC-USD", "EURUSD=X", "DX-Y.NYB"]
 
+# Yahoo's industry names for the stocks in the list, with their sectors (read from Yahoo, November 2026), so the
+# Screener can filter any of them ("insurers", "luxury", "chipmakers"). A stock added under a new industry needs it here.
+INDUSTRIES = {
+    **dict.fromkeys(['Agricultural Inputs', 'Aluminum', 'Building Materials', 'Chemicals', 'Copper', 'Gold', 'Other Industrial Metals & Mining', 'Paper & Paper Products', 'Specialty Chemicals', 'Steel'], 'Basic Materials'),
+    **dict.fromkeys(['Electronic Gaming & Multimedia', 'Entertainment', 'Internet Content & Information', 'Telecom Services'], 'Communication Services'),
+    **dict.fromkeys(['Apparel Retail', 'Auto Manufacturers', 'Department Stores', 'Footwear & Accessories', 'Home Improvement Retail', 'Internet Retail', 'Leisure', 'Luxury Goods', 'Restaurants', 'Specialty Retail', 'Travel Services'], 'Consumer Cyclical'),
+    **dict.fromkeys(['Beverages - Brewers', 'Beverages - Non-Alcoholic', 'Beverages - Wineries & Distilleries', 'Confectioners', 'Discount Stores', 'Food Distribution', 'Grocery Stores', 'Household & Personal Products', 'Packaged Foods', 'Tobacco'], 'Consumer Defensive'),
+    **dict.fromkeys(['Oil & Gas E&P', 'Oil & Gas Equipment & Services', 'Oil & Gas Integrated', 'Oil & Gas Midstream', 'Oil & Gas Refining & Marketing', 'Thermal Coal'], 'Energy'),
+    **dict.fromkeys(['Asset Management', 'Banks - Diversified', 'Banks - Regional', 'Capital Markets', 'Credit Services', 'Financial Data & Stock Exchanges', 'Insurance - Diversified', 'Insurance - Life', 'Insurance - Property & Casualty', 'Insurance - Reinsurance'], 'Financial Services'),
+    **dict.fromkeys(['Biotechnology', 'Diagnostics & Research', 'Drug Manufacturers - General', 'Drug Manufacturers - Specialty & Generic', 'Healthcare Plans', 'Medical Care Facilities', 'Medical Devices', 'Medical Instruments & Supplies', 'Pharmaceutical Retailers'], 'Healthcare'),
+    **dict.fromkeys(['Aerospace & Defense', 'Airlines', 'Airports & Air Services', 'Building Products & Equipment', 'Conglomerates', 'Electrical Equipment & Parts', 'Engineering & Construction', 'Farm & Heavy Construction Machinery', 'Infrastructure Operations', 'Integrated Freight & Logistics', 'Marine Shipping', 'Railroads', 'Rental & Leasing Services', 'Specialty Business Services', 'Specialty Industrial Machinery', 'Waste Management'], 'Industrials'),
+    **dict.fromkeys(['REIT - Diversified', 'REIT - Industrial', 'REIT - Retail', 'REIT - Specialty', 'Real Estate - Development', 'Real Estate - Diversified', 'Real Estate Services'], 'Real Estate'),
+    **dict.fromkeys(['Communication Equipment', 'Computer Hardware', 'Consumer Electronics', 'Electronic Components', 'Information Technology Services', 'Scientific & Technical Instruments', 'Semiconductor Equipment & Materials', 'Semiconductors', 'Software - Application', 'Software - Infrastructure'], 'Technology'),
+    **dict.fromkeys(['Utilities - Diversified', 'Utilities - Regulated Electric', 'Utilities - Regulated Water'], 'Utilities'),
+}
+
 # The five regions, and each country's. A stock's country is where it's listed (from its symbol's suffix, or by name
 # for the New York listings of foreign companies); its region follows from the country.
 REGIONS = ["North America", "Europe", "Latin America", "Middle East & Africa", "Asia-Pacific"]

@@ -554,6 +554,8 @@ FILTER_SPEC = {
     "sort": "one of composite, value, quality, growth, momentum, risk, divYield, size, return",
     "sector": "one of Technology, Financial Services, Energy, Healthcare, Utilities, Real Estate, Industrials, Communication Services, Basic Materials, Consumer Defensive, Consumer Cyclical",
     "exclude_sector": "a sector from the same list that the request rules out, e.g. 'not tech'",
+    "industries": "list of exact industry names from INDUSTRIES below, when the request names an industry narrower than a sector (insurers, chipmakers, luxury)",
+    "exclude_industries": "list of exact industry names the request rules out",
 }
 # What vague words mean in this app. The model is told, so it reads them the same way as the rules, and where the
 # rules found a value it stands: a model left to choose picks its own, often stricter, limits and empties the screen.
@@ -594,6 +596,38 @@ SECTOR_WORDS = {"Technology": ["tech", "technology", "software", "semiconductor"
                 "Healthcare": ["health", "healthcare", "pharma"], "Utilities": ["utility", "utilities"],
                 "Real Estate": ["reit", "reits", "property"], "Industrials": ["industrial", "industrials"],
                 "Communication Services": ["telecom", "telecoms", "media"], "Basic Materials": ["materials", "mining"]}
+# Everyday words for industries. Each key is part of Yahoo's industry names (universe.INDUSTRIES): "Insurance" is every
+# kind of insurer, "Drug Manufacturers" both kinds of drug maker. Banks have their own rule below.
+INDUSTRY_WORDS = {
+    "Insurance": ["insurer", "insurers", "insurance", "insurance companies"], "Reinsurance": ["reinsurer", "reinsurers", "reinsurance"],
+    "Asset Management": ["asset manager", "asset managers", "fund managers"], "Capital Markets": ["brokers", "brokerages"],
+    "Credit Services": ["payments", "payment companies", "card networks", "credit card", "credit cards"],
+    "Financial Data & Stock Exchanges": ["exchanges", "stock exchanges", "exchange operators"],
+    "Semiconductor": ["semiconductor", "semiconductors", "chipmaker", "chipmakers", "chip makers", "chips", "chip stocks"],
+    "Software": ["software", "saas"], "Information Technology Services": ["it services", "consultancies"],
+    "Consumer Electronics": ["consumer electronics", "smartphone makers"], "Computer Hardware": ["hardware", "computer makers"],
+    "Communication Equipment": ["networking equipment", "telecom equipment"],
+    "Drug Manufacturers": ["drugmaker", "drugmakers", "drug makers", "pharma", "pharmaceutical", "pharmaceuticals", "big pharma"],
+    "Biotechnology": ["biotech", "biotechs", "biotechnology"], "Medical Devices|Medical Instruments": ["medtech", "medical devices", "medical device makers"],
+    "Healthcare Plans": ["health insurers", "managed care"],
+    "Luxury Goods": ["luxury", "luxury brands", "luxury goods"], "Auto Manufacturers": ["carmaker", "carmakers", "car makers", "automakers", "auto makers", "autos", "car companies"],
+    "Retail": ["retailer", "retailers", "retail"], "Internet Retail": ["e-commerce", "ecommerce", "online retailers"],
+    "Restaurants": ["restaurants", "fast food"], "Travel Services": ["travel", "online travel"], "Leisure": ["leisure"],
+    "Beverages": ["beverages", "drinks", "drinks makers"], "Brewers": ["brewers", "beer", "brewer"], "Wineries & Distilleries": ["spirits", "distillers", "wine"],
+    "Tobacco": ["tobacco", "cigarette makers"], "Grocery Stores": ["grocers", "supermarkets", "grocery"], "Discount Stores": ["discount stores", "discounters"],
+    "Packaged Foods": ["food companies", "packaged food", "food makers"], "Household & Personal Products": ["consumer staples brands", "household products", "personal care"],
+    "Oil & Gas Integrated": ["oil majors", "integrated oil", "big oil"], "Oil & Gas E&P": ["oil producers", "e&p", "upstream"],
+    "Oil & Gas Refining": ["refiners", "refining"], "Oil & Gas Midstream": ["pipelines", "midstream"], "Oil & Gas Equipment": ["oil services", "oilfield services"],
+    "Thermal Coal": ["coal"], "Gold": ["gold miners", "gold", "gold stocks"], "Copper": ["copper"], "Steel": ["steel", "steelmakers"],
+    "Aluminum": ["aluminium", "aluminum"], "Chemicals": ["chemicals", "chemical companies"], "Agricultural Inputs": ["fertilizer", "fertiliser", "fertilizers", "fertilisers"],
+    "Aerospace & Defense": ["defense", "defence", "defense stocks", "defence stocks", "aerospace", "arms makers"],
+    "Airlines": ["airlines", "airline"], "Airports": ["airports"], "Railroads": ["railroads", "railways", "rail"],
+    "Marine Shipping": ["shipping", "shipping companies"], "Integrated Freight & Logistics": ["logistics", "freight", "parcel"],
+    "Conglomerates": ["conglomerates"], "Engineering & Construction": ["construction", "engineering"],
+    "Telecom Services": ["telecom", "telecoms", "telcos", "telecom operators", "mobile operators"],
+    "Internet Content & Information": ["internet", "search engines", "social media"], "Electronic Gaming": ["video games", "gaming", "games"],
+    "Entertainment": ["entertainment", "streaming"], "REIT": ["reit", "reits"], "Utilities - Regulated Water": ["water utilities"],
+}
 # Words the rules act on, and words that don't change a screen, so neither is reported as not understood
 RULE_WORDS = {"banking", "strong", "fast", "high", "p/e", "pe", "ratio", "yield", "yielding", "dividend", "dividends", "income", "growth", "growing", "revenue", "cheap", "undervalued", "value",
               "low", "debt", "no", "profitable", "quality", "momentum", "trending", "uptrend", "vol", "volatility", "risk", "safe", "defensive", "under", "below",
@@ -671,6 +705,17 @@ def _tidy_filters(raw):
         sector = {x.lower(): x for x in SECTORS}.get(str(raw.get(key) or "").strip().lower())
         if sector:
             out[key] = sector
+    # Industries in Yahoo's exact names (a model's own words are dropped); "Banks" alone, as the rules give it, stays
+    from .universe import INDUSTRIES
+    exact = {n.lower(): n for n in INDUSTRIES}
+    for keys, out_key in ((("industries", "industry"), "industry"), (("exclude_industries", "exclude_industry"), "exclude_industry")):
+        given = [x for k in keys for x in ([raw[k]] if isinstance(raw.get(k), str) else raw.get(k) or []) if isinstance(x, str)]
+        if [g.strip().lower() for g in given] == ["banks"]:
+            out[out_key] = "Banks"
+            continue
+        names = [exact[g.strip().lower()] for g in given if g.strip().lower() in exact]
+        if names:
+            out[out_key] = list(dict.fromkeys(names))
     return out
 
 
@@ -681,8 +726,10 @@ def parse_query(text):
     An unusable reply is asked for once more, and after that the rules stand alone."""
     rules, typed, aside = _rules(text.lower())
     if available():
+        from .universe import INDUSTRIES
         prompt = ("Convert this stock screen request into a JSON object using only these keys (omit unused ones): "
                   + json.dumps(FILTER_SPEC) + "\nWhat words mean here: " + MEANINGS
+                  + "\nINDUSTRIES: " + "; ".join(INDUSTRIES)
                   + "\nReply with the JSON object only, no explanation.\nREQUEST: " + text)
         for attempt in range(2):
             try:
@@ -718,6 +765,32 @@ def _is_said(key, value, said):
         return False
     shown = value * 100 if key in FRACTIONS or key in RETURNS else value
     return any(abs(shown - n) < 1e-6 for n in said)
+
+
+def industries_named(key):
+    """Yahoo's industry names a key from INDUSTRY_WORDS stands for ("Insurance" is all four kinds of insurer); "|"
+    separates alternatives, and "Retail" isn't a retail REIT."""
+    from .universe import INDUSTRIES
+    parts = [p.lower() for p in key.split("|")]
+    return [n for n in INDUSTRIES if any(p in n.lower() for p in parts) and ("reit" in key.lower() or not n.startswith("REIT"))]
+
+
+_INDUSTRY_PHRASES = sorted(((w, k) for k, ws in INDUSTRY_WORDS.items() for w in ws), key=lambda x: -len(x[0]))
+
+
+def _industries_in(t):
+    """The industries a request names, in Yahoo's names, and the text with those words removed. The longest phrase
+    is read first, so "health insurers" is health plans, not insurers too."""
+    names = []
+    for w, key in _INDUSTRY_PHRASES:
+        if _has(t, w):
+            names += industries_named(key)
+            t = re.sub(rf"(?<![\w/.]){re.escape(w)}(?![\w/])", " ", t)
+    return list(dict.fromkeys(names)), t
+
+
+def _industry_of_word(word):
+    return next((industries_named(k) for k, ws in INDUSTRY_WORDS.items() if word in ws), None)
 
 
 def _has(t, *words):
@@ -891,13 +964,30 @@ def _rules(t):
     def rule_out(m):
         neg, word = m.group(1), m.group(2)
         if word in ("bank", "banks", "banking"):  # banks, not insurers and the rest of the financial sector
-            f["exclude_industry"] = "Banks"
+            was = f.get("exclude_industry")
+            f["exclude_industry"] = "Banks" if not was else list(dict.fromkeys([*was, *industries_named("Banks")]))
             return " "
         sector = next((s for s, ws in SECTOR_WORDS.items() if word in ws), None)
         if sector:
-            f["exclude_sector"] = sector
+            was = f.get("exclude_sector")
+            f["exclude_sector"] = sector if not was or was == sector else list(dict.fromkeys([*([was] if isinstance(was, str) else was), sector]))
+            return " "
+        names = _industry_of_word(word)  # "excluding tobacco", "no airlines"
+        if names:
+            was = f.get("exclude_industry")
+            f["exclude_industry"] = list(dict.fromkeys([*(industries_named("Banks") if was == "Banks" else was or []), *names]))
             return " "
         return set_aside(m) if neg in ("not", "non") else m.group(0)
+    # "excluding banks and insurers", "not tech or energy": every one in the list is ruled out
+    excl = "|".join(sorted({re.escape(w) for w in ("bank", "banks", "banking", *(w for ws in SECTOR_WORDS.values() for w in ws),
+                                                   *(w for ws in INDUSTRY_WORDS.values() for w in ws if " " not in w))}, key=len, reverse=True))
+
+    def rule_out_all(m):
+        for word in re.split(r"\s*(?:,|\band\b|\bor\b|\bnor\b)\s*", m.group(2)):
+            if word.strip():
+                rule_out(re.match(r"(\w+)[ -]([\w-]+)", f"{m.group(1)} {word.strip()}"))
+        return " "
+    t = re.sub(rf"\b(not|non|no|excluding|except|without)[ -]((?:{excl})(?:\s*(?:,|\band\b|\bor\b|\bnor\b)\s*(?:{excl}))+)\b", rule_out_all, t)
     t = re.sub(r"\b(not|non|no|excluding|except|without)[ -](\w+)", rule_out, t)
     t = re.sub(r"\bdividend growth\b", set_aside, t)
     said = t
@@ -925,13 +1015,26 @@ def _rules(t):
         f["markets"] = list(dict.fromkeys(m for m in MARKET_WORDS if m in markets))
     if countries:
         f["countries"] = list(dict.fromkeys(countries))
+    industries, t = _industries_in(t)
     for sector, words in SECTOR_WORDS.items():
         if _has(t, *words) or (sector == "Real Estate" and "real estate" in t):
             f["sector"] = sector
             break
     # "Banks" means banks, not every financial company: insurers and asset managers are Financial Services too
     if _has(t, "bank", "banks", "banking"):
-        f["industry"] = "Banks"
+        if industries:
+            industries += industries_named("Banks")
+        else:
+            f["industry"] = "Banks"
+    if industries:
+        from .universe import INDUSTRIES
+        f["industry"] = industries
+        # "insurers and tech": either one, so the sector's industries join the list rather than ruling insurers out
+        if f.get("sector") and any(INDUSTRIES[n] != f["sector"] for n in industries):
+            sector = f.pop("sector")
+            f["industry"] = list(dict.fromkeys([*industries, *(n for n, s in INDUSTRIES.items() if s == sector)]))
+        elif f.get("sector"):
+            f.pop("sector")  # the industries say it more narrowly
 
     # What words mean here (MEANINGS), where no number was typed for the same limit; a typed number always stands
     unset = lambda k: k not in typed and k not in dict(aside)  # noqa: E731

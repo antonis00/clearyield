@@ -422,6 +422,14 @@ def opportunities(settings, markets):
 BENCHMARK = "ACWI"  # the world index a screen's "beat the market" is measured against
 
 
+def _in_industry(r, wanted):
+    """Whether a row is in the industries asked for: Yahoo's names (a list), or part of one ("Banks")."""
+    have = (r.get("industry") or "").lower()
+    if isinstance(wanted, list):
+        return have in {w.lower() for w in wanted}
+    return str(wanted).lower() in have
+
+
 def screen(body, settings):
     f = dict(body.get("filters") or {})
     offered = [*followed(settings), "ETFs", "Crypto"]  # a region you don't follow isn't screened
@@ -435,12 +443,17 @@ def screen(body, settings):
         f["countries"] = list(dict.fromkeys(countries))
     if countries and not asked:  # "Japanese banks": only the regions those countries are in need scanning
         asked = list(dict.fromkeys(REGION_OF_COUNTRY[c] for c in countries if c in REGION_OF_COUNTRY))
-    markets = [m for m in (asked or offered) if m in offered] or offered
-    tickers = tickers_for(markets) + [t.strip().upper() for t in (body.get("extra") or []) if t.strip()]
+    # A region asked for but not followed isn't screened, and the screen says so: showing the followed regions instead
+    # answered "chipmakers in Asia" with Europe's
+    unfollowed = [m for m in (asked or []) if m not in offered]
+    markets = [m for m in (asked or offered) if m in offered]
+    notes = [f"Not screened: {', '.join(unfollowed)}, which {'isn' if len(unfollowed) == 1 else 'aren'}'t among the regions you follow. "
+             "Add {} in Settings to include {}.".format("it" if len(unfollowed) == 1 else "them", "it" if len(unfollowed) == 1 else "them")] if unfollowed else []
+    tickers = (tickers_for(markets) if markets else []) + [t.strip().upper() for t in (body.get("extra") or []) if t.strip()]
     rows = rows_for(list(dict.fromkeys(tickers)), settings, kind="screener")
     ok, failed = [r for r in rows if "error" not in r], [r["ticker"] for r in rows if "error" in r]
 
-    debt_skipped, notes = [], []
+    debt_skipped = []
     # "Beat the market": a past-year return above the world index's (ACWI, in dollars; each stock's in its own currency)
     if f.pop("beat_market", None):
         try:
@@ -464,11 +477,11 @@ def screen(body, settings):
             return False
         if f.get("sector") and r.get("sector") != f["sector"]:
             return False
-        if f.get("industry") and f["industry"].lower() not in (r.get("industry") or "").lower():
+        if f.get("industry") and not _in_industry(r, f["industry"]):
             return False
-        if f.get("exclude_sector") and r.get("sector") == f["exclude_sector"]:
+        if f.get("exclude_sector") and r.get("sector") in ([f["exclude_sector"]] if isinstance(f["exclude_sector"], str) else f["exclude_sector"]):
             return False
-        if f.get("exclude_industry") and f["exclude_industry"].lower() in (r.get("industry") or "").lower():
+        if f.get("exclude_industry") and _in_industry(r, f["exclude_industry"]):
             return False
         # Debt/equity says nothing about a bank, whose deposits and borrowing are its raw material (and Yahoo gives
         # none for most), so a debt limit is set aside for banks and the screen says so

@@ -2030,7 +2030,7 @@ def test_screening_size_range_rsi_returns_and_scores():
     # Words with a stated meaning, and numbers with units
     assert p("large cap japanese tech") == {"min_mcap": 10e9, "countries": ["Japan"], "sector": "Technology"}
     assert p("mid cap stocks") == {"min_mcap": 2e9, "max_mcap": 10e9} and p("small caps")["max_mcap"] == 2e9 and p("mega caps")["min_mcap"] == 200e9
-    assert p("big pharma paying 3% or more") == {"min_div_yield": 0.03, "min_mcap": 10e9, "sector": "Healthcare"}
+    assert p("big pharma paying 3% or more") == {"min_div_yield": 0.03, "min_mcap": 10e9, "industry": ["Drug Manufacturers - General", "Drug Manufacturers - Specialty & Generic"]}
     assert p("market cap above $50bn") == {"min_mcap": 50e9} and p("under 500 million market cap") == {"max_mcap": 500e6}
     assert p("oversold european stocks") == {"max_rsi": 30, "markets": ["Europe"]} and p("rsi above 70") == {"min_rsi": 70.0}
     assert p("stocks down 30% from their high") == {"min_off_high": 0.3} and p("within 5% of 52 week high") == {"max_off_high": 0.05}
@@ -2061,6 +2061,47 @@ def test_screening_size_range_rsi_returns_and_scores():
         beat = insights.screen({"filters": p("stocks that beat the market"), "extra": ["BIG.X", "SMALL.X", "PENCE.L"], "markets": []}, db.get_settings())
         assert "BIG.X" in [r["ticker"] for r in beat["rows"]] and "SMALL.X" not in [r["ticker"] for r in beat["rows"]]
         assert any("world index's (ACWI" in n for n in beat["notes"]), beat["notes"]
+    _reset()
+
+
+def test_screening_any_industry():
+    from backend import ai, db, insights
+    from backend.universe import INDUSTRIES
+    _reset()
+    p = ai._parse_rules
+    ins = [n for n in INDUSTRIES if n.startswith("Insurance")]
+    # Everyday words read as Yahoo's industry names; the longest phrase first ("health insurers" are health plans)
+    assert p("insurers in europe") == {"markets": ["Europe"], "industry": ins}
+    assert p("health insurers") == {"industry": ["Healthcare Plans"]} and p("luxury brands") == {"industry": ["Luxury Goods"]}
+    assert p("big pharma")["industry"] == ["Drug Manufacturers - General", "Drug Manufacturers - Specialty & Generic"]
+    assert p("chipmakers")["industry"] == ["Semiconductor Equipment & Materials", "Semiconductors"]
+    assert "REIT - Retail" not in p("retailers")["industry"] and "Internet Retail" in p("retailers")["industry"]
+    assert p("us pharma")["countries"] == ["United States"]  # the industry word still makes "us" the country
+    # Several at once, either one; a sector named beside an industry outside it joins as its industries
+    assert set(p("insurers and banks")["industry"]) == {*ins, "Banks - Diversified", "Banks - Regional"}
+    tech = p("insurers and tech")
+    assert "sector" not in tech and "Semiconductors" in tech["industry"] and "Insurance - Life" in tech["industry"]
+    # Ruled out, one or a list; banks alone stay as before
+    assert p("dividend stocks excluding tobacco")["exclude_industry"] == ["Tobacco"]
+    assert set(p("excluding banks and insurers")["exclude_industry"]) == {*ins, "Banks - Diversified", "Banks - Regional"} and "industry" not in p("excluding banks and insurers")
+    assert p("not tech or energy") == {"exclude_sector": ["Technology", "Energy"]}
+    assert p("european banks with low debt")["industry"] == "Banks" and p("tech stocks") == {"sector": "Technology"}
+    # The model may only name real industries
+    assert ai._tidy_filters({"industries": ["insurance - life", "Made up"], "exclude_industries": "Tobacco"}) == {"industry": ["Insurance - Life"], "exclude_industry": ["Tobacco"]}
+    # The screen applies them
+    flat = _steps([0.001] * 300)
+    infos = {"LIFE.X": {"sector": "Financial Services", "industry": "Insurance - Life"}, "BANK.X": {"sector": "Financial Services", "industry": "Banks - Regional"},
+             "CHIP.X": {"sector": "Technology", "industry": "Semiconductors"}, "SMOKE.X": {"sector": "Consumer Defensive", "industry": "Tobacco"}}
+    with _FakeMarket({t: flat for t in infos}, infos):
+        screen = lambda q: sorted(r["ticker"] for r in insights.screen({"filters": p(q), "extra": list(infos), "markets": []}, db.get_settings())["rows"])
+        assert screen("insurers") == ["LIFE.X"] and screen("insurers and banks") == ["BANK.X", "LIFE.X"]
+        assert screen("excluding tobacco") == ["BANK.X", "CHIP.X", "LIFE.X"] and screen("not tech or financials") == ["SMOKE.X"]
+        assert screen("chipmakers") == ["CHIP.X"]
+    # A region asked for but not followed isn't swapped for the ones followed: it's left out, and the screen says so
+    europe_only = {**db.get_settings(), "regions": ["Europe"]}
+    with _FakeMarket({}, {}):
+        d = insights.screen({"filters": p("chipmakers in asia"), "markets": []}, europe_only)
+    assert d["rows"] == [] and d["scanned"] == 0 and "Not screened: Asia-Pacific" in d["notes"][0], d["notes"]
     _reset()
 
 
@@ -2894,6 +2935,11 @@ def test_ai_providers():
             assert got["min_div_yield"] == 0.04 and got["max_pe"] == 18, got
             llm.replies = [_chat('{"min_div_yield": 0.05}')]
             assert ai.parse_query("yield above 4 percent")["min_div_yield"] == 0.04
+            # The model is given Yahoo's industry names, and an industry the rules have no word for comes from it
+            llm.seen.clear()
+            llm.replies = [_chat('{"industries": ["Luxury Goods", "Fashion Houses"]}')]
+            got = ai.parse_query("posh fashion houses")
+            assert got.get("industry") == ["Luxury Goods"] and "Luxury Goods; " in llm.seen[0][2]["messages"][1]["content"], got
             llm.replies = [_chat('{"min_div_yield": 0.02, "markets": ["Europe"]}')]
             got = ai.parse_query("european stocks with yield under 2%")
             assert "min_div_yield" not in got and got["ignored"] == ["yield under 2%"], got

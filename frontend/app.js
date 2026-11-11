@@ -913,7 +913,9 @@ async function runScreen(body) {
     const d = await api("/api/screener", { method: "POST", body });
     const f = d.filters;
     if (body.query) fillFilterForm(f);
-    const kinds = [f.industry ? `${f.industry} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${f.exclude_sector}` : "", f.exclude_industry ? `Not ${f.exclude_industry}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
+    // Yahoo's industry names, shortened where several share a start ("Insurance - Life", "Insurance - Diversified": Insurance)
+    const inds = (v) => (Array.isArray(v) ? [...new Set(v.map((n) => n.split(" - ")[0]))] : [v]).join(", ");
+    const kinds = [f.industry ? `${inds(f.industry)} only` : f.sector ? `${f.sector} only` : "", f.exclude_sector ? `Not ${[].concat(f.exclude_sector).join(", ")}` : "", f.exclude_industry ? `Not ${inds(f.exclude_industry)}` : ""].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("");
     $("#scrInfo").innerHTML = `${d.rows.length} matches out of ${d.scanned} scanned. ${kinds}${filterChips(f)}${(d.notes || []).map((n) => `<br>${esc(n)}`).join("")}${f.ignored?.length ? `<br><b>Not understood, so not applied:</b> ${esc(f.ignored.join(", "))}` : ""}${d.failed.length ? ` · No data: ${esc(d.failed.join(", "))}` : ""}${f.sort === "composite" ? "<br>Ranked within each asset class: ETFs and crypto are scored on trend and risk only, so their composite isn't comparable with a stock's." : ""}`;
     table(el, [
       { k: "ticker", label: "Ticker", fmt: symCell }, { k: "country", label: "Country", fmt: (v, r) => `<span class="clip" title="${esc(v || r.region)}">${esc(v || r.region)}</span>` }, { k: "sector", label: "Sector", fmt: (v, r) => `<span class="clip" title="${esc(v || r.assetClass)}">${esc(v || r.assetClass)}</span>` },
