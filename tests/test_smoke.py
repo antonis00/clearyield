@@ -933,7 +933,7 @@ def test_plain_language_parser_reads_what_was_written():
     assert p("tech stocks") == {"sector": "Technology"}
     assert p("gulf banks") == {"countries": ["Qatar", "Saudi Arabia", "UAE", "Kuwait", "Bahrain", "Oman"], "sector": "Financial Services", "industry": "Banks"}
     # Anything else is reported rather than dropped without a word
-    assert p("large cap stocks")["ignored"] == ["large", "cap"]
+    assert p("wide moat stocks")["ignored"] == ["wide", "moat"]
     assert p("low risk")["max_vol"] == 0.25
     assert "ignored" not in p("cheap profitable dividend stocks in the gulf")
     # Numbers however they're written: percent, "x"/"times earnings", before or after the metric, "or more", "+"
@@ -2020,6 +2020,47 @@ def test_screening_banks():
     # A bank has no meaningful debt/equity, so the limit is set aside for it, and the screen says so
     assert [r["ticker"] for r in banks["rows"]] == ["BANK.X"] and "wasn't applied to 1 bank:" in banks["notes"][0], banks["notes"]
     assert sorted(r["ticker"] for r in fin["rows"]) == ["BANK.X", "INSU.X"], [r["ticker"] for r in fin["rows"]]
+    _reset()
+
+
+def test_screening_size_range_rsi_returns_and_scores():
+    from backend import ai, data, db, insights
+    _reset()
+    p = ai._parse_rules
+    # Words with a stated meaning, and numbers with units
+    assert p("large cap japanese tech") == {"min_mcap": 10e9, "countries": ["Japan"], "sector": "Technology"}
+    assert p("mid cap stocks") == {"min_mcap": 2e9, "max_mcap": 10e9} and p("small caps")["max_mcap"] == 2e9 and p("mega caps")["min_mcap"] == 200e9
+    assert p("big pharma paying 3% or more") == {"min_div_yield": 0.03, "min_mcap": 10e9, "sector": "Healthcare"}
+    assert p("market cap above $50bn") == {"min_mcap": 50e9} and p("under 500 million market cap") == {"max_mcap": 500e6}
+    assert p("oversold european stocks") == {"max_rsi": 30, "markets": ["Europe"]} and p("rsi above 70") == {"min_rsi": 70.0}
+    assert p("stocks down 30% from their high") == {"min_off_high": 0.3} and p("within 5% of 52 week high") == {"max_off_high": 0.05}
+    assert p("companies near their 52 week low") == {"max_above_low": 0.1} and "max_above_low" not in p("stocks at low valuations")
+    assert p("up 20% over the past year") == {"min_ret1y": 0.2} and p("fell 30% this year") == {"max_ytd": -0.3}
+    assert p("1 year return below -10%") == {"max_ret1y": -0.1}
+    assert p("quality score above 70") == {"min_quality": 70.0}
+    assert p("growth score above 60 and growth above 10%") == {"min_growth": 60.0, "min_rev_growth": 0.1, "sort": "growth"}
+    assert p("trading below book value") == {"max_pb": 1.0} and p("price to book under 1.5") == {"max_pb": 1.5}
+    assert p("stocks that beat the market") == {"beat_market": True} and p("largest european banks")["sort"] == "size"
+    # The model's filters are checked the same way: a negative return is allowed, a score above 100 isn't
+    assert ai._tidy_filters({"max_ret1y": -0.2, "min_rsi": 150, "min_mcap": "1e10", "beat_market": True}) == {"max_ret1y": -0.2, "min_mcap": 1e10, "beat_market": True}
+    # The screen applies them: market cap in US dollars (Yahoo gives a pence-quoted stock's in pounds)
+    up, down, flat = _steps([0.002] * 300), _steps([-0.002] * 300), _steps([0.0005, -0.0005] * 150)
+    infos = {"BIG.X": {"marketCap": 50e9, "priceToBook": 0.8}, "SMALL.X": {"marketCap": 1e9, "priceToBook": 3.0},
+             "PENCE.L": {"marketCap": 20e9, "currency": "GBp"}, "ACWI": {"assetClass": "ETFs"}}
+    with _FakeMarket({"BIG.X": up, "SMALL.X": down, "PENCE.L": flat, "ACWI": flat}, infos):
+        screen = lambda f: [r["ticker"] for r in insights.screen({"filters": f, "extra": ["BIG.X", "SMALL.X", "PENCE.L"], "markets": []}, db.get_settings())["rows"]]
+        rows = {r["ticker"]: r for r in insights.screen({"filters": {}, "extra": ["BIG.X", "SMALL.X", "PENCE.L"], "markets": []}, db.get_settings())["rows"]}
+        assert abs(rows["PENCE.L"]["marketCapUsd"] - 20e9 * data.fx_rate("GBP", "USD")) < 1, rows["PENCE.L"]["marketCapUsd"]
+        assert "BIG.X" in screen(p("large caps")) and "SMALL.X" not in screen(p("large caps")) and screen(p("small caps")) == ["SMALL.X"]
+        assert screen(p("trading below book value")) == ["BIG.X"]
+        assert "SMALL.X" in screen(p("oversold stocks")) and "BIG.X" not in screen(p("oversold stocks"))
+        assert "SMALL.X" in screen(p("stocks down 30% from their high")) and "BIG.X" in screen(p("stocks near their 52 week highs"))
+        assert "SMALL.X" in screen(p("near 52 week lows")) and "BIG.X" not in screen(p("near 52 week lows"))
+        assert "BIG.X" in screen(p("up 20% over the past year")) and screen(p("fell 30% over the past year")) == ["SMALL.X"]
+        assert screen({"sort": "size"})[:2] == ["BIG.X", "PENCE.L"] and screen({"sort": "return"})[0] == "BIG.X"
+        beat = insights.screen({"filters": p("stocks that beat the market"), "extra": ["BIG.X", "SMALL.X", "PENCE.L"], "markets": []}, db.get_settings())
+        assert "BIG.X" in [r["ticker"] for r in beat["rows"]] and "SMALL.X" not in [r["ticker"] for r in beat["rows"]]
+        assert any("world index's (ACWI" in n for n in beat["notes"]), beat["notes"]
     _reset()
 
 

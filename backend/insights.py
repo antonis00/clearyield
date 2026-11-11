@@ -59,6 +59,23 @@ def on_which_day(close):
     return "today" if day == dt.date.today() else f"on {day.isoformat()}"
 
 
+def _since_new_year(c):
+    """The return since the last close of the previous year, or None without one."""
+    before = c[c.index < dt.datetime(c.index[-1].year, 1, 1, tzinfo=getattr(c.index, "tz", None))]
+    return float(c.iloc[-1] / before.iloc[-1] - 1) if len(before) else None
+
+
+def _usd(amount, currency):
+    """An amount in US dollars at today's rate. Yahoo gives market cap in the main unit (pounds for a stock quoted in
+    pence), so the main unit's rate applies."""
+    if not amount or not currency:
+        return None
+    try:
+        return float(amount) * data.fx_rate(data.main_unit(currency), "USD")
+    except Exception:
+        return None
+
+
 def _quick_row(t, settings):
     try:
         full, inf, sc = evaluate_ticker(t, settings)
@@ -77,7 +94,8 @@ def _quick_row(t, settings):
         "composite": sc["composite"], "stance": sc["stance"], **{f"f_{k}": v for k, v in sc["factors"].items()},
         "scoredOn": "All factors" if inf.get("assetClass") == "Stocks" else "Trend & risk only", "events": upcoming(inf),
         "moveDay": on_which_day(c), "stale": data.is_stale(t), "asOf": c.index[-1].strftime("%Y-%m-%d"),
-        "fromHigh": float(c.iloc[-1] / ind.window(c, 252).max() - 1),
+        "fromHigh": float(c.iloc[-1] / ind.window(c, 252).max() - 1), "fromLow": float(c.iloc[-1] / ind.window(c, 252).min() - 1),
+        "retYtd": _since_new_year(c), "marketCapUsd": _usd(inf.get("marketCap"), inf.get("currency")),
         "above50": bool(len(c) >= 50 and c.iloc[-1] > ind.sma(c, 50).iloc[-1]),
     }
 
@@ -401,6 +419,9 @@ def opportunities(settings, markets):
     }
 
 
+BENCHMARK = "ACWI"  # the world index a screen's "beat the market" is measured against
+
+
 def screen(body, settings):
     f = dict(body.get("filters") or {})
     offered = [*followed(settings), "ETFs", "Crypto"]  # a region you don't follow isn't screened
@@ -419,7 +440,19 @@ def screen(body, settings):
     rows = rows_for(list(dict.fromkeys(tickers)), settings, kind="screener")
     ok, failed = [r for r in rows if "error" not in r], [r["ticker"] for r in rows if "error" in r]
 
-    debt_skipped = []
+    debt_skipped, notes = [], []
+    # "Beat the market": a past-year return above the world index's (ACWI, in dollars; each stock's in its own currency)
+    if f.pop("beat_market", None):
+        try:
+            bench = ind.ret_over(data.history(BENCHMARK, "5y")["Close"], 252)
+        except Exception:
+            bench = None
+        if bench is None:
+            notes.append(f"\"Beat the market\" wasn't applied: no past-year return for the world index ({BENCHMARK}).")
+        else:
+            f["min_ret1y"] = max(bench, f.get("min_ret1y", bench))
+            notes.append(f"Beat the market: a past-year return above the world index's ({BENCHMARK}, {bench:+.1%} in US dollars); "
+                         "each stock's return is in its own currency.")
 
     def keep(r):
         def lt(v, lim):
@@ -446,7 +479,16 @@ def screen(body, settings):
         return (lt(r["pe"] if (r["pe"] or 0) > 0 else None, f.get("max_pe")) and gt(r["divYield"], f.get("min_div_yield"))
                 and gt(r["revGrowth"], f.get("min_rev_growth")) and lt(r["de"], de_limit) and gt(r["roe"], f.get("min_roe"))
                 and gt(r["composite"], f.get("min_score")) and gt(r.get("f_momentum"), f.get("min_momentum"))
-                and lt(r["vol"], f.get("max_vol")))
+                and lt(r["vol"], f.get("max_vol"))
+                and all(gt(r.get(f"f_{k}"), f.get(f"min_{k}")) for k in ("value", "quality", "growth", "risk"))
+                and gt(r.get("marketCapUsd"), f.get("min_mcap")) and lt(r.get("marketCapUsd"), f.get("max_mcap"))
+                and lt(r["pb"] if (r.get("pb") or 0) > 0 else None, f.get("max_pb"))
+                and gt(r.get("rsi"), f.get("min_rsi")) and lt(r.get("rsi"), f.get("max_rsi"))
+                and gt(r.get("ret1y"), f.get("min_ret1y")) and lt(r.get("ret1y"), f.get("max_ret1y"))
+                and gt(r.get("retYtd"), f.get("min_ytd")) and lt(r.get("retYtd"), f.get("max_ytd"))
+                and gt(-r["fromHigh"] if r.get("fromHigh") is not None else None, f.get("min_off_high"))
+                and lt(-r["fromHigh"] if r.get("fromHigh") is not None else None, f.get("max_off_high"))
+                and lt(r.get("fromLow"), f.get("max_above_low")))
 
     out = [r for r in ok if keep(r)]
     # Each stock's overall score against the rest of its sector, from every market in the list
@@ -456,12 +498,11 @@ def screen(body, settings):
     for r in out:
         r["sectorBeats"], r["sectorOf"] = _beats(r, table)
     sort = f.get("sort", "composite")
-    key = {"divYield": "divYield"}.get(sort, "composite" if sort == "composite" else f"f_{sort}")
-    out.sort(key=lambda r: -(r.get(key) if r.get(key) is not None else -1))
+    key = {"divYield": "divYield", "size": "marketCapUsd", "return": "ret1y", "composite": "composite"}.get(sort, f"f_{sort}")
+    out.sort(key=lambda r: -(r.get(key) if r.get(key) is not None else -1e18))
     if key == "composite":  # ETFs and crypto have no value, quality or growth score, so each class ranks on its own
         order = ["Stocks", "ETFs", "Crypto"]
         out.sort(key=lambda r: order.index(r["assetClass"]) if r["assetClass"] in order else len(order))
-    notes = []
     if debt_skipped:
         notes.append(f"The debt limit wasn't applied to {len(debt_skipped)} bank{'s' if len(debt_skipped) > 1 else ''}: debt/equity doesn't measure a bank's risk, since deposits and borrowing are what it lends from.")
     if ranks_pending:

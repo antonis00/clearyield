@@ -266,6 +266,20 @@ const SLOW = 150000;
   await p.press("#scrQuery", "Enter");
   await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: SLOW }); await p.waitForTimeout(400);
   expect("screener: plain-language query", /Gulf/.test(await txt("#scrInfo")), await txt("#scrInfo"));
+  // Limits beyond the main form (size, RSI, the 52-week range) are read from a sentence into "More filters", which
+  // opens to show them, and they stay when the filters are applied again
+  await p.fill("#scrQuery", "large caps down 10% from their high, rsi below 60"); await p.press("#scrQuery", "Enter");
+  await p.waitForFunction(() => !document.querySelector("#btnScr").disabled && /Min market cap/.test(document.querySelector("#scrInfo").innerText), null, { timeout: SLOW });
+  const more = await p.evaluate(() => ({ open: document.querySelector("#scrMore").open, count: document.querySelector("#scrMoreCount").textContent,
+    mcap: document.querySelector('[data-more="min_mcap"]').value, off: document.querySelector('[data-more="min_off_high"]').value, rsi: document.querySelector('[data-more="max_rsi"]').value }));
+  let applied = null;
+  const watchScreen = (r) => { if (r.url().endsWith("/api/screener")) applied = r.postDataJSON(); };
+  p.on("request", watchScreen);
+  await p.click("#btnScr"); await p.waitForFunction(() => !document.querySelector("#btnScr").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
+  p.off("request", watchScreen);
+  expect("screener: size, the 52-week range and RSI read into More filters, and kept when applied",
+    more.open && more.count === "(3 set)" && more.mcap === "10" && more.off === "10" && more.rsi === "60" && applied?.filters?.min_mcap === 1e10 && applied?.filters?.min_off_high === 0.1 && applied?.filters?.max_rsi === 60,
+    JSON.stringify({ more, applied: applied?.filters }));
   if (await p.locator("#scrTable tbody tr").count()) { await p.locator("#scrTable tbody tr").first().click(); await p.waitForTimeout(700); expect("screener: row opens Research", (await p.evaluate(() => location.hash)).startsWith("#research")); }
 
   // ---- Portfolio

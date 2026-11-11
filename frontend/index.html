@@ -261,9 +261,10 @@
         <label>Min score<input type="number" id="fScore"></label>
         <label>Max volatility %<input type="number" id="fVol"></label>
         <label>Country<select id="fCountry"></select></label>
-        <label>Sort by<select id="fSort"><option value="composite">Composite</option><option value="value">Value</option><option value="quality">Quality</option><option value="growth">Growth</option><option value="momentum">Momentum</option><option value="risk">Low risk</option><option value="divYield">Dividend yield</option></select></label>
+        <label>Sort by<select id="fSort"><option value="composite">Composite</option><option value="value">Value</option><option value="quality">Quality</option><option value="growth">Growth</option><option value="momentum">Momentum</option><option value="risk">Low risk</option><option value="divYield">Dividend yield</option><option value="size">Largest</option><option value="return">Best 1Y return</option></select></label>
         <button class="btn ghost" id="btnScr">Apply filters</button>
       </div>
+      <details class="scr-more" id="scrMore"><summary>More filters <span class="muted sm" id="scrMoreCount"></span></summary><div class="form-row" id="scrMoreFields"></div></details>
       <div class="muted sm" id="scrInfo">First scan downloads data for every ticker (≈1 min); later scans use the cache.</div>
     </div>
     <div class="card"><div id="scrTable" class="tablewrap"></div></div>

@@ -871,17 +871,40 @@ const FILTER_LABELS = { max_pe: ["Max P/E", (v) => v], min_div_yield: ["Min yiel
   max_vol: ["Max volatility", (v) => pct(v, 0, false)], sector: ["Sector", (v) => esc(v)], sort: ["Sorted by", (v) => esc(v)], markets: ["Markets", (v) => esc(v.join(", "))],
   countries: ["Countries", (v) => { const g = Object.entries(state.meta.countryGroups || {}).find(([, cs]) => cs.length === v.length && cs.every((c) => v.includes(c)));
     return g ? `${esc(g[0])} (${esc(v.join(", "))})` : esc(v.join(", ")); }] };
+// The filters under "More filters": key, label, how the box's number becomes the filter's (a share as %, dollars in bn)
+const MORE_FILTERS = [
+  ["min_mcap", "Min market cap $bn", 1e9], ["max_mcap", "Max market cap $bn", 1e9], ["max_pb", "Max price/book", 1],
+  ["min_ret1y", "Min 1Y return %", 0.01], ["max_ret1y", "Max 1Y return %", 0.01], ["min_ytd", "Min YTD return %", 0.01], ["max_ytd", "Max YTD return %", 0.01],
+  ["min_off_high", "Min % below 52w high", 0.01], ["max_off_high", "Max % below 52w high", 0.01], ["max_above_low", "Max % above 52w low", 0.01],
+  ["min_rsi", "Min RSI", 1], ["max_rsi", "Max RSI", 1],
+  ["min_value", "Min value score", 1], ["min_quality", "Min quality score", 1], ["min_growth", "Min growth score", 1], ["min_momentum", "Min momentum score", 1], ["min_risk", "Min risk score", 1],
+];
+$("#scrMoreFields").innerHTML = MORE_FILTERS.map(([k, label]) => `<label>${label}<input type="number" data-more="${k}"></label>`).join("");
+const moreCount = () => { const n = $$("#scrMoreFields input").filter((i) => i.value !== "").length; $("#scrMoreCount").textContent = n ? `(${n} set)` : ""; };
+$("#scrMoreFields").oninput = moreCount;
+const bn = (v) => `$${num(v / 1e9, v >= 1e10 ? 0 : 1)}bn`;
+Object.assign(FILTER_LABELS, {
+  min_mcap: ["Min market cap", bn], max_mcap: ["Max market cap", bn], max_pb: ["Max P/B", (v) => v],
+  min_ret1y: ["Min 1Y return", (v) => pct(v, 0)], max_ret1y: ["Max 1Y return", (v) => pct(v, 0)], min_ytd: ["Min YTD", (v) => pct(v, 0)], max_ytd: ["Max YTD", (v) => pct(v, 0)],
+  min_off_high: ["Below 52w high by ≥", (v) => pct(v, 0, false)], max_off_high: ["Below 52w high by ≤", (v) => pct(v, 0, false)], max_above_low: ["Above 52w low by ≤", (v) => pct(v, 0, false)],
+  min_rsi: ["Min RSI", (v) => v], max_rsi: ["Max RSI", (v) => v],
+  min_value: ["Min value", (v) => v], min_quality: ["Min quality", (v) => v], min_growth: ["Min growth", (v) => v], min_risk: ["Min risk score", (v) => v],
+});
 const filterChips = (f) => Object.entries(FILTER_LABELS).filter(([k]) => isNum(f[k]) && f[k] !== "").map(([k, [label, show]]) => `<span class="pill">${label}: ${show(f[k])}</span>`).join("");
 function fillFilterForm(f) {
   const set = (id, v, scale = 1) => { $(id).value = isNum(v) ? +(v * scale).toFixed(4) : ""; };
   set("#fPe", f.max_pe); set("#fDiv", f.min_div_yield, 100); set("#fGrowth", f.min_rev_growth, 100); set("#fDe", f.max_de);
   set("#fRoe", f.min_roe, 100); set("#fScore", f.min_score); set("#fVol", f.max_vol, 100);
   if (f.sort && $(`#fSort option[value="${f.sort}"]`)) $("#fSort").value = f.sort;
+  MORE_FILTERS.forEach(([k, , scale]) => { const i = $(`#scrMoreFields [data-more="${k}"]`); i.value = isNum(f[k]) ? +(f[k] / scale).toFixed(2) : ""; });
+  moreCount();
+  if ($("#scrMoreCount").textContent) $("#scrMore").open = true;  // a screen read from a sentence shows what it set
 }
 function screenerFilters() {
   const v = (id, scale = 1) => ($(id).value === "" ? undefined : Number($(id).value) / scale);
   return { max_pe: v("#fPe"), min_div_yield: v("#fDiv", 100), min_rev_growth: v("#fGrowth", 100), max_de: v("#fDe"), min_roe: v("#fRoe", 100),
-           min_score: v("#fScore"), max_vol: v("#fVol", 100), sort: $("#fSort").value, ...($("#fCountry").value ? { countries: [$("#fCountry").value] } : {}) };
+           min_score: v("#fScore"), max_vol: v("#fVol", 100), sort: $("#fSort").value, ...($("#fCountry").value ? { countries: [$("#fCountry").value] } : {}),
+           ...Object.fromEntries(MORE_FILTERS.map(([k, , scale]) => [k, $(`#scrMoreFields [data-more="${k}"]`).value]).filter(([, x]) => x !== "").map(([k, x]) => [k, Number(x) * MORE_FILTERS.find((m) => m[0] === k)[2]])) };
 }
 async function runScreen(body) {
   const el = $("#scrTable"); dlLoader(el, "screener", "Scanning the stocks…");
