@@ -1665,7 +1665,18 @@ function loadSettings() {
   renderTileChoices(new Set(s.dashboard_tiles));
   $("#sEmail").value = s.alert_email || ""; $("#sEmailOn").checked = !!s.email_alerts;
   emailSwitched(); renderEmailStatus(); markUnsaved();
+  const st = state.meta.startup;
+  $("#startupOpt").classList.toggle("hidden", !st?.supported); $("#sStartup").checked = !!st?.enabled;
 }
+// Applies at once, like the theme: a shortcut in Windows' Startup folder runs the app in the background at sign-in
+$("#sStartup").onchange = async () => {
+  const want = $("#sStartup").checked;
+  try {
+    state.meta.startup = await api("/api/startup", { method: "POST", body: { enabled: want } });
+    toast(want ? "ClearYield will start in the background when you sign in to Windows, so alerts keep working with this page closed."
+      : "ClearYield won't start with Windows any more.");
+  } catch (e) { $("#sStartup").checked = !want; toast(e.message); }
+};
 // What Save would change, compared in the form's own units (whole-percent sliders, sets for ticked boxes), so the save
 // card can say when something is unsaved. Theme, custom tiles and backups apply at once and aren't part of it.
 function settingsShown() {

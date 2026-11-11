@@ -12,6 +12,7 @@ Personal, self-hosted investing dashboard. The goal is a smart decision-support 
 ```powershell
 .\run.bat                     # creates .venv on first run; live Yahoo data on http://localhost:8001
 .\run.bat --demo              # synthetic offline data
+.\run.bat --restart           # stops a copy already running (e.g. the background one), then starts this code
 .\.venv\Scripts\python tests\test_smoke.py      # offline end-to-end tests (demo mode); add a name part to run some, -v for the app's log
 .\.venv\Scripts\python tests\run_all.py         # everything: offline tests, browser checks, demo and live walks, raw-Yahoo comparison
 .\.venv\Scripts\python tests\run_all.py --offline   # skip the live parts
@@ -20,7 +21,8 @@ Personal, self-hosted investing dashboard. The goal is a smart decision-support 
 - The browser checks need `npm install` once in `tests/browser`, and use the installed Chrome (`channel: "chrome"`).
 - `run_all.py` gives each browser check its own server and temporary database, so the owner's data isn't touched. It leaves out the app's log lines, ends with each failing step by name, and on a failure prints the end of that check's output and its server's log.
 - `requirements.txt` pins the versions the tests last passed with (certifi only has a floor). `run.bat` installs again whenever `requirements.txt` changes (it keeps a copy in `.venv\requirements.installed`). Upgrade on purpose, then run `run_all.py`.
-- `uvicorn --reload` has not reliably picked up Python changes on this machine. Restart the server after backend edits.
+- `uvicorn --reload` has not reliably picked up Python changes on this machine. Restart the server after backend edits (`run.bat --restart`).
+- **Start with Windows** (Settings, applies at once): `startup.py` puts `ClearYield.lnk` in the Startup folder, running `pythonw -m backend.background` (no window; output to `data/server.log`, kept to 5 MB plus one older file; exits if the port already answers). `run.bat` just opens the page when a copy already answers; `--restart` sends `POST /api/stop` and waits for the port to free. Tests point `CLEARYIELD_STARTUP_DIR` at a temporary folder, never the real one.
 
 Optional settings go in `.env` (see `.env.example`):
 - `AI_PROVIDER` (`anthropic` | `openai_compatible` | `none`), `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`, `AI_TIMEOUT`, `AI_THINKING` choose the model for briefs and screener questions. `.env.example` has a block for Ollama, LM Studio, OpenRouter, Groq and Anthropic. A `.env` with only `ANTHROPIC_API_KEY` (and `ANTHROPIC_MODEL`) still turns on Anthropic.

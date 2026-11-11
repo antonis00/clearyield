@@ -114,6 +114,7 @@ label.block { margin: 8px 0; }
 .save-card.dirty #settingsMsg { color: var(--text); }
 .save-card.dirty #settingsMsg::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .save-card.dirty { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.form-row label.startup-opt, .startup-opt { margin-left: auto; display: flex; flex-direction: row; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); cursor: pointer; }
 .save-actions { display: flex; gap: 8px; margin-left: auto; }
 .status { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 /* Outlined, one colour: the icon file is used as a mask and painted in the state's colour */
