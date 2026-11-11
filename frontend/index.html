@@ -324,7 +324,7 @@
 
   <!-- BACKTEST -->
   <section id="view-backtest" class="view hidden">
-    <div class="form-row bt-switch"><div class="seg" id="btMode"><button data-mode="single" class="on">Single asset</button><button data-mode="portfolio">Portfolio</button></div>
+    <div class="form-row bt-switch"><div class="seg" id="btMode"><button data-mode="single" class="on">Single asset</button><button data-mode="portfolio">Portfolio</button><button data-mode="score">Score check</button></div>
       <span class="muted sm" id="btModeHint">One asset, one trading rule.</span></div>
     <div id="btPortfolio" class="hidden">
       <div class="card">
@@ -369,6 +369,16 @@
           <p class="muted sm" id="mcLegend"></p>
           <ul id="mcCaveats" class="signals"></ul>
         </div>
+      </div>
+    </div>
+    <div id="btScore" class="hidden">
+      <div class="card">
+        <div class="card-h"><h3>Would the scores have picked winners?</h3><span class="muted sm" id="scMeta"></span></div>
+        <p class="muted sm">Every quarter of the past years, the stocks in the regions you follow are scored as they stood that day, by today's rules, and split into thirds. Below is what each third did over the following year.</p>
+        <ul id="scVerdicts" class="signals"></ul>
+        <div id="scTable" class="tablewrap"></div>
+        <details class="sc-detail"><summary class="muted sm">Quarter by quarter</summary><div class="form-row"><div class="seg" id="scKind"></div></div><canvas id="scChart" height="90"></canvas></details>
+        <ul id="scCaveats" class="signals"></ul>
       </div>
     </div>
     <div id="btSingle">

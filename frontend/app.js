@@ -1474,19 +1474,59 @@ $("#btnBt").onclick = async () => {
 /* ---------------------------------------------------------------- portfolio backtest and futures */
 // One mix feeds both: how it did (a day-by-day backtest) and what it might do (paths drawn from its own months).
 const PM = { loaded: false, base: "USD" };
-const BT_HINT = { single: "One asset, one trading rule.", portfolio: "A mix of assets: how it did, and a range of what it might do." };
+const BT_HINT = { single: "One asset, one trading rule.", portfolio: "A mix of assets: how it did, and a range of what it might do.",
+  score: "Whether the price-based scores would have sorted the stocks you follow, quarter by quarter." };
 function setBtMode(mode, load = true) {
   $$("#btMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
   $("#btSingle").classList.toggle("hidden", mode !== "single");
   $("#btPortfolio").classList.toggle("hidden", mode !== "portfolio");
+  $("#btScore").classList.toggle("hidden", mode !== "score");
   $("#btModeHint").textContent = BT_HINT[mode];
   try { localStorage.setItem("btMode", mode); } catch { /* not remembered, but still shown */ }
   if (mode === "portfolio" && load) pmLoad().catch((e) => toast(e.message));
+  if (mode === "score" && load) loadScoreCheck();
 }
 $$("#btMode button").forEach((b) => b.onclick = () => setBtMode(b.dataset.mode));
-function btMode() { try { return localStorage.getItem("btMode") === "portfolio" ? "portfolio" : "single"; } catch { return "single"; } }
+function btMode() { try { const m = localStorage.getItem("btMode"); return ["portfolio", "score"].includes(m) ? m : "single"; } catch { return "single"; } }
 setBtMode(btMode(), false);
-function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) => toast(e.message)); }
+function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) => toast(e.message)); if (btMode() === "score") loadScoreCheck(); }
+
+/* ---------------------------------------------------------------- score check */
+// The price-based scores rebuilt for past quarters (scorecheck.py): what each third did over the following year
+const SC = { data: null, kind: "momentum" };
+const THIRD = { top: "Top third", middle: "Middle third", bottom: "Bottom third" };
+async function loadScoreCheck() {
+  if (SC.loading) return;
+  SC.loading = true; $("#scVerdicts").innerHTML = ""; $("#scCaveats").innerHTML = "";
+  loading($("#scTable"), "Scoring the stocks you follow at every quarter of the past years…");
+  try { SC.data = await api("/api/scorecheck"); } catch (e) { $("#scTable").innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; } finally { SC.loading = false; }
+  const d = SC.data;
+  if (d.error) { $("#scTable").innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
+  const kinds = Object.entries(d.kinds).filter(([, k]) => k.summary), first = kinds[0]?.[1].summary;
+  if (!first) { $("#scTable").innerHTML = `<div class="muted">Not enough history to check yet.</div>`; return; }
+  $("#scMeta").textContent = `${d.stocks} stocks · quarters from ${first.from.slice(0, 7)} to ${first.to.slice(0, 7)} · ${d.regions.join(", ")}`;
+  $("#scVerdicts").innerHTML = kinds.map(([, k]) => `<li class="${/sorted well/.test(k.summary.verdict) ? "t1" : /wrong way/.test(k.summary.verdict) ? "t-1" : ""}">${esc(k.summary.verdict)}</li>`).join("");
+  $("#scTable").innerHTML = `<table><tr><th>Score</th><th>Third, by score that day</th><th class="num">Return the next year</th><th class="num">Volatility</th><th class="num">Worst fall</th></tr>
+    ${kinds.map(([, k]) => ["top", "middle", "bottom"].map((g, i) => `<tr${i === 0 ? ' class="sc-first"' : ""}><td>${i === 0 ? esc(k.label) : ""}</td><td>${THIRD[g]}</td>
+      <td class="num">${cpct(k.summary[g].ret)}</td><td class="num">${pct(k.summary[g].vol, 0, false)}</td><td class="num">${pct(k.summary[g].dd, 0)}</td></tr>`).join("")).join("")}</table>
+    <p class="muted sm">Averages over ${first.periods} quarters; each quarter's thirds hold about ${Math.round(d.kinds[kinds[0][0]].dates.at(-1).n / 3)} stocks.</p>`;
+  $("#scKind").innerHTML = kinds.map(([key, k]) => `<button data-sc="${key}" class="${key === SC.kind ? "on" : ""}">${esc(k.label)}</button>`).join("");
+  $$("#scKind button").forEach((b) => b.onclick = () => { SC.kind = b.dataset.sc; $$("#scKind button").forEach((x) => x.classList.toggle("on", x === b)); scChart(); });
+  $("#scCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
+  scChart();
+}
+// Quarter by quarter: the following year's return of the top and bottom thirds (volatility for the risk score, which
+// promises a calmer ride rather than more return)
+function scChart() {
+  const k = SC.data?.kinds[SC.kind];
+  if (!k?.dates.length) return;
+  const m = SC.kind === "risk" ? "vol" : "ret", what = m === "vol" ? "volatility the next year" : "return the next year";
+  mkChart("scChart", { type: "line", data: { labels: k.dates.map((r) => r.date.slice(0, 7)), datasets: [
+    { label: `Top third: ${what}`, data: k.dates.map((r) => r.top[m] * 100), borderColor: C("--up"), borderWidth: 2, pointRadius: 2 },
+    { label: `Bottom third: ${what}`, data: k.dates.map((r) => r.bottom[m] * 100), borderColor: C("--down"), borderWidth: 2, pointRadius: 2 }] },
+    options: { interaction: { mode: "index", intersect: false }, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y.toFixed(1)}%` } } },
+      scales: { y: { ticks: { callback: (v) => `${v}%` } } } } });
+}
 
 function pmRow(ticker = "", weight = "") {
   const row = document.createElement("div");

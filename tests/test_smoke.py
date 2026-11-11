@@ -1067,6 +1067,51 @@ def test_background_start_and_stop():
             first.kill()
 
 
+def test_score_check_is_hand_calculated():
+    """Prices built so the answer is known: steady climbers have the best momentum and keep climbing; the calm half
+    stays calm. The check must find both, use today's scoring rules, and give one quarter's figures by hand."""
+    import pandas as pd
+
+    from backend import scorecheck, scoring
+    days = 1300  # about five years of trading days
+    prices = {}
+    for i in range(12):
+        drift, swing = (i - 5) * 0.0004, 0.004 if i % 2 else 0.012  # odd ones calm, even ones jumpy
+        prices[f"S{i:02d}"] = _steps([drift + (swing if d % 2 else -swing) for d in range(days)])
+    with _FakeMarket(prices):
+        out = scorecheck.check(list(prices))
+    mom, risk = out["kinds"]["momentum"], out["kinds"]["risk"]
+    n = mom["summary"]["periods"]
+    assert out["stocks"] == 12 and n >= 10 and mom["dates"][0]["n"] == 12, (out["stocks"], n)
+    assert mom["summary"]["topBeatBottom"] == n and "sorted well" in mom["summary"]["verdict"], mom["summary"]["verdict"]
+    assert risk["summary"]["topCalmer"] == n and "sorted well" in risk["summary"]["verdict"], risk["summary"]["verdict"]
+    assert "calm isn't promised to pay more" in risk["summary"]["verdict"]
+
+    # The scores are today's rules applied to the prices up to that day
+    s = prices["S07"]
+    assert scorecheck._price_scores(s)["momentum"] == scoring.evaluate({"assetClass": "ETF"}, s)["factors"]["momentum"]
+
+    # One quarter by hand: the four steepest climbers make the top third; their average return over the next 365 days
+    first = mom["dates"][0]
+    day, later = pd.Timestamp(first["date"]), pd.Timestamp(first["date"]) + pd.DateOffset(days=365)
+    at = lambda c, t: float(c[c.index <= t].iloc[-1])  # noqa: E731
+    top = [f"S{i:02d}" for i in (11, 10, 9, 8)]
+    expected = sum(at(prices[t], later) / at(prices[t], day) - 1 for t in top) / 4
+    assert abs(first["top"]["ret"] - expected) < 1e-12, (first["top"]["ret"], expected)
+    assert first["top"]["ret"] > first["middle"]["ret"] > first["bottom"]["ret"]
+
+    # Too few stocks to make thirds: no result rather than a misleading one
+    with _FakeMarket({t: prices[t] for t in list(prices)[:5]}):
+        assert scorecheck.check(list(prices)[:5])["kinds"]["momentum"]["summary"] is None
+    with _FakeMarket({}):
+        assert "error" in scorecheck.check(["NOPE"])
+
+    # The route checks the regions you follow, and says which
+    with TestClient(app) as c:
+        r = c.get("/api/scorecheck").json()
+        assert r["regions"] and r["kinds"]["momentum"]["summary"] and len(r["caveats"]) == 4, r.get("error")
+
+
 def test_journal_stops_work_for_any_ticker():
     """A stop or target applies whether or not the ticker is held or watched, without adding it to the digest's moves."""
     from fastapi.testclient import TestClient
