@@ -2064,6 +2064,21 @@ def test_screening_size_range_rsi_returns_and_scores():
     _reset()
 
 
+def test_screener_reads_the_measured_requests():
+    """The requests in screen_cases.py: those the rules must read alone are read exactly, with nothing reported as not
+    understood; those that need the model leave a word unread, so the model is asked."""
+    import screen_cases as sc
+
+    from backend import ai
+    wrong = {q: sc.misread(e, ai._parse_rules(q.lower())) for q, e in sc.RULES}
+    wrong = {q: m for q, m in wrong.items() if m}
+    stray = {q: ai._parse_rules(q.lower()).get("ignored") for q, e in sc.RULES if ai._parse_rules(q.lower()).get("ignored") and "ignored" not in e}
+    assert not wrong and not stray, (wrong, stray)
+    for q, _ in sc.AI:
+        rules, _, aside = ai._rules(q.lower())
+        assert [w for w in rules.get("ignored", []) if w not in aside.values()], f"{q!r} is read in full by the rules, so the model wouldn't be asked"
+
+
 def test_screening_any_industry():
     from backend import ai, db, insights
     from backend.universe import INDUSTRIES
@@ -2923,7 +2938,7 @@ def test_ai_providers():
             # stricter limits don't replace them, and it's told what the words mean here
             rules = ai._parse_rules("cheap gulf dividend payers with wide moats")
             assert ai.parse_query("cheap gulf dividend payers with wide moats") == {k: v for k, v in rules.items() if k != "ignored"}
-            assert len(llm.seen) == 1 and "low volatility/low risk/safe/defensive: max_vol 0.25" in llm.seen[0][2]["messages"][1]["content"]
+            assert len(llm.seen) == 1 and "low volatility/low risk/safe/defensive/steady/stable/quiet: max_vol 0.25" in llm.seen[0][2]["messages"][1]["content"]
             # When the rules read every word, the model isn't asked at all
             llm.seen.clear()
             assert ai.parse_query("cheap gulf dividend payers") == ai._parse_rules("cheap gulf dividend payers") and not llm.seen
