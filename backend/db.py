@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "regions": list(REGIONS),  # the regions you follow: only their stocks are downloaded, screened and ranked against
     "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
     "email_alerts": False,
+    "fund_costs": {},  # {ticker: yearly cost as a fraction}, entered from a fund's factsheet; stands over Yahoo's figure
 }
 
 
@@ -339,6 +340,13 @@ def _switch(what):
     return check
 
 
+def _fund_costs(v):
+    """Your own yearly cost per fund, from 0 to 5% (a fraction), where Yahoo has none or an old one."""
+    if not isinstance(v, dict) or not all(isinstance(t, str) and _SYMBOL.fullmatch(t) for t in v):
+        raise ValueError("Fund costs must be given per fund symbol.")
+    return {t: _num(r, 0, 0.05, f"The yearly cost of {t}") for t, r in v.items()}
+
+
 SETTING_CHECKS = {
     "base_currency": _text(_CURRENCY, "The base currency must be a three-letter code such as USD."),
     "risk_free_rate": lambda v: _num(v, -0.05, 0.3, "The risk-free rate"),
@@ -351,6 +359,7 @@ SETTING_CHECKS = {
     "regions": _regions,
     "alert_email": _email,
     "email_alerts": _switch("Email alerts"),
+    "fund_costs": _fund_costs,
 }
 
 

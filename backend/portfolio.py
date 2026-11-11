@@ -185,6 +185,31 @@ def _income(ticker, shares, price, fx, inf):
     return shares * paid * fx
 
 
+def _cost_of(ticker, inf, settings):
+    """A fund's yearly cost: yours from its factsheet (Settings' fund_costs) over Yahoo's expense ratio. Not a fund: none."""
+    if inf.get("assetClass") != "ETFs":
+        return {"costRatio": None, "costFrom": None}
+    mine = (settings.get("fund_costs") or {}).get(ticker)
+    if mine is not None:
+        return {"costRatio": mine, "costFrom": "you"}
+    yahoo = inf.get("netExpenseRatio")
+    return {"costRatio": yahoo, "costFrom": "Yahoo" if yahoo is not None else None}
+
+
+def _fund_costs(rows, total):
+    """What your funds cost a year: each fund's yearly cost (expense ratio) on what you hold of it, in the base currency,
+    as a share of the whole portfolio and of the funds. Funds Yahoo lists no cost for are named, not guessed at."""
+    funds = [r for r in rows if r["assetClass"] == "ETFs"]
+    known = [r for r in funds if r.get("costRatio") is not None]
+    per_year = sum(r["value"] * r["costRatio"] for r in known)
+    known_value = sum(r["value"] for r in known)
+    listed = sorted(({"ticker": r["ticker"], "name": r["name"], "ratio": r["costRatio"], "from": r["costFrom"], "value": r["value"], "perYear": r["value"] * r["costRatio"]}
+                     for r in known), key=lambda f: -f["perYear"])
+    return {"perYear": per_year, "ofPortfolio": per_year / total if total else None,
+            "ofFunds": per_year / known_value if known_value else None, "funds": listed,
+            "unknown": [{"ticker": r["ticker"], "name": r["name"]} for r in funds if r.get("costRatio") is None]}
+
+
 def summary(settings, extra=None):
     """`extra` is a hypothetical lot, included in the figures but never saved."""
     base = settings.get("base_currency", "USD")
@@ -218,6 +243,8 @@ def summary(settings, extra=None):
             "region": inf.get("region"), "country": inf.get("country"), "assetClass": inf.get("assetClass"),
             "dividendYield": inf.get("dividendYield") or 0, "income": _income(t, p["shares"], price, fx, inf), "lots": p["lots"],
             "bucket": bucket_of(t), "bucketDefault": default_bucket(t),
+            # A fund's yearly cost (Yahoo's net expense ratio), taken from its price each day: what it costs to hold
+            **_cost_of(t, inf, settings),
             "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),
         })
         # Each day's exchange rate, so risk is what a holder in the base currency lived through, currency moves included
@@ -404,13 +431,14 @@ def summary(settings, extra=None):
             core_satellite["performance"] = _bucket_performance(db.q("SELECT * FROM transactions"), base, bucket_of)
 
     income = sum(r["income"] for r in rows)
+    fund_costs = _fund_costs(rows, total)
     return {
         "base": base, "positions": sorted(rows, key=lambda r: -r["value"]), "total": total, "cost": total_cost,
         "pnl": total - total_cost, "pnlPct": (total / total_cost - 1) if total_cost else None,
         # The latest day of each holding, which on a weekend is Friday for stocks but Sunday for crypto
         "dayPnl": sum(r["dayPnl"] for r in rows), "dayFrom": min((r["asOf"] for r in rows), default=None),
         "dayTo": max((r["asOf"] for r in rows), default=None), "allocation": allocation, "performance": perf, "risk": risk,
-        "warnings": warnings, "rebalance": rebalance, "rebalanceNewMoney": new_money, "coreSatellite": core_satellite, "annualIncome": income, "errors": errors,
+        "warnings": warnings, "rebalance": rebalance, "rebalanceNewMoney": new_money, "coreSatellite": core_satellite, "annualIncome": income, "fundCosts": fund_costs, "errors": errors,
         "incomplete": incomplete, "missing": missing, "_series": series,
         "realised": realised_total, "dividends": dividends_total, "totalGain": total - total_cost + realised_total + dividends_total,
         "xirr": annual, "xirrWhy": annual_why, "closed": closed,

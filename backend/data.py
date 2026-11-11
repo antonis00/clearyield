@@ -858,9 +858,10 @@ def _demo_info(ticker):
             "earningsTimestampStart": time.time() + float(rng.integers(3, 80)) * 86400, "exDividendDate": time.time() + float(rng.integers(3, 80)) * 86400,
         })
     elif qt == "ETF":
-        d.update({"dividendYield": rng.uniform(0.0, 0.04), "beta": rng.uniform(0.2, 1.2), "trailingPE": rng.uniform(12, 32)})
-    # Same raw units as Yahoo: both of these are percentages until normalised
-    pct = {k: d[k] * 100 for k in ("debtToEquity", "dividendYield") if d[k] is not None}
+        d.update({"dividendYield": rng.uniform(0.0, 0.04), "beta": rng.uniform(0.2, 1.2), "trailingPE": rng.uniform(12, 32),
+                  "netExpenseRatio": round(rng.uniform(0.0005, 0.006), 4)})
+    # Same raw units as Yahoo: these are percentages until normalised
+    pct = {k: d[k] * 100 for k in ("debtToEquity", "dividendYield", "netExpenseRatio") if d[k] is not None}
     return _normalize_info(ticker, {**d, **pct})
 
 
