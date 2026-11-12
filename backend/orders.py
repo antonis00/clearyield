@@ -24,7 +24,7 @@ import math
 import time
 
 from . import data, db, ledger, portfolio
-from .tax import LONG_DAYS
+from .tax import held_over_a_year
 
 BAND = 0.02
 MIN_ORDER = 1.0
@@ -87,7 +87,7 @@ def _pending(rows, base):
     and the rows for tickers bought but not yet held."""
     change, extra = {}, []
     for o in open_orders():
-        n = o["shares"] if o["side"] == "buy" else -o["shares"]
+        n = (o["shares"] if o["side"] == "buy" else -o["shares"]) * split_since(o)  # in today's shares, after any split since approval
         change[o["ticker"]] = change.get(o["ticker"], 0.0) + n
         if o["ticker"] not in {r["ticker"] for r in rows} | {r["ticker"] for r in extra}:
             extra.append(_row(o["ticker"], base))
@@ -245,7 +245,7 @@ def _sale_gain(ticker, shares, price):
         dates.append(lot["bought"])
         left -= take
     today = dt.date.today()
-    over = None if not dates or not all(dates) else all((today - dt.date.fromisoformat(d)).days > LONG_DAYS for d in dates)
+    over = None if not dates or not all(dates) else all(held_over_a_year(d, today.isoformat()) for d in dates)
     return {"amount": shares * price - cost, "heldOverYear": over}
 
 
@@ -391,9 +391,9 @@ def cancel(oid):
 
 
 def _cell(text):
-    """Text a spreadsheet won't run as a formula."""
+    """Text a spreadsheet won't run as a formula (a leading tab or carriage return can start one too)."""
     text = str(text or "")
-    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
 def to_csv(rows):

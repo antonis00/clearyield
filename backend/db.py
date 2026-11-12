@@ -152,12 +152,19 @@ def _mem_key(key):
     return (str(DB_PATH), key)
 
 
+# The score research's ten-year series and statements are large (over 100 MB) and read once per build: kept out of
+# the copy in memory, which held them for as long as the app ran
+_NOT_IN_MEMORY = ("long:", "plain:", "stmts:", "scorecheck:")
+
+
 def _cache_row(key):
     k = _mem_key(key)
     if k not in _mem:
         rows = q("SELECT value, ts FROM cache WHERE key=?", (key,))
         if not rows:
             return None
+        if key.startswith(_NOT_IN_MEMORY):
+            return (rows[0]["value"], rows[0]["ts"])
         _mem[k] = (rows[0]["value"], rows[0]["ts"])
     return _mem[k]
 
@@ -177,7 +184,8 @@ def cache_get_stale(key):
 def cache_set(key, value, ts=None):
     text, ts = json.dumps(value), ts or time.time()
     x("INSERT OR REPLACE INTO cache (key, value, ts) VALUES (?,?,?)", (key, text, ts))
-    _mem[_mem_key(key)] = (text, ts)
+    if not key.startswith(_NOT_IN_MEMORY):
+        _mem[_mem_key(key)] = (text, ts)
 
 
 def cache_expire(key=None):
@@ -203,8 +211,8 @@ def cache_prune(days=CACHE_KEEP_DAYS):
         try:
             gone = c.execute("DELETE FROM cache WHERE abs(ts) < ?", (cutoff,)).rowcount
             c.commit()
-            if gone:
-                c.execute("VACUUM")  # give the space back to the disk
+            if gone >= 500:
+                c.execute("VACUUM")  # give the space back to the disk (only worth rewriting the whole file for a real clear-out)
         finally:
             c.close()
     if gone:

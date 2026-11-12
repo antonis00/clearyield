@@ -25,18 +25,18 @@
 </head>
 <body>
 <aside class="side">
-  <a class="brand" href="#dashboard" data-goto="dashboard" title="Dashboard"><img class="logo" src="/static/favicon.svg" alt=""><span>ClearYield</span></a>
+  <a class="brand" href="#dashboard" data-goto="dashboard" title="Dashboard"><img class="brand-mark" src="/static/favicon.svg" alt=""><span>ClearYield</span></a>
   <nav id="nav">
-    <a data-view="dashboard" class="active">Dashboard</a>
-    <a data-view="research">Research</a>
-    <a data-view="portfolio">Portfolio</a>
-    <a data-view="opportunities">Opportunities</a>
-    <a data-view="compare">Compare</a>
-    <a data-view="screener">Screener</a>
-    <a data-view="backtest">Backtest</a>
-    <a data-view="journal">Journal &amp; Alerts</a>
-    <a data-view="settings">Settings</a>
-    <a data-view="ask" class="nav-ask"><span class="nav-ico nav-mark" aria-hidden="true">◆</span> Ask ClearYieldAI</a>
+    <a href="#dashboard" data-view="dashboard" class="active">Dashboard</a>
+    <a href="#research" data-view="research">Research</a>
+    <a href="#portfolio" data-view="portfolio">Portfolio</a>
+    <a href="#opportunities" data-view="opportunities">Opportunities</a>
+    <a href="#compare" data-view="compare">Compare</a>
+    <a href="#screener" data-view="screener">Screener</a>
+    <a href="#backtest" data-view="backtest">Backtest</a>
+    <a href="#journal" data-view="journal">Journal &amp; Alerts</a>
+    <a href="#settings" data-view="settings">Settings</a>
+    <a href="#ask" data-view="ask" class="nav-ask"><span class="nav-ico nav-mark" aria-hidden="true">◆</span> Ask ClearYieldAI</a>
   </nav>
   <div class="side-foot" id="modeBadge"></div>
 </aside>
@@ -44,7 +44,7 @@
 <main>
   <header class="top">
     <div class="searchbox">
-      <input id="globalSearch" placeholder="Research a stock, e.g. Apple or AAPL, or ask the Screener, e.g. cheap European banks" autocomplete="off">
+      <input id="globalSearch" aria-label="Search stocks, or ask the Screener" placeholder="Research a stock, e.g. Apple or AAPL, or ask the Screener, e.g. cheap European banks" autocomplete="off">
       <div id="searchResults" class="dropdown hidden"></div>
     </div>
     <div id="bgProgress" class="bg-progress hidden" tabindex="0" role="status"></div>
@@ -294,7 +294,7 @@
       <div id="hHint" class="muted sm"></div>
       <details id="pasteBox"><summary class="muted sm">Paste several at once</summary>
         <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total received in price, in the currency paid (pounds, not pence, for London stocks). If any line has a problem, nothing is added.</p>
-        <textarea id="hPaste" rows="5" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
+        <textarea id="hPaste" rows="5" aria-label="Transactions to paste, one per line" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
         <div class="form-row"><button class="btn ghost" id="btnPaste">Add these</button></div>
       </details>
     </div>
@@ -382,7 +382,7 @@
           <label>Years<input type="number" id="mcYears" value="10" min="1" max="50"></label>
           <label id="mcStartLabel">Start amount<input type="number" id="mcStart" value="10000" min="1"></label>
           <label id="mcMonthlyLabel">Add each month<input type="number" id="mcMonthly" value="0" min="0"></label>
-          <label>Yearly return to assume (%)<input type="number" id="mcExpected" placeholder="as in history" step="0.5"></label>
+          <label><span>Yearly return to assume (%) <span class="info" tabindex="0" role="img" aria-label="6% a year is a prudent long-run assumption for a mix mostly in shares. Clear the box to use the mix's own history instead: a short history with crypto or single stocks can make that wildly optimistic." data-tip="6% a year is a prudent long-run assumption for a mix mostly in shares. Clear the box to use the mix's own history instead: a short history with crypto or single stocks can make that wildly optimistic.">i</span></span><input type="number" id="mcExpected" value="6" placeholder="as in history" step="0.5"></label>
           <label>Inflation (%)<input type="number" id="mcInfl" value="2" min="0" step="0.5"></label>
           <label id="mcGoalLabel">Goal<input type="number" id="mcGoal" placeholder="optional" min="0"></label>
           <button class="btn" id="mcRun">Simulate</button>
@@ -516,6 +516,7 @@
       <div class="card">
         <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
         <div class="form-row targets"><span id="targetInputs"></span><label><span>Core target % <span class="info" tabindex="0" role="img" aria-label="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it." data-tip="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it.">i</span></span><input type="number" id="sCore" min="0" max="100" step="5"></label></div>
+        <div id="tgtClash" class="tgt-clash hidden" role="status"></div>
       </div>
       <div class="card save-card">
         <div><div id="settingsMsg">No unsaved changes</div><div class="muted sm">Theme and tiles change at once; the rest when you save.</div></div>

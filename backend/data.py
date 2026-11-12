@@ -89,6 +89,22 @@ def _df_from(obj):
 _SYMBOL = re.compile(r"[A-Za-z0-9^=.\-&]{1,24}")
 
 
+# After Yahoo fails for a key, the next RETRY_AFTER_FAIL seconds use what's known rather than asking again: during an
+# outage every page load used to wait on each failing call (yfinance waits 10 s) one after another
+RETRY_AFTER_FAIL = 120
+_failed_at = {}
+
+
+def _failing(key):
+    return time.time() - _failed_at.get(key, 0) < RETRY_AFTER_FAIL
+
+
+def _failed(key):
+    _failed_at[key] = time.time()
+    if len(_failed_at) > 5000:
+        _failed_at.clear()
+
+
 def history(ticker, period="5y"):
     """Daily OHLCV. Fetches 5y once (cached) and slices shorter periods from it."""
     if not _SYMBOL.fullmatch(ticker or ""):  # a sentence or stray text: never sent to Yahoo as a symbol
@@ -96,12 +112,16 @@ def history(ticker, period="5y"):
     fetch_period = "max" if period in ("max", "10y") else "5y"
     key = f"hist:{ticker}:{fetch_period}"
     cached = db.cache_get(key, TTL["history"])
+    if cached is None and _failing(key) and (stale := db.cache_get_stale(key)) is not None:
+        _stale.add(ticker)
+        return slice_period(_df_from(stale), period)
     if cached is None:
         try:
             df = _demo_history(ticker) if DEMO else _with_recent_sessions(ticker, _fetch_history(ticker, fetch_period))
             db.cache_set(key, _df_to(df))
             _stale.discard(ticker)
         except DataError:
+            _failed(key)
             stale = db.cache_get_stale(key)
             if stale is None:
                 raise
@@ -176,6 +196,31 @@ def _fetch_history(ticker, period):
         idx = idx.tz_localize(None)
     df.index = idx.normalize()
     df = df[~df.index.duplicated(keep="last")].dropna(subset=["Close"])
+    return repair_glitches(df)
+
+
+GLITCH = 3.0  # a single day this many times away from the day before, with the next day back within GLITCH_BACK of it
+GLITCH_BACK = 1.3
+
+
+def repair_glitches(df):
+    """Yahoo's series sometimes carry one day in the wrong unit (SBK.JO at 228.8 between days near 23,000; Kuwaiti
+    banks at a thousandth): a fall of 99% and back, which made a one-year drawdown -99% and the risk score 0. Such a
+    day (more than GLITCH times away from the day before, the day after back within GLITCH_BACK of it) takes the day
+    before's close. A real crash doesn't reverse in a day like that."""
+    if len(df) < 3:
+        return df
+    c = df["Close"]
+    prev, nxt = c.shift(1), c.shift(-1)
+    jump = (c / prev).where(c / prev >= 1, prev / c)
+    back = (nxt / prev).where(nxt / prev >= 1, prev / nxt)
+    bad = (jump > GLITCH) & (back < GLITCH_BACK)
+    if bad.any():
+        df = df.copy()
+        for col in ("Open", "High", "Low", "Close"):
+            if col in df:
+                df.loc[bad, col] = prev[bad]
+        log.info("repaired %d day(s) Yahoo had in the wrong unit", int(bad.sum()))
     return df
 
 
@@ -295,6 +340,8 @@ def _info(ticker):
         out = _demo_info(ticker)
     else:
         raw = {}
+        if _failing(key) and (stale := db.cache_get_stale(key)):
+            return stale
         try:
             raw = _yf().Ticker(ticker).info or {}
         except Exception as e:
@@ -302,6 +349,7 @@ def _info(ticker):
         # Yahoo answers a rate limit or an unknown quote with an almost empty dict. Caching that
         # would blank the fundamentals for hours, so fall back to old data and retry next time.
         if not any(raw.get(k) is not None for k in INFO_KEYS):
+            _failed(key)
             return db.cache_get_stale(key) or _normalize_info(ticker, {k: None for k in INFO_KEYS})
         out = {k: raw.get(k) for k in INFO_KEYS}
         out = _normalize_info(ticker, out)
@@ -616,6 +664,12 @@ def splits(ticker):
         log.warning("splits failed for %s: %s", ticker, e)
         stale = db.cache_get_stale(key)
         return [tuple(x) for x in stale] if stale else []  # not cached, so it's asked again next time
+    stale = db.cache_get_stale(key)
+    if not out and stale:
+        # yfinance answers a failed call with an empty list, not an error: known splits are kept (losing them would
+        # leave lots bought before a split unrestated), and Yahoo is asked again in an hour
+        db.cache_set(key, stale, ts=time.time() - 23 * 3600)
+        return [tuple(x) for x in stale]
     db.cache_set(key, out)
     return out
 
@@ -652,7 +706,12 @@ def dividend_payments(ticker):
             if cached is None:
                 return None  # not cached, so it's asked again next time
         else:
-            db.cache_set(key, cached)
+            stale = db.cache_get_stale(key)
+            if not cached and stale:  # an empty answer from a failed call never replaces known payments (asked again in an hour)
+                cached = stale
+                db.cache_set(key, cached, ts=time.time() - 23 * 3600)
+            else:
+                db.cache_set(key, cached)
     return [(d, v) for d, v in cached]
 
 

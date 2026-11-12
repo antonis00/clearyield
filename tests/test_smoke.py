@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 os.environ["CLEARYIELD_DEMO"] = "1"
+os.environ["CLEARYIELD_TESTING"] = "1"  # lets the test client's "testserver" host through, which the real app refuses
 os.environ["CLEARYIELD_DB"] = str(Path(tempfile.mkdtemp()) / "test.db")
 os.environ.pop("ANTHROPIC_API_KEY", None)
 for _k in ("AI_BASE_URL", "AI_MODEL", "AI_API_KEY", "AI_TIMEOUT", "AI_THINKING"):
@@ -442,10 +443,10 @@ def test_every_score_shows_its_thresholds():
     loss = scoring.factor_breakdown({"assetClass": "Stocks", "profitMargins": -0.1}, close)["value"][0]
     assert loss["fmt"] == "loss" and loss["score"] == 0.0
 
-    # Coverage counts real metrics: 19 for stocks, 5 for everything else
+    # Coverage counts real metrics: 18 for stocks (beta is shown, not scored), 5 for everything else
     ev = scoring.evaluate(info, close)
-    assert ev["metricsTotal"] == 19 and ev["metricsScored"] == sum(p["score"] is not None for p in by_label.values())
-    assert ev["coverage"] == round(ev["metricsScored"] / 19, 2)
+    assert ev["metricsTotal"] == 18 and ev["metricsScored"] == sum(p["score"] is not None for p in by_label.values())
+    assert ev["coverage"] == round(ev["metricsScored"] / 18, 2)
     etf = scoring.evaluate({"assetClass": "ETFs"}, close)
     assert etf["metricsTotal"] == 5 and etf["metricsScored"] == 5 and etf["coverage"] == 1.0
     assert etf["factors"]["value"] is None
@@ -1573,6 +1574,91 @@ def test_compare_handles_different_calendars_and_histories():
     first_new = next(v for v in d["series"]["NEW"] if v is not None and v == v)
     assert first_new == 100.0
     assert d["series"]["NEW"][0] != d["series"]["NEW"][0] or d["series"]["NEW"][0] is None
+
+
+def test_review_money_figures():
+    """From the independent review: the benchmark comparison in money ("the same money in VWCE"), a recorded price far
+    from the day's range queried, a sale on the anniversary of its purchase not "held over a year"."""
+    import datetime as dt
+    from backend import data, db, main, portfolio, tax
+    _reset()
+    with TestClient(app) as c:
+        close = data.history("SPY", "1y")["Close"]
+        d0, d1 = close.index[-200], close.index[-100]
+        r = c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": d0.strftime("%Y-%m-%d"), "shares": 2, "price": float(close.loc[d0])})
+        assert r.status_code == 200 and r.json()["warning"] is None  # the day's own close: no query
+        far = c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": d1.strftime("%Y-%m-%d"), "shares": 1, "price": float(close.loc[d1]) / 3})
+        assert far.status_code == 200 and "check the price" in far.json()["warning"]
+        assert c.delete(f"/api/transactions/{far.json()['id']}").status_code == 200  # saved as entered; removed for the comparison below
+        c.post("/api/settings", json={"base_currency": "USD", "benchmark": "SPY"})
+        s = portfolio.summary(db.get_settings())
+        # Every purchase into the benchmark itself, on the same dates: it ends where the portfolio is
+        assert s["sameMoney"]["ticker"] == "SPY" and abs(s["sameMoney"]["value"] - s["total"]) / s["total"] < 0.01, (s["sameMoney"], s["total"])
+        assert s["risk"]["since"] == d0.strftime("%Y-%m-%d")
+    assert not tax.held_over_a_year("2027-03-01", "2028-03-01") and tax.held_over_a_year("2027-03-01", "2028-03-02")
+    assert not tax.held_over_a_year("2024-02-29", "2025-03-01") and tax.held_over_a_year("2024-02-29", "2025-03-02")
+
+
+def test_review_data_safety():
+    """From the review: an alert fires once however many checks run at once; an empty answer never overwrites known
+    splits; a day Yahoo has in the wrong unit is repaired; Yahoo isn't asked again for two minutes after failing."""
+    import pandas as pd
+    import threading
+    from backend import data, db, insights
+    _reset()
+    db.x("INSERT INTO alerts (ticker, kind, value, active, created) VALUES ('AAPL', 'price_above', 1, 1, 0)")
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(len(insights.check_alerts(db.get_settings())))) for _ in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sum(got) == 1, got
+    # Known splits survive an empty answer from a failed call
+    real_demo, real_yf = data.DEMO, data._yf
+    db.cache_set("splits:ZZZ", [["2020-08-31", 4.0]], ts=1)
+
+    class Empty:
+        def Ticker(self, t):
+            return type("T", (), {"splits": pd.Series(dtype=float)})()
+    data.DEMO, data._yf = False, lambda: Empty()
+    try:
+        assert data.splits("ZZZ") == [("2020-08-31", 4.0)]
+    finally:
+        data.DEMO, data._yf = real_demo, real_yf
+    idx = pd.bdate_range("2025-04-21", periods=5)
+    bad = pd.DataFrame({k: [23000, 23100, 228.8, 23050, 23200] for k in ("Open", "High", "Low", "Close")}, index=idx)
+    assert data.repair_glitches(bad)["Close"].tolist() == [23000, 23100, 23100, 23050, 23200]
+    crash = pd.DataFrame({k: [100, 40, 38, 41] for k in ("Open", "High", "Low", "Close")}, index=pd.bdate_range("2025-01-01", periods=4))
+    assert data.repair_glitches(crash)["Close"].tolist() == [100, 40, 38, 41]
+    data._failed("hist:QQQ:5y")
+    assert data._failing("hist:QQQ:5y") and not data._failing("hist:QQQ:max")
+    data._failed_at.clear()
+
+
+def test_review_scoring_rules():
+    """From the review: beta is shown but not scored (Yahoo measures it against a US index); insurers aren't scored on
+    cash flow, margins or balance sheet; negative equity with debt scores as the most indebted, not left out."""
+    from backend import scoring
+    import pandas as pd
+    close = pd.Series([100 + i * 0.1 for i in range(300)], index=pd.bdate_range("2025-01-01", periods=300))
+    base = {"assetClass": "Stocks", "trailingPE": 12, "priceToBook": 1.5, "returnOnEquity": 0.15, "beta": 0.3, "operatingMargins": 0.4,
+            "profitMargins": 0.3, "debtToEquity": 0.5, "currentRatio": 1.6, "enterpriseToEbitda": 6, "freeCashflow": 1e9, "marketCap": 1e10}
+    b = scoring.factor_breakdown({**base, "industry": "Insurance - Life"}, close)
+    beta = next(p for p in b["risk"] if p["label"] == "Beta")
+    assert beta["score"] is None and "US index" in beta["note"]
+    unscored = {p["label"].split(" (")[0] for k in ("value", "quality") for p in b[k] if p["score"] is None}
+    assert {"EV / EBITDA", "FCF yield", "Operating margin", "Net margin", "Debt / Equity", "Current ratio"} <= unscored, unscored
+    assert next(p for p in b["quality"] if p["label"] == "Return on equity")["score"] is not None
+    neg = scoring.factor_breakdown({**base, "industry": "Restaurants", "debtToEquity": None, "priceToBook": -500, "totalDebt": 5e10}, close)
+    de = next(p for p in neg["quality"] if p["label"].startswith("Debt / Equity"))
+    assert de["score"] == 0.0 and de["fmt"] == "negative equity"
+
+
+def test_review_security_headers():
+    """From the review: the page can't be framed by another site and loads nothing it doesn't need from outside."""
+    with TestClient(app) as c:
+        h = c.get("/").headers
+        assert h["x-frame-options"] == "DENY" and h["x-content-type-options"] == "nosniff" and "frame-ancestors 'none'" in h["content-security-policy"]
+        assert "img-src 'self' data: blob:" in h["content-security-policy"] and h["referrer-policy"] == "no-referrer"
 
 
 def test_a_stopped_question_always_says_why():
@@ -3698,7 +3784,7 @@ def test_ai_providers():
             for reply in ((500, {"error": "boom"}, 0), _chat("<think>only thinking</think>"), (200, {"choices": []}, 0)):
                 llm.replies = [reply]
                 b = ai.brief(ctx)
-                assert b["source"] == "rules" and "AI call failed" in b["text"] and "composite score 60" in b["text"], b
+                assert b["source"] == "rules" and "brief isn't available" in b["text"] and "composite score 60" in b["text"], b
         with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL="http://127.0.0.1:9/v1", AI_MODEL="m"):
             assert ai.brief(ctx)["source"] == "rules"
         llm.replies = [(200, {"choices": [{"message": {"content": "late"}}]}, 1.5)]
@@ -4144,7 +4230,7 @@ def test_intermediates_must_chain_to_a_trusted_root():
 
 def _core(check):
     """A figure check without its lists of worked-out figures and wrong directions, which have their own test."""
-    return {k: v for k, v in check.items() if k not in ("derived", "direction")}
+    return {k: v for k, v in check.items() if k not in ("derived", "direction", "quotes")}
 
 
 def test_figure_check_signs_points_and_direction():
