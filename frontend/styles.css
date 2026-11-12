@@ -398,7 +398,7 @@ main:has(#view-ask:not(.hidden)) { padding-bottom: 0; }
 #rOwn td .sub { display: block; font-size: 11px; color: var(--muted); }
 .st.quote { color: var(--up); cursor: default; }
 #nav { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
-nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu text, like the logo */
+nav a.nav-ask { margin-top: auto; } /* at the bottom of the menu, lined up with the other links */
 .nav-ico { display: inline-block; width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
 .nav-mark { width: auto; margin-right: 2px; color: var(--accent); line-height: 16px; vertical-align: 0; } /* the glyph sits low in its box; level with the text */
 /* Sidebar alignment: the menu text, Ask's mark and the status icons start 15px in (12px padding + the
