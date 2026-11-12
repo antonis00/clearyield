@@ -109,7 +109,13 @@ function modal(html, onSubmit) {
   m.onclick = (e) => { if (e.target === m) close(); };
   $$("[data-close]", m).forEach((b) => b.onclick = close);
   const f = $("form", m);
-  if (f) f.onsubmit = async (e) => { e.preventDefault(); try { await onSubmit(new FormData(f)); close(); } catch (err) { toast(err.message); } };
+  if (f) f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (f.dataset.busy) return;  // a double click or a second Enter mustn't send it twice
+    f.dataset.busy = "1"; $$("button:not([data-close])", f).forEach((b) => { b.disabled = true; });
+    try { await onSubmit(new FormData(f)); close(); } catch (err) { toast(err.message); }
+    finally { delete f.dataset.busy; $$("button", f).forEach((b) => { b.disabled = false; }); }
+  };
 }
 
 /* ---------------------------------------------------------------- routing */
@@ -357,7 +363,7 @@ async function loadDashboard() {
     .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
-const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts and journal reminders; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
+const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts, journal reminders and approved orders not yet marked done; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
 $("#digestInfo").innerHTML = infoIcon(DIGEST_RULES);
 // Two tabs: Highlights (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
 // stocks). The choice is remembered; switching only redraws, it doesn't ask the server again.
@@ -1301,6 +1307,9 @@ async function loadPortfolio() {
   let p;
   try { p = await api("/api/portfolio"); } catch (e) { t.innerHTML = esc(e.message); return; }
   const b = p.base;
+  $("#ordBase").textContent = `(${b})`;
+  ordDraft = null; ordPicks = {}; $("#ordPlan").innerHTML = "";  // a draft from before this change in holdings is out of date
+  loadOrders();
   $("#pfIncomplete").classList.toggle("hidden", !p.incomplete);
   if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
   $("#pfKpis").innerHTML = [
@@ -1532,6 +1541,117 @@ async function loadTax(year) {
   $("#taxNotes").innerHTML = [...(t.approximate.length ? [`Approximate for ${t.approximate.join(", ")}: a date's exchange rate was missing, so today's was used.`] : []), ...t.caveats]
     .map((c) => `<li>${esc(c)}</li>`).join("");
 }
+
+/* ---------------------------------------------------------------- orders */
+// Prepared from your targets (orders.py), approved by you, placed by you at your broker, then marked done with the
+// price you got, which records it in the ledger. Nothing here trades.
+const ORDER_RULES = "How orders are prepared: new money goes to the asset classes below target, each in proportion to how far below it is (none to a class at or over target). Rebalancing by selling, only if you tick it, brings every class to its target once one has drifted over 2 points (inside that, nothing is sold). Buys never spend more than the new money plus what the sales bring in. Within a class, money goes to what you already hold there, in proportion to its value; a class with nothing held gets an order only once you enter what to buy there (it must be of that class; the app never picks one for you). Shares round down to whole ones unless you allow fractions (crypto is always fractional), and orders under 1 of your currency are dropped. Orders you approved and haven't marked done count as if filled, so preparing again doesn't repeat them. The limit price is the latest close: change it to what you want to pay.";
+// Quantities in full (crypto to 6 or more places), never rounded up past what was planned or held
+const sharesFmt = (v) => (isNum(v) ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 8 }) : "—");
+const localDay = (ts) => new Date(ts * 1000).toLocaleDateString("en-CA");
+let ordDraft = null, ordPicks = {};  // ordPicks: {asset class: ticker} for classes you hold nothing in
+async function prepareOrders() {
+  const el = $("#ordPlan"); loading(el, "Working out orders…");
+  try {
+    ordDraft = await api("/api/orders/plan", { method: "POST", body: { new_money: Number($("#ordMoney").value || 0), sell: $("#ordSell").checked, fractional: $("#ordFrac").checked, picks: ordPicks } });
+  } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
+  renderDraft();
+}
+function renderDraft() {
+  const d = ordDraft, el = $("#ordPlan"), b = d.base;
+  const notes = d.notes.map((n) => `<li>${esc(n)}</li>`).join("");
+  // A class under target with nothing held: you name what to buy there, then the draft is worked out again
+  const picks = (d.empty || []).length ? `<div class="ord-picks">${d.empty.map((e) => `<div class="form-row inline">
+      <label>${esc(e.assetClass)}: about ${money(e.amount, b, 0)}, and you hold nothing there. Buy
+        <input class="ord-pick" data-class="${esc(e.assetClass)}" value="${esc(e.pick || "")}" placeholder="${e.assetClass === "Crypto" ? "e.g. BTC-USD" : e.assetClass === "ETFs" ? "e.g. VWCE.DE" : "ticker"}" aria-label="Ticker to buy for ${esc(e.assetClass)}" autocomplete="off" spellcheck="false"></label>
+      <button type="button" class="btn ghost sm ord-pick-go">${e.pick ? "Change" : "Use it"}</button></div>`).join("")}
+    <div class="muted sm">Your choice: the app doesn't pick one for you. Look one up with the search box, Opportunities or the Screener.</div></div>` : "";
+  const bindPicks = () => {
+    const go = () => {
+      ordPicks = Object.fromEntries($$(".ord-pick", el).map((i) => [i.dataset.class, i.value.trim().toUpperCase()]).filter(([, t]) => t));
+      prepareOrders();
+    };
+    $$(".ord-pick-go", el).forEach((btn) => { btn.onclick = go; });
+    $$(".ord-pick", el).forEach((i) => { i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }; });
+  };
+  if (!d.orders.length) {
+    el.innerHTML = `${picks}<ul class="signals">${notes || "<li>Nothing to do.</li>"}</ul><div class="ord-actions"><button type="button" class="btn ghost ord-discard">Discard</button></div>`;
+    bindPicks(); $(".ord-discard", el).onclick = discardDraft; return;
+  }
+  const gain = (o) => !o.gain ? "" : `<div class="ord-gain">gain about <span class="${cls(o.gain.amount)}">${priceOf(o.gain.amount, o)}</span>${o.gain.heldOverYear ? ", held over a year" : o.gain.heldOverYear === false ? ", held under a year" : ""}</div>`;
+  el.innerHTML = `<p class="muted sm">${esc(d.rule)} ${infoIcon(ORDER_RULES)}</p>
+    <div class="tablewrap"><table class="ord-table"><thead><tr><th></th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit price</th><th class="num">About (${esc(b)})</th><th>Why</th></tr></thead><tbody>
+    ${d.orders.map((o, i) => `<tr data-i="${i}"><td><input type="checkbox" class="ord-on" checked aria-label="Include this order"></td>
+      <td><b class="${o.side === "buy" ? "up" : "down"}">${o.side === "buy" ? "Buy" : "Sell"}</b></td>
+      <td data-stock="${esc(o.ticker)}"><span class="sym">${esc(o.ticker)}</span>${o.stale ? ' <span class="pill warn">old price</span>' : ""}<span class="sub">${esc(o.name || "")}</span></td>
+      <td class="num"><input type="number" class="ord-shares" min="0" step="any" value="${o.shares}" aria-label="Shares"></td>
+      <td class="num"><input type="number" class="ord-limit" min="0" step="any" value="${+o.limitPrice.toFixed(4)}" aria-label="Limit price"> <span class="muted sm">${esc(o.currency)}</span></td>
+      <td class="num">${money(o.value, b, 0)}${gain(o)}</td><td class="sm">${esc(o.reason)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="ord-after muted sm">After these: ${d.classes.filter((c) => c.target > 0 || c.now > 0 || c.after > 0).map((c) => `${esc(c.assetClass)} ${pct(c.now, 0, false)} → ${pct(c.after, 0, false)} (target ${pct(c.target, 0, false)})`).join(" · ")}.
+      ${d.left >= 0.5 ? `About ${money(d.left, b, 0)} of ${d.orders.some((o) => o.side === "sell") ? "the new money and the sales" : "the new money"} is left unspent.` : ""}
+      ${d.orders.some((o) => o.side === "sell") && d.orders.some((o) => o.side === "buy") ? "Place the sales first if the buys need their cash." : ""}</div>
+    ${notes ? `<ul class="signals">${notes}</ul>` : ""}${picks}
+    <div class="ord-actions"><span class="muted sm">Approving saves them here to place at your broker. Sales may be taxed; fees aren't included.</span>
+      <button type="button" class="btn ghost ord-discard">Discard</button><button class="btn" id="ordApprove">Approve ticked orders</button></div>`;
+  $("#ordApprove").onclick = approveOrders;
+  $(".ord-discard", el).onclick = discardDraft;
+  bindPicks();
+}
+// Back to where you started: the suggestion is dropped (nothing was saved), the amount and switches stay
+function discardDraft() { ordDraft = null; ordPicks = {}; $("#ordPlan").innerHTML = ""; }
+async function approveOrders() {
+  const picked = $$("#ordPlan tbody tr").filter((tr) => $(".ord-on", tr).checked).map((tr) => {
+    const o = ordDraft.orders[+tr.dataset.i];
+    return { ticker: o.ticker, side: o.side, shares: Number($(".ord-shares", tr).value), limitPrice: Number($(".ord-limit", tr).value), reason: o.reason };
+  });
+  if (!picked.length) { toast("Tick at least one order to approve."); return; }
+  if (!confirm(`Approve ${picked.length} order${picked.length > 1 ? "s" : ""}? Nothing is traded: you place ${picked.length > 1 ? "them" : "it"} at your broker.`)) return;
+  try { await api("/api/orders", { method: "POST", body: { orders: picked } }); } catch (e) { toast(e.message); return; }
+  ordDraft = null; $("#ordPlan").innerHTML = ""; toast("Orders approved"); loadOrders();
+}
+async function loadOrders() {
+  const el = $("#ordOpen");
+  let d;
+  try { d = await api("/api/orders"); } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
+  const open = d.open.length ? `<h4>Approved, to place at your broker <a class="btn ghost sm" href="/api/orders.csv" download>Download CSV</a></h4>
+    <div class="tablewrap"><table class="ord-table"><thead><tr><th>Approved</th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit</th><th class="num">Now</th><th></th></tr></thead><tbody>
+    ${d.open.map((o) => `<tr><td>${esc(o.approvedOn)}</td><td><b class="${o.side === "buy" ? "up" : "down"}">${o.side === "buy" ? "Buy" : "Sell"}</b></td>
+      <td data-stock="${esc(o.ticker)}"><span class="sym">${esc(o.ticker)}</span></td><td class="num">${sharesFmt(o.fillShares)}${o.split !== 1 ? ` <span class="pill warn" title="Split since you approved: ${sharesFmt(o.shares)} then">split</span>` : ""}</td><td class="num">${priceOf(o.fillPrice, o)}</td>
+      <td class="num">${o.price != null ? priceOf(o.price, o) : "—"}${o.moved ? ` <span class="pill warn" title="The price has moved more than ${pct(d.movedAt, 0, false)} since you approved: check the limit">${pct(o.move)}</span>` : ""}</td>
+      <td class="row-actions"><button class="btn sm ord-done" data-id="${o.id}">Done</button> <button class="btn ghost sm ord-cancel" data-id="${o.id}">Cancel</button></td></tr>`).join("")}
+    </tbody></table></div>` : "";
+  const closed = d.closed.length ? `<details class="ord-closed"><summary class="muted sm">Recent done and cancelled (${d.closed.length})</summary><table><tbody>
+    ${d.closed.map((o) => `<tr><td>${esc(o.status === "done" ? o.fill_date : localDay(o.closed))}</td><td>${o.side === "buy" ? "Buy" : "Sell"} ${esc(o.ticker)}</td>
+      <td class="num">${o.status === "done" ? `${sharesFmt(o.fill_shares)} at ${priceOf(o.fill_price, o)}` : `${sharesFmt(o.shares)}`}</td><td class="muted sm">${o.status === "done" ? "done, in the ledger" : "cancelled"}</td></tr>`).join("")}
+    </tbody></table></details>` : "";
+  el.innerHTML = open + closed;
+  $$(".ord-done", el).forEach((btn) => { btn.onclick = () => markOrderDone(d.open.find((o) => o.id === +btn.dataset.id)); });
+  $$(".ord-cancel", el).forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm("Cancel this order? Do it at your broker too if you placed it.")) return;
+      try { await api(`/api/orders/${btn.dataset.id}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); return; }
+      loadOrders();
+    };
+  });
+}
+function markOrderDone(o) {
+  const today = new Date().toLocaleDateString("en-CA");
+  modal(`<h3>${o.side === "buy" ? "Bought" : "Sold"} ${esc(o.ticker)}</h3><p class="muted sm">What your broker filled. It goes into your transactions; a fee is added to a purchase's cost or taken from a sale's proceeds.</p>
+    <form><div class="form-row"><label>Shares <input type="number" name="shares" min="0" step="any" value="${o.fillShares}" required></label>
+      <label>Price (${esc(o.currency)}) <input type="number" name="price" min="0" step="any" value="${+o.fillPrice.toFixed(6)}" required></label></div>
+    <div class="form-row"><label>Date <input type="date" name="date" value="${today}" min="${esc(o.approvedOn)}" max="${today}" required></label>
+      <label>Fee (${esc(o.currency ? (MAIN_UNIT[o.currency] || o.currency) : "")}) <input type="number" name="fee" min="0" step="any" placeholder="0"></label></div>
+    <div class="modal-actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn">Record</button></div></form>`,
+  async (f) => {
+    await api(`/api/orders/${o.id}/done`, { method: "POST", body: { shares: f.get("shares"), price: f.get("price"), date: f.get("date"), fee: f.get("fee") } });
+    toast("Recorded in your transactions"); loadPortfolio();
+  });
+}
+
+$("#ordForm").onsubmit = (e) => { e.preventDefault(); prepareOrders(); };
+// A switch acts at once: a draft on show is worked out again, so it never disagrees with the switches
+["#ordFrac", "#ordSell"].forEach((s) => { $(s).onchange = () => { if (ordDraft) prepareOrders(); }; });
 
 /* ---------------------------------------------------------------- fund costs */
 // Each fund's yearly cost: yours, from its factsheet, stands over Yahoo's (which is missing for many European funds)

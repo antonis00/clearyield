@@ -161,7 +161,7 @@ def _reset():
     """Clear the user tables so a test starts from an empty app."""
     from backend import db
     db.init()
-    for table in ("transactions", "watchlist", "journal", "alerts", "settings", "score_history", "buckets"):
+    for table in ("transactions", "watchlist", "journal", "alerts", "settings", "score_history", "buckets", "orders"):
         db.x(f"DELETE FROM {table}")
 
 
@@ -480,7 +480,7 @@ def test_backup_restores_everything_or_nothing():
         r = c.get("/api/backup")
         assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
         backup = r.json()
-        assert backup["version"] == 4 and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
+        assert backup["version"] == db.BACKUP_VERSION and backup["transactions"][0]["note"] == "core" and backup["settings"]["base_currency"] == "EUR"
         assert "cache" not in backup  # market data can always be downloaded again
 
         before = {t: db.q(f"SELECT * FROM {t}") for t in ("watchlist", "transactions", "journal", "alerts", "settings")}
@@ -3435,7 +3435,7 @@ def test_buckets_are_in_backups():
     with TestClient(app) as c:
         db.x("INSERT INTO buckets (ticker, bucket) VALUES ('NVDA', 'core')")
         backup = c.get("/api/backup").json()
-        assert backup["version"] == 4 and backup["buckets"] == [{"ticker": "NVDA", "bucket": "core"}]
+        assert backup["version"] == db.BACKUP_VERSION and backup["buckets"] == [{"ticker": "NVDA", "bucket": "core"}]
         db.x("DELETE FROM buckets")
         assert c.post("/api/backup/restore", json=backup).status_code == 200
         assert db.q("SELECT * FROM buckets") == [{"ticker": "NVDA", "bucket": "core"}]
@@ -4885,6 +4885,232 @@ def test_ask_searches_the_web():
         agent.TAVILY_URL = url_before
         llm.close(); web.close()
         _reset()
+
+
+def test_orders_prepared_approved_and_done():
+    """Orders drafted from the targets by the stated rules (worked out by hand here), approved by you, refused when a
+    sale is for more than you hold, marked done into the ledger with the fee in the price, cancelled, listed for the
+    broker, reminded of in the digest and kept in backups. Nothing trades."""
+    import datetime as dt
+    import math as m
+    from backend import data, db, orders
+    _reset()
+    with TestClient(app) as c:
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        assert post(ticker="AAPL", kind="buy", date="2024-01-10", shares=10, price=100).status_code == 200
+        assert post(ticker="MSFT", kind="buy", date="2024-01-10", shares=4, price=200).status_code == 200
+        assert post(ticker="SPY", kind="buy", date="2024-01-10", shares=10, price=50).status_code == 200
+        c.post("/api/settings", json={"base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}})
+        px = {t: float(data.history(t, "1y")["Close"].iloc[-1]) for t in ("AAPL", "MSFT", "SPY")}
+        va, vm, vs = 10 * px["AAPL"], 4 * px["MSFT"], 10 * px["SPY"]
+        total, money = va + vm + vs, 1000.0
+
+        # New money: to the classes below target, in proportion to how far below; within a class by value; whole shares, down
+        plan = c.post("/api/orders/plan", json={"new_money": money}).json()
+        short = {"Stocks": max(0, 0.5 * (total + money) - va - vm), "ETFs": max(0, 0.5 * (total + money) - vs)}
+        want = {"AAPL": money * short["Stocks"] / sum(short.values()) * va / (va + vm),
+                "MSFT": money * short["Stocks"] / sum(short.values()) * vm / (va + vm), "SPY": money * short["ETFs"] / sum(short.values())}
+        expected = {t: m.floor(a / px[t] + 1e-9) for t, a in want.items() if a >= 1 and m.floor(a / px[t] + 1e-9) * px[t] >= 1}
+        got = {o["ticker"]: o["shares"] for o in plan["orders"]}
+        assert got == expected and all(o["side"] == "buy" for o in plan["orders"]), (got, expected)
+        assert all("target" in o["reason"] and o["limitPrice"] == px[o["ticker"]] for o in plan["orders"])
+        assert abs(plan["spend"] - sum(n * px[t] for t, n in expected.items())) < 1e-6 and abs(plan["left"] - (money - plan["spend"])) < 1e-6
+        frac = c.post("/api/orders/plan", json={"new_money": money, "fractional": True}).json()
+        assert all(abs(o["value"] - want[o["ticker"]]) < px[o["ticker"]] * 1e-4 + 1e-9 for o in frac["orders"]), "fractions down to 4 places"
+        assert c.post("/api/orders/plan", json={"new_money": -5}).status_code == 400
+        assert c.post("/api/orders/plan", json={}).json()["orders"] == [], "no money and no selling: nothing to do"
+
+        # Selling too: every class to its target, the sale's gain first in, first out
+        sell = c.post("/api/orders/plan", json={"sell": True, "fractional": True}).json()
+        gap = 0.5 * total - (va + vm)
+        sides = {o["ticker"]: o["side"] for o in sell["orders"]}
+        assert sides.get("SPY") == ("sell" if gap > 0 else "buy") and sides.get("AAPL") == ("buy" if gap > 0 else "sell"), sides
+        for o in sell["orders"]:
+            if o["side"] == "sell":
+                cost = {"AAPL": 100, "MSFT": 200, "SPY": 50}[o["ticker"]]
+                assert abs(o["gain"]["amount"] - o["shares"] * (px[o["ticker"]] - cost)) < 1e-6 and o["gain"]["heldOverYear"] is True
+
+        # Approving: only what you send; a sale beyond what's held, counting approved sales, is refused
+        assert c.post("/api/orders", json={"orders": []}).status_code == 400
+        assert c.post("/api/orders", json={"orders": [{"ticker": "AAPL", "side": "short", "shares": 1, "limitPrice": 1}]}).status_code == 400
+        assert c.post("/api/orders", json={"orders": [{"ticker": "AAPL", "side": "buy", "shares": 0, "limitPrice": 1}]}).status_code == 400
+        assert c.post("/api/orders", json={"orders": [{"ticker": "AAPL", "side": "sell", "shares": 11, "limitPrice": 1}]}).status_code == 400
+        r = c.post("/api/orders", json={"orders": [{"ticker": "AAPL", "side": "sell", "shares": 6, "limitPrice": 150, "reason": "test"},
+                                                   {"ticker": "SPY", "side": "buy", "shares": 3, "limitPrice": 40}]})
+        assert r.status_code == 200 and r.json()["approved"] == 2
+        refused = c.post("/api/orders", json={"orders": [{"ticker": "AAPL", "side": "sell", "shares": 5, "limitPrice": 150}]})
+        assert refused.status_code == 400 and "counting approved sales" in refused.json()["detail"], "6 approved + 5 is more than 10"
+        assert db.q("SELECT COUNT(*) n FROM transactions")[0]["n"] == 3, "approving records nothing: you haven't placed it yet"
+        listing = c.get("/api/orders").json()
+        assert [(o["side"], o["ticker"]) for o in listing["open"]] == [("sell", "AAPL"), ("buy", "SPY")]
+        spy = listing["open"][1]
+        assert abs(spy["move"] - (px["SPY"] / 40 - 1)) < 1e-9 and spy["moved"] == (abs(px["SPY"] / 40 - 1) > orders.MOVED)
+        csv_text = c.get("/api/orders.csv").text
+        assert csv_text.splitlines()[0].startswith("Order,Action,Symbol") and ",SELL,AAPL,6,LIMIT,150," in csv_text
+        digest = [i["text"] for i in c.get("/api/digest").json()["items"] if i.get("kind") == "orders"]
+        assert digest and digest[0].startswith("2 approved orders not marked done yet (sell AAPL, buy SPY"), digest
+
+        # Done: into the ledger, the fee in the price (a sale brings in less); again is refused; the ledger's own check holds
+        sale_id, buy_id = listing["open"][0]["id"], spy["id"]
+        assert c.post(f"/api/orders/{sale_id}/done", json={"shares": 6, "price": 150, "date": "2099-01-01"}).status_code == 400, "no future dates"
+        assert c.post(f"/api/orders/{sale_id}/done", json={"shares": "x"}).status_code == 400
+        d = c.post(f"/api/orders/{sale_id}/done", json={"shares": 6, "price": 150, "date": dt.date.today().isoformat(), "fee": 3})
+        assert d.status_code == 200, d.text
+        tx = db.q("SELECT * FROM transactions WHERE id=?", (d.json()["transaction"],))[0]
+        assert tx["kind"] == "sell" and tx["shares"] == 6 and abs(tx["price"] - (6 * 150 - 3) / 6) < 1e-12 and tx["note"] == f"Order #{sale_id}, fee 3 USD included in the price"
+        assert c.post(f"/api/orders/{sale_id}/done", json={}).status_code == 400 and c.post(f"/api/orders/{sale_id}/cancel").status_code == 400
+        assert c.post("/api/orders/9999/cancel").status_code == 400
+        assert c.post(f"/api/orders/{buy_id}/cancel").status_code == 200
+        assert c.get("/api/orders").json()["open"] == [] and not [i for i in c.get("/api/digest").json()["items"] if i.get("kind") == "orders"]
+        closed = c.get("/api/orders").json()["closed"]
+        assert {o["status"] for o in closed} == {"done", "cancelled"} and next(o for o in closed if o["status"] == "done")["fill_price"] == 150
+
+        # A fee in pounds for a stock quoted in pence
+        assert post(ticker="AZN.L", kind="buy", date="2024-01-10", shares=2, price=10000).status_code == 200
+        c.post("/api/orders", json={"orders": [{"ticker": "AZN.L", "side": "buy", "shares": 2, "limitPrice": 11000}]})
+        azn = c.get("/api/orders").json()["open"][0]
+        assert azn["currency"] == "GBp"
+        tx = db.q("SELECT * FROM transactions WHERE id=?", (c.post(f"/api/orders/{azn['id']}/done", json={"fee": 1}).json()["transaction"],))[0]
+        assert abs(tx["price"] - (2 * 11000 + 100) / 2) < 1e-9 and "fee 1 GBP" in tx["note"]
+
+        # Backups carry orders; an older backup without them still restores
+        backup = c.get("/api/backup").json()
+        assert backup["version"] == db.BACKUP_VERSION == 5 and len(backup["orders"]) == 3
+        old = {**backup, "version": 4}
+        old.pop("orders")
+        assert c.post("/api/backup/restore", json=old).status_code == 200 and db.q("SELECT COUNT(*) n FROM orders")[0]["n"] == 0
+        assert c.post("/api/backup/restore", json=backup).status_code == 200 and db.q("SELECT COUNT(*) n FROM orders")[0]["n"] == 3
+        for bad in ({"limit_price": 0}, {"created": None}, {"status": "filled"}, {"side": "short"}, {"tx_id": None}):
+            broken = {**backup, "orders": [{**backup["orders"][0], **bad}] + backup["orders"][1:]}
+            if bad == {"tx_id": None} and broken["orders"][0]["status"] != "done":
+                continue
+            assert c.post("/api/backup/restore", json=broken).status_code == 400, bad
+        assert db.q("SELECT COUNT(*) n FROM orders")[0]["n"] == 3, "a refused backup changes nothing"
+
+
+def test_orders_after_review():
+    """The independent review's findings: one fill recorded once however often it's sent; buys never short of cash;
+    the 2-point band holds with new money; approved orders count when preparing again; quantities written in full;
+    a split since approval restates the fill; no fill before approval; nothing usable to approve is refused."""
+    import datetime as dt
+    import threading
+    import time
+    from backend import data, db, orders
+    _reset()
+    with TestClient(app) as c:
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        px = {t: float(data.history(t, "1y")["Close"].iloc[-1]) for t in ("AAPL", "SPY")}
+        # AAPL and SPY at 50/50 in value, give or take a share
+        n_spy = round(20 * px["AAPL"] / px["SPY"])
+        assert post(ticker="AAPL", kind="buy", date="2024-01-10", shares=20, price=100).status_code == 200
+        assert post(ticker="SPY", kind="buy", date="2024-01-10", shares=n_spy, price=50).status_code == 200
+        c.post("/api/settings", json={"base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}})
+        drift = abs(20 * px["AAPL"] / (20 * px["AAPL"] + n_spy * px["SPY"]) - 0.5)
+        assert drift <= orders.BAND
+        inside = c.post("/api/orders/plan", json={"sell": True, "new_money": 100}).json()
+        assert not any(o["side"] == "sell" for o in inside["orders"]) and inside["rule"].startswith("Every class is within 2 points"), inside["rule"]
+        assert c.post("/api/orders/plan", json={"sell": True}).json()["orders"] == []
+
+        # Off target: whole-share sales raise what they raise, and the buys stay within it plus the new money
+        c.post("/api/settings", json={"targets": {"Stocks": 20, "ETFs": 80}})
+        for money in (0, 37, 500):
+            p = c.post("/api/orders/plan", json={"sell": True, "new_money": money}).json()
+            raised = sum(o["value"] for o in p["orders"] if o["side"] == "sell")
+            bought = sum(o["value"] for o in p["orders"] if o["side"] == "buy")
+            assert raised > 0 and bought <= raised + money + 1e-9 and p["left"] >= -1e-9 and abs(p["left"] - (raised + money - bought)) < 1e-6, (money, raised, bought, p["left"])
+
+        # Approved orders count when preparing again: the same new money doesn't draft the same buys twice
+        c.post("/api/settings", json={"targets": {"Stocks": 50, "ETFs": 50}})
+        first = c.post("/api/orders/plan", json={"new_money": 5000}).json()
+        assert c.post("/api/orders", json={"orders": first["orders"]}).status_code == 200
+        again = c.post("/api/orders/plan", json={"new_money": 5000}).json()
+        assert again["pending"] == len(first["orders"]) and "as if filled" in again["notes"][0]
+        held = {"AAPL": 20 + sum(o["shares"] for o in first["orders"] if o["ticker"] == "AAPL"), "SPY": n_spy + sum(o["shares"] for o in first["orders"] if o["ticker"] == "SPY")}
+        va, vs = held["AAPL"] * px["AAPL"], held["SPY"] * px["SPY"]
+        short = {"AAPL": max(0, 0.5 * (va + vs + 5000) - va), "SPY": max(0, 0.5 * (va + vs + 5000) - vs)}
+        want = {t: int(5000 * s / sum(short.values()) / px[t] + 1e-9) for t, s in short.items()}
+        assert {o["ticker"]: o["shares"] for o in again["orders"]} == {t: n for t, n in want.items() if n * px[t] >= 1}, (again["orders"], want)
+
+        # One fill, however many times it's sent at once
+        oid = c.get("/api/orders").json()["open"][0]["id"]
+        codes = []
+        threads = [threading.Thread(target=lambda: codes.append(c.post(f"/api/orders/{oid}/done", json={}).status_code)) for _ in range(4)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        assert sorted(codes) == [200, 400, 400, 400], codes
+        assert db.q("SELECT COUNT(*) n FROM transactions WHERE note LIKE ?", (f"Order #{oid}%",))[0]["n"] == 1
+        # A ledger refusal puts the order back, open
+        sid = db.x("INSERT INTO orders (created, ticker, side, shares, limit_price, currency, status) VALUES (?, 'SPY', 'sell', 99999, 50, 'USD', 'approved')", (time.time(),))
+        r = c.post(f"/api/orders/{sid}/done", json={})
+        assert r.status_code == 400 and "more than were held" in r.json()["detail"] and db.q("SELECT status FROM orders WHERE id=?", (sid,))[0]["status"] == "approved"
+        assert c.post(f"/api/orders/{sid}/cancel").status_code == 200
+        # No fill dated before the approval
+        oid2 = c.get("/api/orders").json()["open"][0]["id"]
+        r = c.post(f"/api/orders/{oid2}/done", json={"date": "1990-01-01"})
+        assert r.status_code == 400 and "before the order was approved" in r.json()["detail"]
+        assert c.post(f"/api/orders/{oid2}/done", json={"date": "soon"}).status_code == 400
+
+        # Nothing usable to approve; quantities in full in the CSV; a formula-like reason is made inert
+        assert c.post("/api/orders", json={"orders": [1, 2]}).status_code == 400
+        db.x("INSERT INTO orders (created, ticker, side, shares, limit_price, currency, reason, status) VALUES (?, 'BTC-USD', 'buy', 12.345678, 1234567.25, 'USD', '=1+1', 'approved')", (time.time(),))
+        line = next(row for row in c.get("/api/orders.csv").text.splitlines() if "BTC-USD" in row)
+        assert ",12.345678,LIMIT,1234567.25," in line and line.endswith("'=1+1"), line
+        assert orders.exact(12.345678) == "12.345678" and orders.exact(1234567.0) == "1234567" and orders.exact(65432.1234) == "65432.1234"
+
+        # A 2-for-1 split between approval and the fill: twice the shares at half the price
+        bid = db.x("INSERT INTO orders (created, ticker, side, shares, limit_price, currency, status) VALUES (?, 'AAPL', 'buy', 3, 200, 'USD', 'approved')", (time.time() - 5 * 86400,))
+        split_day = (dt.date.today() - dt.timedelta(days=2)).isoformat()
+        real = data.splits
+        data.splits = lambda t: [(split_day, 2.0)] if t == "AAPL" else real(t)
+        try:
+            listed = next(o for o in c.get("/api/orders").json()["open"] if o["id"] == bid)
+            assert listed["split"] == 2 and listed["fillShares"] == 6 and listed["fillPrice"] == 100
+            assert c.post(f"/api/orders/{bid}/done", json={}).status_code == 200
+            tx = db.q("SELECT * FROM transactions WHERE note = ?", (f"Order #{bid}",))[0]
+            assert tx["shares"] == 6 and tx["price"] == 100, tx
+        finally:
+            data.splits = real
+
+
+def test_orders_ticker_for_an_empty_class():
+    """A class under target with nothing held gets an order only once you name what to buy there, and only something
+    of that class; once bought (or approved), its share of the new money goes by the usual rules."""
+    from backend import data, orders
+    _reset()
+    with TestClient(app) as c:
+        assert c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": "2024-01-10", "shares": 40, "price": 50}).status_code == 200
+        c.post("/api/settings", json={"base_currency": "USD", "targets": {"ETFs": 70, "Stocks": 25, "Crypto": 5}})
+        plan = lambda **b: c.post("/api/orders/plan", json={"new_money": 2000, **b}).json()  # noqa: E731
+        px = {t: float(data.history(t, "1y")["Close"].iloc[-1]) for t in ("SPY", "AAPL", "BTC-USD")}
+        v = 40 * px["SPY"]
+        after = v + 2000
+        short = {"ETFs": max(0, 0.7 * after - v), "Stocks": 0.25 * after, "Crypto": 0.05 * after}
+        share = {k: 2000 * s / sum(short.values()) for k, s in short.items()}
+
+        # Nothing chosen: no order for Stocks or Crypto, and the page is told what each would get
+        p = plan()
+        assert {e["assetClass"] for e in p["empty"]} == {"Stocks", "Crypto"} and all(e["pick"] is None for e in p["empty"])
+        assert abs(next(e for e in p["empty"] if e["assetClass"] == "Stocks")["amount"] - share["Stocks"]) < 1e-6
+        assert not any(o["assetClass"] in ("Stocks", "Crypto") for o in p["orders"]) and any("Enter its ticker" in n for n in p["notes"])
+
+        # Chosen: whole shares of the stock, crypto to six places, each saying it's your choice
+        p = plan(picks={"Stocks": "aapl", "Crypto": "BTC-USD"})
+        got = {o["ticker"]: o for o in p["orders"]}
+        assert got["AAPL"]["shares"] == int(share["Stocks"] / px["AAPL"] + 1e-9), (got["AAPL"], share)
+        assert got["BTC-USD"]["shares"] == orders._round_down(share["Crypto"] / px["BTC-USD"], orders.CRYPTO_DECIMALS)
+        assert "your choice" in got["AAPL"]["reason"] and {e["pick"] for e in p["empty"]} == {"AAPL", "BTC-USD"}
+        assert p["left"] >= -1e-9 and abs(p["left"] - (2000 - sum(o["value"] for o in p["orders"]))) < 1e-6
+
+        # Something of another class is refused, with the reason; so is a malformed request
+        p = plan(picks={"Stocks": "SPY"})
+        assert "AAPL" not in {o["ticker"] for o in p["orders"]} and any("SPY is in ETFs, not Stocks" in n for n in p["notes"]), p["notes"]
+        assert c.post("/api/orders/plan", json={"new_money": 10, "picks": "AAPL"}).status_code == 400
+
+        # Approved, the stock counts as held: Stocks no longer asks, and its money goes to AAPL by the usual rules
+        aapl = got["AAPL"]
+        assert c.post("/api/orders", json={"orders": [aapl]}).status_code == 200
+        p = plan()
+        assert "Stocks" not in {e["assetClass"] for e in p["empty"]} and "Crypto" in {e["assetClass"] for e in p["empty"]}
 
 
 if __name__ == "__main__":

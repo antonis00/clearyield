@@ -430,3 +430,24 @@ nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu
   font-size: 12px; color: var(--muted); background: var(--panel); overflow: hidden; cursor: default; }
 .bg-progress i { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; transition: width .6s ease; background: linear-gradient(90deg, var(--accent2), var(--accent)); }
 @media (prefers-reduced-motion: reduce) { .dl-mark, .dl-bar i::after { animation: none; } }
+
+/* Orders: the draft's shares and limit are edited in place */
+.ord-form { flex-wrap: wrap; width: 100%; column-gap: 32px; row-gap: 12px; }
+.ord-form .ord-go { margin-left: auto; align-self: flex-end; }
+.ord-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.ord-actions > span { margin-right: auto; }
+.ord-form label.ord-opt { display: inline-flex; flex-direction: row; align-self: flex-end; min-height: 34px; padding: 0 4px; gap: 10px; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+.ord-form input[type=number] { width: 9em; }
+.ord-table input[type=number] { width: 7.5em; text-align: right; }
+.ord-table td.sm { min-width: 260px; max-width: 420px; white-space: normal; color: var(--muted); }
+.ord-gain { white-space: nowrap; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.ord-after { margin: 8px 0; line-height: 1.6; }
+#ordOpen h4 { display: flex; align-items: center; gap: 10px; margin: 16px 0 8px; }
+.ord-closed { margin-top: 10px; }
+.ord-closed summary { cursor: pointer; }
+.ord-table .row-actions { white-space: nowrap; }
+
+.ord-picks { margin: 8px 0; display: grid; gap: 6px; }
+.ord-picks .form-row { margin: 0; align-items: center; }
+.ord-picks label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ord-picks input.ord-pick { width: 9em; text-transform: uppercase; }
