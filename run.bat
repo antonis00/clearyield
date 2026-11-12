@@ -5,12 +5,16 @@ cd /d %~dp0
 if not exist .venv (
   python -m venv .venv || goto :failed
 )
-REM Install again whenever requirements.txt has changed since the last install
-fc /b requirements.txt .venv\requirements.installed >nul 2>&1
-if errorlevel 1 (
+REM Install again whenever requirements.txt or requirements.lock has changed since the last install. The lock holds
+REM every package, including the ones the app's packages bring with them, at the versions the tests passed with
+set REINSTALL=
+fc /b requirements.txt .venv\requirements.installed >nul 2>&1 || set REINSTALL=1
+fc /b requirements.lock .venv\requirements.lock.installed >nul 2>&1 || set REINSTALL=1
+if defined REINSTALL (
   echo Installing packages...
-  .venv\Scripts\python -m pip install -q -r requirements.txt || goto :failed
+  .venv\Scripts\python -m pip install -q -r requirements.txt -c requirements.lock || goto :failed
   copy /y requirements.txt .venv\requirements.installed >nul
+  copy /y requirements.lock .venv\requirements.lock.installed >nul
 )
 REM Already running, for example in the background since Windows started (Settings, Start with Windows)?
 curl -s -o nul -m 3 http://127.0.0.1:8001/api/meta >nul 2>&1

@@ -420,6 +420,15 @@ const SLOW = 150000;
   await p.click("#ordPlan .ord-discard");
   expect("orders: Discard drops the suggestion, keeping the amount", !(await p.evaluate(() => document.querySelector("#ordPlan").innerHTML.trim())) && (await p.inputValue("#ordMoney")) === "3000"
     && !(await p.evaluate(async () => (await fetch("/api/orders")).json())).open.length);
+  // What you act on comes before the analysis, and the transaction form sits by the list of transactions
+  const cardOrder = await p.evaluate(() => [...document.querySelectorAll("#view-portfolio .card-h h3")].map((h) => h.textContent));
+  const at = (t) => cardOrder.indexOf(t);
+  expect("portfolio: positions, plan, rebalancing and orders come before the analysis and the records",
+    at("Positions") < at("Your plan") && at("Your plan") < at("Rebalancing") && at("Rebalancing") < at("Orders") && at("Orders") < at("Risk")
+    && at("Risk") < at("Record a transaction") && at("Record a transaction") < at("Transactions") && at("Transactions") < at("Tax year"), cardOrder.join(" > "));
+  await p.click("#pfToRecord");
+  await p.waitForFunction(() => document.activeElement?.id === "hTicker", null, { timeout: 5000 }).catch(() => {});
+  expect("portfolio: + Record a transaction goes to the form", (await p.evaluate(() => document.activeElement?.id)) === "hTicker");
   // Your plan: the month's money, where it goes, the goal's chance; Prepare these orders fills the Orders card
   await p.locator("#planMonthly").pressSequentially("800"); await p.fill("#planGoal", "250000"); await p.fill("#planBy", "2040-01-01");
   await p.click("#planForm .plan-go");

@@ -67,7 +67,16 @@ def evaluate_ticker(t, settings):
         fin = data.financials(t)
         inf = {**fill_from_statements(t, inf, fin), "revenueGrowth3y": multi_year_growth(fin, "revenue"), "earningsGrowth3y": multi_year_growth(fin, "netIncome")}
     sc = scoring.evaluate(inf, full["Close"], settings.get("weights"), trend=close_in_usd(full["Close"], inf.get("currency")))
+    if t in CORE_FUNDS and sc.get("composite") is not None:
+        # A world or broad index fund's trend and risk say how the market has gone, not whether to hold it: a band
+        # such as "Caution" after a fall read as advice to sell the core of the portfolio
+        sc = {**sc, "stance": "Core fund", "stanceNote": CORE_NOTE}
     return full, inf, sc
+
+
+CORE_NOTE = ("A broad index fund, held as the core of a portfolio. Its score is its trend and risk only, which show how the "
+             "market has gone rather than whether to hold it, so it gets no stance band. Its cost and how it fits your "
+             "targets matter more.")
 
 
 def close_in_usd(close, currency):
