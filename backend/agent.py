@@ -63,6 +63,7 @@ def get_portfolio():
                "Hold": "On target."}.get(cs.get("action"))
     trades_in = sorted({r["currency"] for r in p["positions"] if r.get("currency")})
     from .universe import FUND_CURRENCIES
+    from .orders import exact
     us_share = sum(r["value"] * (FUND_CURRENCIES[r["ticker"]].get("USD", 0) if r["ticker"] in FUND_CURRENCIES else (1 if r.get("country") == "United States" else 0))
                    for r in p["positions"]) / p["total"] if p["total"] else None
     top = lambda d: {k: _f_pct(v / p["total"], 1) for k, v in list(d.items())[:6]} if p["total"] else {}
@@ -79,6 +80,9 @@ def get_portfolio():
                                                     "note": f"The currencies of the companies held, looking through funds (approximate index weights). The holdings themselves trade in {', '.join(trades_in)}."},
         "sector_exposure_looking_through_funds": {k: _f_pct(v / p["total"], 1) for k, v in p["allocation"]["sectorLookThrough"].items()} if p["total"] else {},
         "warnings": p["warnings"] or "none",
+        # Approved by the owner on the Portfolio page, to be placed at their broker; ClearYield doesn't trade
+        "approved_orders_not_yet_done": [f"{o['side']} {exact(o['shares'])} {o['ticker']} at a limit of {exact(o['limit_price'])} {o['currency']}"
+                                         for o in db.q("SELECT * FROM orders WHERE status='approved' ORDER BY created")],
     }
     return {k: v for k, v in out.items() if v not in (None, {}, [])}
 

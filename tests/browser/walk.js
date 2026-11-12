@@ -349,10 +349,57 @@ const SLOW = 150000;
   expect("portfolio: the tax CSV lists the year's lines", /^Sales,2025/.test(csv) && /2025-06-02,QNBK\.QA/.test(csv), csv.split("\n").slice(0, 3).join(" | "));
   expect("portfolio: look-through adds up", Math.abs(Object.values(led.allocation.sectorLookThrough).reduce((a, b) => a + b, 0) - led.total) < 1e-6, Object.keys(led.allocation.sectorLookThrough).slice(0, 4).join(", "));
   await shot("ledger");
+  // Orders: prepared from the targets with new money, one approved, marked done (into the ledger), the rest left
+  await p.fill("#ordMoney", "5000"); await p.click("#ordForm .btn");
+  await p.waitForFunction(() => document.querySelector("#ordPlan tbody tr") || /Nothing|hold nothing/.test(document.querySelector("#ordPlan").innerText), null, { timeout: SLOW });
+  const draft = await p.evaluate(() => ({ rows: document.querySelectorAll("#ordPlan tbody tr").length, text: document.querySelector("#ordPlan").innerText.replace(/\s+/g, " ") }));
+  expect("orders: prepared from the targets, each with its reason", draft.rows >= 1 && /target/.test(draft.text) && /After these/.test(draft.text) && !/undefined|NaN/.test(draft.text), draft.text.slice(0, 220));
+  expect("orders: new money only, so no sales", !/\bSell\b/.test(await txt("#ordPlan tbody")));
+  // not SPY: a later step deletes SPY's only lot
+  const pick = await p.evaluate(() => [...document.querySelectorAll("#ordPlan tbody tr [data-stock]")].findIndex((td) => td.dataset.stock !== "SPY"));
+  const firstOrder = await p.evaluate((i) => document.querySelectorAll("#ordPlan tbody tr [data-stock]")[i].dataset.stock, pick);
+  await p.$$eval("#ordPlan tbody tr .ord-on", (bs, at) => bs.forEach((b, i) => { b.checked = i === at; }), pick);
+  await p.locator("#ordPlan tbody tr").nth(pick).locator(".ord-shares").fill("1");
+  await p.click("#ordApprove");
+  await p.waitForSelector("#ordOpen .ord-done", { timeout: SLOW });
+  const open = await p.evaluate(async () => (await fetch("/api/orders")).json());
+  expect("orders: only the ticked one is approved, with the shares you changed", open.open.length === 1 && open.open[0].ticker === firstOrder && open.open[0].shares === 1, JSON.stringify(open.open.map((o) => [o.side, o.ticker, o.shares])));
+  const ordCsv = await p.evaluate(async () => (await fetch("/api/orders.csv")).text());
+  expect("orders: the CSV for the broker", /^Order,Action,Symbol/.test(ordCsv) && ordCsv.includes(`BUY,${firstOrder},1,LIMIT`), ordCsv.split("\n")[1]);
+  const txBefore = (await p.evaluate(async () => (await fetch("/api/transactions")).json())).length;
+  await p.click("#ordOpen .ord-done"); await p.locator('#modal input[name="fee"]').fill("1"); await p.click("#modal form .btn:not(.ghost)");
+  await p.waitForFunction(() => /Recorded in your transactions/.test(document.querySelector("#toast")?.innerText || ""), null, { timeout: SLOW }); await p.waitForTimeout(1500);
+  const txs = await p.evaluate(async () => (await fetch("/api/transactions")).json());
+  expect("orders: marking done records the purchase, fee included", txs.length === txBefore + 1 && txs.some((t) => t.ticker === firstOrder && t.shares === 1 && /Order #\d+, fee 1/.test(t.note)), JSON.stringify(txs[0]));
+  expect("orders: nothing open after it's done, and it's listed as done", !(await p.locator("#ordOpen .ord-done").count()) && /done, in the ledger/.test(await p.evaluate(() => document.querySelector("#ordOpen").textContent)));
+  expect("orders: no bad text", !/undefined|NaN|\[object/.test(await txt("#ordCard")));
+  await shot("orders");
   await p.click("#pfTable thead th:nth-child(6)"); await p.waitForTimeout(200);
   await p.locator('#pfTable tbody tr:has-text("SPY") [data-lots]').click(); await p.waitForTimeout(300);
   await p.locator("#modal [data-del]").first().click(); await p.waitForFunction(() => document.querySelectorAll("#pfTable tbody tr").length === 4, null, { timeout: SLOW });
   expect("portfolio: delete a lot after sorting", true);
+  // With SPY gone nothing is held in ETFs: the draft asks what to buy there, and buys the ticker you type
+  await p.fill("#ordMoney", "3000"); await p.click("#ordForm .btn");
+  await p.waitForSelector('#ordPlan .ord-pick[data-class="ETFs"]', { timeout: SLOW });
+  expect("orders: a class you hold nothing in asks what to buy", !(await p.locator('#ordPlan tbody tr [data-stock="SPY"]').count()) && /you hold nothing there/.test(await txt("#ordPlan")), (await txt("#ordPlan")).slice(0, 200));
+  await p.locator('#ordPlan .ord-pick[data-class="ETFs"]').pressSequentially("spy"); await p.keyboard.press("Enter");
+  await p.waitForSelector('#ordPlan tbody tr [data-stock="SPY"]', { timeout: SLOW });
+  const picked = await p.evaluate(() => ({ text: document.querySelector("#ordPlan").innerText.replace(/\s+/g, " "), kept: document.querySelector('#ordPlan .ord-pick[data-class="ETFs"]').value }));
+  expect("orders: the ticker you typed is bought, as your choice", /SPY is your choice/.test(picked.text) && picked.kept === "SPY" && !/undefined|NaN/.test(picked.text), picked.text.slice(0, 240));
+  await shot("orders-pick");
+  // Fractions are on by default; switching them off redrafts at once, in whole shares
+  const spyShares = () => p.evaluate(() => Number(document.querySelector('#ordPlan tbody tr:has([data-stock="SPY"]) .ord-shares')?.value));
+  const fracBefore = await spyShares();
+  expect("orders: fractional shares on by default", (await p.isChecked("#ordFrac")) && !Number.isInteger(fracBefore), String(fracBefore));
+  await p.click("#ordFrac");
+  await p.waitForFunction(() => Number.isInteger(Number(document.querySelector('#ordPlan tbody tr:has([data-stock="SPY"]) .ord-shares')?.value)), null, { timeout: SLOW });
+  expect("orders: switching fractions off redrafts at once, in whole shares", Math.floor(fracBefore) === (await spyShares()), `${fracBefore} -> ${await spyShares()}`);
+  await shot("orders-switches");
+  const afterLine = await p.evaluate(() => document.querySelector("#ordPlan .ord-after").textContent);
+  expect("orders: classes with no target and nothing held aren't listed", !/0% → 0% \(target 0%\)/.test(afterLine), afterLine);
+  await p.click("#ordPlan .ord-discard");
+  expect("orders: Discard drops the suggestion, keeping the amount", !(await p.evaluate(() => document.querySelector("#ordPlan").innerHTML.trim())) && (await p.inputValue("#ordMoney")) === "3000"
+    && !(await p.evaluate(async () => (await fetch("/api/orders")).json())).open.length);
 
   // ---- Backtest
   await nav("backtest");

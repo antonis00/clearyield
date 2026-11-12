@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS buckets (ticker TEXT PRIMARY KEY, bucket TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS score_history (
     date TEXT NOT NULL, ticker TEXT NOT NULL, composite REAL, stance TEXT, factors TEXT, PRIMARY KEY (date, ticker));
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL, ticker TEXT NOT NULL, side TEXT NOT NULL, shares REAL NOT NULL,
+    limit_price REAL NOT NULL, currency TEXT DEFAULT '', reason TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'approved',
+    closed REAL, fill_shares REAL, fill_price REAL, fill_date TEXT DEFAULT '', fee REAL, tx_id INTEGER);
 """
 
 ADDED_COLUMNS = {
@@ -109,6 +113,18 @@ def x_many(sql, rows):
         try:
             c.executemany(sql, rows)
             c.commit()
+        finally:
+            c.close()
+
+
+def x_count(sql, params=()):
+    """Run a change and say how many rows it touched: an UPDATE ... WHERE status=... that claims a row only once."""
+    with _lock:
+        c = _connect()
+        try:
+            n = c.execute(sql, params).rowcount
+            c.commit()
+            return n
         finally:
             c.close()
 
@@ -203,8 +219,8 @@ def cache_clear():
 
 # ---- backup ----
 # Score history is here because Yahoo has no past fundamentals, so it could never be rebuilt
-USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history", "buckets")
-BACKUP_VERSION = 4
+USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history", "buckets", "orders")
+BACKUP_VERSION = 5
 
 
 def export_user_data():
@@ -259,7 +275,7 @@ def auto_backup_status():
 
 def read_backup(backup):
     """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
-    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, BACKUP_VERSION):
+    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, 4, BACKUP_VERSION):
         raise ValueError("This isn't a ClearYield backup, or it's from a different version.")
     if backup["version"] == 1:  # before the ledger, when there was a table of current lots
         lots = backup.get("holdings")
@@ -271,6 +287,8 @@ def read_backup(backup):
         backup = {**backup, "score_history": []}
     if backup["version"] < 4:
         backup = {**backup, "buckets": []}
+    if backup["version"] < 5:
+        backup = {**backup, "orders": []}
     for t in USER_TABLES:
         if not isinstance(backup.get(t), list) or not all(isinstance(r, dict) for r in backup[t]):
             raise ValueError(f"The backup's {t} section isn't usable.")
@@ -282,6 +300,8 @@ def read_backup(backup):
         raise ValueError(f"The backup's settings aren't usable: {e}")
     if any(r.get("bucket") not in ("core", "satellite") for r in backup["buckets"]):
         raise ValueError("Every bucket in the backup must be core or satellite.")
+    from .orders import check_rows  # here: orders needs this module
+    check_rows(backup["orders"])
     return {**backup, "settings": settings}
 
 

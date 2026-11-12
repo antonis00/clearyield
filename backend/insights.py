@@ -962,6 +962,15 @@ def digest(settings, tiles=None):
                 items.append({"tone": 1, "ticker": j["ticker"], "priority": 1, "text": f"{j['ticker']} reached your target ({j['target_price']}). Time to re-evaluate."})
         if j["review_date"] and j["review_date"] <= today:
             items.append({"tone": 0, "ticker": j["ticker"], "priority": 2, "text": f"Journal review due for {j['ticker']} ({j['action']} on {dt.date.fromtimestamp(j['ts']).isoformat()})."})
+    # Orders you approved and haven't marked done or cancelled: placed at the broker, or still to place
+    waiting = db.q("SELECT ticker, side, created FROM orders WHERE status='approved' ORDER BY created")
+    if waiting:
+        oldest = dt.date.fromtimestamp(waiting[0]["created"]).isoformat()
+        which = ", ".join(dict.fromkeys(o["side"] + " " + o["ticker"] for o in waiting))
+        items.append({"tone": 0, "ticker": None, "priority": 2, "kind": "orders",
+                      "text": f"{len(waiting)} approved order{'s' if len(waiting) > 1 else ''} not marked done yet "
+                              f"({which}; oldest {oldest}). "
+                              f"Mark {'them' if len(waiting) > 1 else 'it'} done with the price you got, or cancel, on the Portfolio page."})
     check_alerts(settings)
     fired = db.q("SELECT * FROM alerts WHERE triggered IS NOT NULL AND dismissed = 0 ORDER BY triggered DESC")
     items = [{"tone": 0, "ticker": a["ticker"], "priority": 0, "text": "Alert: " + a["message"], "alertId": a["id"]} for a in fired] + items
