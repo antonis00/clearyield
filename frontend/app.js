@@ -109,6 +109,7 @@ const logoOf = (t, name, cls = "") => {
 };
 document.addEventListener("load", (e) => { if (e.target.matches?.(".logo img")) e.target.parentNode.classList.add("has"); }, true);
 document.addEventListener("error", (e) => { if (e.target.matches?.(".logo img")) e.target.remove(); }, true);
+const symLogo = (t, name) => `<span class="symwrap">${logoOf(t, name, "sm")}<span class="sym">${esc(t)}</span></span>`;
 const symCell = (v, r) => `<span class="symwrap">${logoOf(v, r.name)}<span><span class="sym">${esc(v)}</span>${oldMark(r)}<span class="sub">${esc(r.name || "")}</span></span></span>`;
 
 function modal(html, onSubmit) {
@@ -872,7 +873,7 @@ $("#btnCompare").onclick = async () => {
     ], d.meta, { stock: (r) => r.ticker });
     const cm = d.correlation;
     const col = (v) => v >= 0 ? `rgba(239,91,91,${v * 0.7})` : `rgba(79,179,191,${-v * 0.7})`;
-    $("#cmpCorr").innerHTML = `<table><tr><th></th>${cm.tickers.map((t) => `<th class="num">${esc(t)}</th>`).join("")}</tr>${cm.matrix.map((row, i) => `<tr><th>${esc(cm.tickers[i])}</th>${row.map((v) => `<td class="num" style="background:${col(v)}">${num(v, 2)}</td>`).join("")}</tr>`).join("")}</table>
+    $("#cmpCorr").innerHTML = `<table><tr><th></th>${cm.tickers.map((t) => `<th class="num">${esc(t)}</th>`).join("")}</tr>${cm.matrix.map((row, i) => `<tr><th>${symLogo(cm.tickers[i])}</th>${row.map((v) => `<td class="num" style="background:${col(v)}">${num(v, 2)}</td>`).join("")}</tr>`).join("")}</table>
       <p class="muted sm">High correlation (red) means the assets tend to move together and add little diversification. It uses weekly returns on shared dates, because markets open at different hours and on different days. Short periods have few weeks, so read those with care; "—" means too few.</p>
       ${d.short.length ? `<p class="muted sm">Started later than the rest, so shown from its first day: ${esc(d.short.join(", "))}.</p>` : ""}
       ${d.failed.length ? `<p class="muted sm">No data for: ${esc(d.failed.join(", "))}.</p>` : ""}`;
@@ -1371,7 +1372,7 @@ async function loadPortfolio() {
   const tx = await api("/api/transactions");
   const curOf = Object.fromEntries(p.positions.map((x) => [x.ticker, x.currency]));
   table($("#txTable"), [
-    { k: "date", label: "Date", fmt: (v) => esc(v || "no date") }, { k: "ticker", label: "Ticker", fmt: (v) => `<span class="sym">${esc(v)}</span>` }, { k: "kind", label: "Type", fmt: (v) => esc(v) },
+    { k: "date", label: "Date", fmt: (v) => esc(v || "no date") }, { k: "ticker", label: "Ticker", fmt: (v, r) => symLogo(v, r.name) }, { k: "kind", label: "Type", fmt: (v) => esc(v) },
     { k: "shares", label: "Shares", num: 1, fmt: (v) => (isNum(v) ? num(v, v < 1 ? 4 : 2) : "") },
     { k: "price", label: "Price or amount", num: 1, fmt: (v, r) => (r.kind === "dividend" ? money(r.amount, MAIN_UNIT[curOf[r.ticker]] || (curOf[r.ticker] ?? null)) : money(v, curOf[r.ticker] ?? null)) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
     { k: "id", label: "", fmt: (v) => `<button class="btn danger" data-tdel="${v}">Delete</button>` },
@@ -1625,7 +1626,7 @@ async function loadOrders() {
   const open = d.open.length ? `<h4>Approved, to place at your broker <a class="btn ghost sm" href="/api/orders.csv" download>Download CSV</a></h4>
     <div class="tablewrap"><table class="ord-table"><thead><tr><th>Approved</th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit</th><th class="num">Now</th><th></th></tr></thead><tbody>
     ${d.open.map((o) => `<tr><td>${esc(o.approvedOn)}</td><td><b class="${o.side === "buy" ? "up" : "down"}">${o.side === "buy" ? "Buy" : "Sell"}</b></td>
-      <td data-stock="${esc(o.ticker)}"><span class="sym">${esc(o.ticker)}</span></td><td class="num">${sharesFmt(o.fillShares)}${o.split !== 1 ? ` <span class="pill warn" title="Split since you approved: ${sharesFmt(o.shares)} then">split</span>` : ""}</td><td class="num">${priceOf(o.fillPrice, o)}</td>
+      <td data-stock="${esc(o.ticker)}">${symLogo(o.ticker)}</td><td class="num">${sharesFmt(o.fillShares)}${o.split !== 1 ? ` <span class="pill warn" title="Split since you approved: ${sharesFmt(o.shares)} then">split</span>` : ""}</td><td class="num">${priceOf(o.fillPrice, o)}</td>
       <td class="num">${o.price != null ? priceOf(o.price, o) : "—"}${o.moved ? ` <span class="pill warn" title="The price has moved more than ${pct(d.movedAt, 0, false)} since you approved: check the limit">${pct(o.move)}</span>` : ""}</td>
       <td class="row-actions"><button class="btn sm ord-done" data-id="${o.id}">Done</button> <button class="btn ghost sm ord-cancel" data-id="${o.id}">Cancel</button></td></tr>`).join("")}
     </tbody></table></div>` : "";
@@ -1882,7 +1883,7 @@ async function loadJournal() {
   const [j, a, card] = await Promise.all([api("/api/journal"), api("/api/alerts"), api("/api/journal/scorecard").catch(() => null)]);
   const results = Object.fromEntries((card?.entries || []).map((r) => [r.id, r]));
   if (card) renderScorecard(card); else $("#jScore").innerHTML = `<div class="muted">The scorecard couldn't be loaded.</div>`;
-  $("#journalList").innerHTML = j.length ? j.map((e) => `<div class="jentry"><div class="jh"><span class="sym" style="font-family:var(--mono);font-weight:600">${esc(e.ticker)}</span>
+  $("#journalList").innerHTML = j.length ? j.map((e) => `<div class="jentry"><div class="jh">${logoOf(e.ticker, null, "sm")}<span class="sym" style="font-family:var(--mono);font-weight:600">${esc(e.ticker)}</span>
     <span class="pill ${e.action === "buy" || e.action === "add" ? "on" : "warn"}">${esc(e.action)}</span><span class="muted sm">${new Date(e.ts * 1000).toLocaleDateString()} ${e.price ? "@ " + num(e.price) : ""}</span>
     ${e.stop_price ? `<span class="pill">stop ${num(e.stop_price)}</span>` : ""}${e.target_price ? `<span class="pill">target ${num(e.target_price)}</span>` : ""}${e.review_date ? `<span class="pill">review ${esc(e.review_date)}</span>` : ""}
     ${entryResult(results[e.id])}<span style="margin-left:auto"></span><button class="btn ghost sm" data-out="${e.id}" data-text="${esc(e.outcome || "")}">${e.outcome ? "Edit outcome" : "Record outcome"}</button><button class="btn danger" data-jdel="${e.id}">Delete</button></div>
@@ -1891,7 +1892,7 @@ async function loadJournal() {
   $$("[data-jdel]").forEach((b) => b.onclick = async () => { if (confirm("Delete this entry?")) { await api(`/api/journal/${b.dataset.jdel}`, { method: "DELETE" }); loadJournal(); } });
   $$("[data-out]").forEach((b) => b.onclick = async () => { const o = prompt("What happened, and what did you learn?", b.dataset.text); if (o !== null) { await api(`/api/journal/${b.dataset.out}`, { method: "PATCH", body: { outcome: o } }); loadJournal(); } });
   table($("#alertTable"), [
-    { k: "ticker", label: "Ticker", fmt: (v) => `<span class="sym">${esc(v)}</span>` }, { k: "kind", label: "Condition", fmt: (v) => esc(state.meta.alertKinds[v] || v) },
+    { k: "ticker", label: "Ticker", fmt: (v) => symLogo(v) }, { k: "kind", label: "Condition", fmt: (v) => esc(state.meta.alertKinds[v] || v) },
     { k: "value", label: "Value", num: 1, fmt: (v) => num(v) }, { k: "active", label: "Status", fmt: (v, r) => v ? `<span class="pill on">active</span>` : `<span class="pill warn" title="${esc(r.message)}">triggered</span>` },
     { k: "message", label: "Last trigger", fmt: (v) => `<span class="muted sm">${esc(v || "")}</span>` }, { k: "id", label: "", fmt: (v) => `<button class="btn danger" data-adel="${v}">Delete</button>` },
   ], a, { empty: "No alerts yet." })

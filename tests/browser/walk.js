@@ -339,6 +339,10 @@ const SLOW = 150000;
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
   expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs a date on every purchase and sale/.test(await txt("#pfKpis")), await txt("#pfKpis"));
   expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
+  // A logo beside the ticker in every row of a list (letters in demo mode)
+  const withLogos = (sel) => p.evaluate((q) => { const rows = [...document.querySelectorAll(q)].filter((r) => !r.querySelector(".empty")); return [rows.length, rows.filter((r) => r.querySelector(".logo[data-l]")).length]; }, sel);
+  const txLogos = await withLogos("#txTable tbody tr");
+  expect("portfolio: every transaction has a logo", txLogos[0] === 7 && txLogos[1] === 7, txLogos.join("/"));
   // Logos: each position has one, or in demo mode (no internet) its first letter on the tile
   const logoTiles = await p.evaluate(() => [...document.querySelectorAll("#pfTable tbody tr")].map((tr) => tr.querySelector(".logo")?.dataset.l || ""));
   expect("portfolio: every position has a logo tile", logoTiles.length >= 4 && logoTiles.every((l) => /^[A-Z0-9]$/.test(l)), logoTiles.join(" "));
@@ -466,12 +470,16 @@ const SLOW = 150000;
   await nav("journal");
   await p.fill("#jTicker", "MSFT"); await p.selectOption("#jAction", "buy"); await p.fill("#jPrice", "400"); await p.fill("#jThesis", "walk test"); await p.fill("#jInval", "growth slows"); await p.fill("#jStop", "300"); await p.fill("#jTarget", "900"); await p.fill("#jReview", "2020-01-01");
   await p.click("#btnJournalAdd"); await p.waitForFunction(() => /walk test/.test(document.querySelector("#journalList").innerText), null, { timeout: SLOW }); await p.waitForTimeout(400);
+  const jLogos = await withLogos("#journalList .jentry");
+  expect("journal: every entry has a logo", jLogos[0] > 0 && jLogos[0] === jLogos[1], jLogos.join("/"));
   expect("journal: entry shows return since entry", /since entry/.test(await txt("#journalList")), (await txt("#journalList")).slice(0, 110));
   expect("journal: scorecard waits for a day", /check back/.test(await txt("#jScore")));
   dialogAnswer = "learned something"; await p.click("[data-out]"); await p.waitForFunction(() => /learned something/.test(document.querySelector("#journalList").innerText), null, { timeout: 20000 });
   expect("journal: record an outcome", true);
   await p.fill("#aTicker", "SPY"); await p.selectOption("#aKind", "price_above"); await p.fill("#aValue", "0.01"); await p.click("#btnAlertAdd"); await p.waitForTimeout(800);
   await p.click("#btnCheckAlerts"); await p.waitForTimeout(3000);
+  const aLogos = await withLogos("#alertTable tbody tr");
+  expect("alerts: every alert has a logo", aLogos[0] > 0 && aLogos[0] === aLogos[1], aLogos.join("/"));
   expect("alerts: fire on Check now", /triggered/.test(await txt("#alertTable")), await txt("#toast"));
   await shot("journal");
   const del = await p.evaluate(() => { const b = document.querySelector("#alertTable [data-adel]").getBoundingClientRect(), w = document.querySelector("#alertTable").getBoundingClientRect(); return [Math.round(b.right), Math.round(w.right)]; });
