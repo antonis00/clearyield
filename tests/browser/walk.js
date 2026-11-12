@@ -844,6 +844,9 @@ const SLOW = 150000;
   const end = await p.evaluate(async () => (await fetch("/api/backup")).json());
   expect("settings: clearing the cache keeps your data", end.transactions.length >= 3, `${end.transactions.length} transactions`);
 
+  // Chrome flags a form field with neither id nor name ("A form field element should have an id or name attribute")
+  const unnamed = await p.evaluate(() => [...document.querySelectorAll("input, select, textarea")].filter((e) => !e.id && !e.name).map((e) => e.outerHTML.slice(0, 80)));
+  expect("every form field has an id or a name", unnamed.length === 0, unnamed.slice(0, 3).join(" | "));
   expect("no uncaught JS errors in the whole walk", errs.length === 0, errs.slice(0, 4).join(" | "));
   expect("no failed requests in the whole walk", http.length === 0, http.slice(0, 6).join(" | "));
   console.log(`\n${MODE}: ${pass} passed, ${fail} failed`);

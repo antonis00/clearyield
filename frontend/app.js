@@ -894,7 +894,7 @@ const MORE_FILTERS = [
   ["min_rsi", "Min RSI", 1], ["max_rsi", "Max RSI", 1],
   ["min_value", "Min value score", 1], ["min_quality", "Min quality score", 1], ["min_growth", "Min growth score", 1], ["min_momentum", "Min momentum score", 1], ["min_risk", "Min risk score", 1],
 ];
-$("#scrMoreFields").innerHTML = MORE_FILTERS.map(([k, label]) => `<label>${label}<input type="number" data-more="${k}"></label>`).join("");
+$("#scrMoreFields").innerHTML = MORE_FILTERS.map(([k, label]) => `<label>${label}<input type="number" name="more-${k}" data-more="${k}"></label>`).join("");
 const moreCount = () => { const n = $$("#scrMoreFields input").filter((i) => i.value !== "").length; $("#scrMoreCount").textContent = n ? `(${n} set)` : ""; };
 $("#scrMoreFields").oninput = moreCount;
 const bn = (v) => `$${num(v / 1e9, v >= 1e10 ? 0 : 1)}bn`;
@@ -1257,7 +1257,7 @@ function oppEmpty(wrap, canvasId, message) {
 }
 async function loadOpportunities(force) {
   const status = $("#oppStatus");
-  $("#oppMarkets").innerHTML = oppAll().map((m) => `<label><input type="checkbox" value="${m}" ${oppMarkets().includes(m) ? "checked" : ""}> ${m}</label>`).join("");
+  $("#oppMarkets").innerHTML = oppAll().map((m) => `<label><input type="checkbox" name="oppMarket" value="${m}" ${oppMarkets().includes(m) ? "checked" : ""}> ${m}</label>`).join("");
   $$("#oppMarkets input").forEach((i) => i.onchange = () => {
     const picked = $$("#oppMarkets input:checked").map((x) => x.value);
     if (!picked.length) { i.checked = true; toast("Pick at least one market."); return; }
@@ -1486,7 +1486,7 @@ $("#btnAddHolding").onclick = async () => {
 /* ---------------------------------------------------------------- backtest */
 function renderParams() {
   const s = state.meta.strategies[$("#bStrat").value];
-  $("#bParams").innerHTML = Object.entries(s.params).map(([k, v]) => `<label>${k.replace("_", " ")}<input type="number" data-param="${k}" value="${v}"></label>`).join("");
+  $("#bParams").innerHTML = Object.entries(s.params).map(([k, v]) => `<label>${k.replace("_", " ")}<input type="number" name="param-${k}" data-param="${k}" value="${v}"></label>`).join("");
 }
 $("#btnBt").onclick = async () => {
   const b = $("#btnBt"); b.disabled = true;
@@ -1575,7 +1575,7 @@ function renderDraft() {
   // A class under target with nothing held: you name what to buy there, then the draft is worked out again
   const picks = (d.empty || []).length ? `<div class="ord-picks">${d.empty.map((e) => `<div class="form-row inline">
       <label>${esc(e.assetClass)}: about ${money(e.amount, b, 0)}, and you hold nothing there. Buy
-        <input class="ord-pick" data-class="${esc(e.assetClass)}" value="${esc(e.pick || "")}" placeholder="${e.assetClass === "Crypto" ? "e.g. BTC-USD" : e.assetClass === "ETFs" ? "e.g. VWCE.DE" : "ticker"}" aria-label="Ticker to buy for ${esc(e.assetClass)}" autocomplete="off" spellcheck="false"></label>
+        <input class="ord-pick" name="pick-${esc(e.assetClass)}" data-class="${esc(e.assetClass)}" value="${esc(e.pick || "")}" placeholder="${e.assetClass === "Crypto" ? "e.g. BTC-USD" : e.assetClass === "ETFs" ? "e.g. VWCE.DE" : "ticker"}" aria-label="Ticker to buy for ${esc(e.assetClass)}" autocomplete="off" spellcheck="false"></label>
       <button type="button" class="btn ghost sm ord-pick-go">${e.pick ? "Change" : "Use it"}</button></div>`).join("")}
     <div class="muted sm">Your choice: the app doesn't pick one for you. Look one up with the search box, Opportunities or the Screener.</div></div>` : "";
   const bindPicks = () => {
@@ -1593,11 +1593,11 @@ function renderDraft() {
   const gain = (o) => !o.gain ? "" : `<div class="ord-gain">gain about <span class="${cls(o.gain.amount)}">${priceOf(o.gain.amount, o)}</span>${o.gain.heldOverYear ? ", held over a year" : o.gain.heldOverYear === false ? ", held under a year" : ""}</div>`;
   el.innerHTML = `<p class="muted sm">${esc(d.rule)} ${infoIcon(ORDER_RULES)}</p>
     <div class="tablewrap"><table class="ord-table"><thead><tr><th></th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit price</th><th class="num">About (${esc(b)})</th><th>Why</th></tr></thead><tbody>
-    ${d.orders.map((o, i) => `<tr data-i="${i}"><td><input type="checkbox" class="ord-on" checked aria-label="Include this order"></td>
+    ${d.orders.map((o, i) => `<tr data-i="${i}"><td><input type="checkbox" class="ord-on" name="include-${i}" checked aria-label="Include this order"></td>
       <td><b class="${o.side === "buy" ? "up" : "down"}">${o.side === "buy" ? "Buy" : "Sell"}</b></td>
       <td data-stock="${esc(o.ticker)}"><span class="symwrap">${logoOf(o.ticker, o.name)}<span><span class="sym">${esc(o.ticker)}</span>${o.stale ? ' <span class="pill warn">old price</span>' : ""}<span class="sub">${esc(o.name || "")}</span></span></span></td>
-      <td class="num"><input type="number" class="ord-shares" min="0" step="any" value="${o.shares}" aria-label="Shares"></td>
-      <td class="num"><input type="number" class="ord-limit" min="0" step="any" value="${+o.limitPrice.toFixed(4)}" aria-label="Limit price"> <span class="muted sm">${esc(o.currency)}</span></td>
+      <td class="num"><input type="number" class="ord-shares" name="shares-${i}" min="0" step="any" value="${o.shares}" aria-label="Shares"></td>
+      <td class="num"><input type="number" class="ord-limit" name="limit-${i}" min="0" step="any" value="${+o.limitPrice.toFixed(4)}" aria-label="Limit price"> <span class="muted sm">${esc(o.currency)}</span></td>
       <td class="num">${money(o.value, b, 0)}${gain(o)}</td><td class="sm">${esc(o.reason)}</td></tr>`).join("")}
     </tbody></table></div>
     <div class="ord-after muted sm">After these: ${d.classes.filter((c) => c.target > 0 || c.now > 0 || c.after > 0).map((c) => `${esc(c.assetClass)} ${pct(c.now, 0, false)} → ${pct(c.after, 0, false)} (target ${pct(c.target, 0, false)})`).join(" · ")}.
@@ -1756,8 +1756,8 @@ function scChart() {
 function pmRow(ticker = "", weight = "") {
   const row = document.createElement("div");
   row.className = "form-row inline pm-row";
-  row.innerHTML = `<label>Asset<input class="pm-t" value="${esc(ticker)}" placeholder="e.g. VWCE.DE" autocomplete="off"></label>
-    <label>Weight (%)<input class="pm-w" type="number" min="0" max="100" step="0.1" value="${esc(String(weight))}"></label>
+  row.innerHTML = `<label>Asset<input class="pm-t" name="mixTicker" value="${esc(ticker)}" placeholder="e.g. VWCE.DE" autocomplete="off"></label>
+    <label>Weight (%)<input class="pm-w" name="mixWeight" type="number" min="0" max="100" step="0.1" value="${esc(String(weight))}"></label>
     <button class="btn ghost sm pm-del" title="Remove this asset" aria-label="Remove">✕</button>`;
   row.querySelector(".pm-del").onclick = () => { row.remove(); pmTotal(); };
   row.querySelectorAll("input").forEach((i) => { i.oninput = () => pmTotal(); });
@@ -1921,12 +1921,12 @@ $("#btnNotify").onclick = async () => {
 /* ---------------------------------------------------------------- settings */
 function loadSettings() {
   const s = state.meta.settings;
-  $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${esc(k)} ${factorInfo(k)}</label><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-w="${esc(k)}"><span>${Math.round(v * 100)}%</span></div>`).join("");
+  $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${esc(k)} ${factorInfo(k)}</label><input type="range" name="weight-${esc(k)}" min="0" max="100" value="${Math.round(v * 100)}" data-w="${esc(k)}"><span>${Math.round(v * 100)}%</span></div>`).join("");
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
-  $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)} %<input type="number" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
+  $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)} %<input type="number" name="target-${esc(k)}" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
   $("#sCore").value = s.core_target;
-  $("#sRegions").innerHTML = state.meta.regions.map((r) => `<label><input type="checkbox" data-region="${esc(r)}" ${(s.regions || state.meta.regions).includes(r) ? "checked" : ""}> ${esc(r)}</label>`).join("");
+  $("#sRegions").innerHTML = state.meta.regions.map((r) => `<label><input type="checkbox" name="region" value="${esc(r)}" data-region="${esc(r)}" ${(s.regions || state.meta.regions).includes(r) ? "checked" : ""}> ${esc(r)}</label>`).join("");
   renderTileChoices(new Set(s.dashboard_tiles));
   $("#sEmail").value = s.alert_email || ""; $("#sEmailOn").checked = !!s.email_alerts;
   emailSwitched(); renderEmailStatus(); markUnsaved();
@@ -1993,7 +1993,7 @@ $("#btnTestEmail").onclick = async () => {
 };
 // Ticks you haven't saved yet are kept when a custom tile is added or removed
 function renderTileChoices(shown) {
-  $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label title="${esc(t.ticker)}"><input type="checkbox" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}${t.custom ? ` <button class="rm" data-rmtile="${esc(t.ticker)}" title="Remove this custom tile">×</button>` : ""}</label>`).join("");
+  $("#tileChoices").innerHTML = state.meta.tiles.map((t) => `<label title="${esc(t.ticker)}"><input type="checkbox" name="tile" value="${esc(t.ticker)}" data-tile="${esc(t.ticker)}" ${shown.has(t.ticker) ? "checked" : ""}> ${esc(t.name)}${t.custom ? ` <button class="rm" data-rmtile="${esc(t.ticker)}" title="Remove this custom tile">×</button>` : ""}</label>`).join("");
   $$("[data-rmtile]").forEach((b) => b.onclick = async (e) => {
     e.preventDefault(); // inside a label: don't tick the box
     const ticked = new Set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile));
@@ -2236,7 +2236,7 @@ applyTheme();
 // The Screener's markets and countries come from the regions you follow, so they're built again when that changes
 function renderMarketChoices() {
   const m = state.meta;
-  $("#scrMarkets").innerHTML = m.markets.map((x) => `<label><input type="checkbox" value="${esc(x)}" ${x !== "Crypto" ? "checked" : ""}> ${esc(x)}</label>`).join("");
+  $("#scrMarkets").innerHTML = m.markets.map((x) => `<label><input type="checkbox" name="scrMarket" value="${esc(x)}" ${x !== "Crypto" ? "checked" : ""}> ${esc(x)}</label>`).join("");
   const groups = Object.entries(m.countryGroups || {}).filter(([, cs]) => cs.some((c) => Object.values(m.countries).flat().includes(c)));
   $("#fCountry").innerHTML = '<option value="">Any</option>' + groups.map(([g]) => `<option value="${esc(g)}">${esc(g)} (all)</option>`).join("")
     + Object.entries(m.countries).map(([r, cs]) => `<optgroup label="${esc(r)}">${cs.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</optgroup>`).join("");
