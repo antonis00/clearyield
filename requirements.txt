@@ -5,5 +5,6 @@ yfinance==1.8.0
 pandas==3.1.1
 numpy==2.5.4
 httpx==0.28.1
+pillow==13.0.0
 # Imported directly for the certificate bundle; kept current rather than pinned, since it's the list of trusted roots
 certifi>=2024.2.2

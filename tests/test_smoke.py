@@ -148,9 +148,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v10:EMPTY.X") is None
-        db.cache_set("info:v10:OLD.X", {"trailingPE": 12.0})
-        db.cache_expire("info:v10:OLD.X")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v11:EMPTY.X") is None
+        db.cache_set("info:v11:OLD.X", {"trailingPE": 12.0})
+        db.cache_expire("info:v11:OLD.X")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -5111,6 +5111,94 @@ def test_orders_ticker_for_an_empty_class():
         assert c.post("/api/orders", json={"orders": [aapl]}).status_code == 200
         p = plan()
         assert "Stocks" not in {e["assetClass"] for e in p["empty"]} and "Crypto" in {e["assetClass"] for e in p["empty"]}
+
+
+def test_logos_from_the_first_source_with_a_real_image():
+    """Logos: the sharp site icon first, then each logo source until one gives a real image (no error page, no SVG, no
+    tiny icon), tidied into a square PNG (margins trimmed, a white logo on a dark tile), saved beside the database and
+    served by the app; nothing found is a 204 and remembered; demo mode never fetches."""
+    import io
+    from PIL import Image, ImageDraw
+    from backend import data, db, logos
+
+    def img(w, colour=(200, 0, 0, 255), fmt="PNG", ground=None, mark=None):
+        """A w-pixel image: solid `colour`, or a `mark` square of that colour in the middle of `ground`."""
+        im = Image.new("RGBA", (w, w), ground if ground else colour)
+        if ground:
+            ImageDraw.Draw(im).rectangle([w // 2 - mark // 2, w // 2 - mark // 2, w // 2 + mark // 2 - 1, w // 2 + mark // 2 - 1], fill=colour)
+        out = io.BytesIO()
+        im.convert("RGB" if fmt == "JPEG" else "RGBA").save(out, fmt)
+        return out.getvalue()
+
+    def shown(png):
+        im = Image.open(io.BytesIO(png))
+        assert im.format == "PNG" and im.size == (logos.SIZE, logos.SIZE)
+        return im.convert("RGB")
+
+    # Only real images; a site icon must be big enough; a solid one is kept edge to edge
+    assert logos.prepare(b"<svg onload=alert(1)>" + b" " * 200, "fmp") is None
+    assert logos.prepare(b"<html>not found</html>" + b" " * 200, "fmp") is None
+    assert logos.prepare(img(16), "google") is None and logos.prepare(img(16), "fmp")
+    assert logos.prepare(img(40), "google", logos.SHARP_ICON) is None and logos.prepare(img(64), "google", logos.SHARP_ICON)
+    assert shown(logos.prepare(img(64, fmt="JPEG"), "google")).getpixel((0, 0)) == (200, 0, 0)
+    assert shown(logos.prepare(img(64, fmt="ICO"), "duckduckgo")).getpixel((64, 64)) == (200, 0, 0)
+    # A small mark in a wide transparent (or white) margin is trimmed to fill its tile, with a thin margin back
+    for ground in ((0, 0, 0, 0), (255, 255, 255, 255)):
+        t = shown(logos.prepare(img(200, (0, 0, 0, 255), ground=ground, mark=40), "fmp"))
+        assert t.getpixel((2, 2)) == (255, 255, 255) and t.getpixel((20, 64)) == (0, 0, 0) and t.getpixel((64, 64)) == (0, 0, 0), ground
+    # A white logo on transparent goes on the dark tile; nothing visible is refused
+    t = shown(logos.prepare(img(100, (255, 255, 255, 255), ground=(0, 0, 0, 0), mark=60), "fmp"))
+    assert t.getpixel((2, 2)) == logos.DARK_TILE[:3] and t.getpixel((64, 64)) == (255, 255, 255)
+    assert logos.prepare(img(100, (0, 0, 0, 0)), "fmp") is None
+    long = io.BytesIO()
+    Image.new("RGBA", (128, 13), (200, 0, 0, 255)).save(long, "PNG")  # a long wordmark: unreadable in a square tile
+    assert logos.prepare(long.getvalue(), "fmp") is None
+    assert logos.has_logo("AZN.L") and not logos.has_logo("^GSPC") and not logos.has_logo("EURUSD=X") and not logos.has_logo("../x")
+
+    # Which source won, by its colour
+    RED, GREEN, BLUE, GREY = (200, 0, 0, 255), (0, 160, 0, 255), (0, 0, 200, 255), (90, 90, 90, 255)
+    colour = lambda png: shown(png).getpixel((64, 64)) + (255,)  # noqa: E731
+    asked = []
+    pages = {"financialmodelingprep": None, "parqet": b"<html>" + b" " * 300, "google": img(16, RED), "duckduckgo": img(64, GREEN)}
+    real_fetch, real_domain, real_demo = logos._fetch, logos.domain, data.DEMO
+    logos._fetch = lambda url: asked.append(url) or next((v for k, v in pages.items() if k in url), None)
+    logos.domain = lambda t: "example.com"
+    data.DEMO = False
+    try:
+        with TestClient(app) as c:
+            r = c.get("/api/logo/qnbk.qa")
+            assert r.status_code == 200 and r.headers["content-type"] == "image/png" and colour(r.content) == GREEN
+            assert [u.split("/")[2] for u in asked] == ["www.google.com", "financialmodelingprep.com", "assets.parqet.com", "icons.duckduckgo.com"], asked
+            assert db.cache_get(logos.KEY + "QNBK.QA", 9e9)["source"] == "duckduckgo"
+            assert logos._file("QNBK.QA").parent == Path(os.environ["CLEARYIELD_DB"]).parent / "logos"
+            asked.clear()
+            assert colour(c.get("/api/logo/QNBK.QA").content) == GREEN and not asked  # saved: no second fetch
+            # The cache cleared: the saved logo still shows, nothing is fetched while the page waits
+            db.cache_expire(logos.KEY + "QNBK.QA")
+            assert colour(c.get("/api/logo/QNBK.QA").content) == GREEN and not asked
+            # Nothing anywhere: 204, remembered, so the next look doesn't ask again
+            pages = {}
+            assert c.get("/api/logo/NOPE").status_code == 204 and len(asked) == 4
+            asked.clear()
+            assert c.get("/api/logo/NOPE").status_code == 204 and not asked
+            assert c.get("/api/logo/^GSPC").status_code == 204 and not asked
+            # The background fills what isn't known yet and refreshes what's out of date (QNBK.QA, expired above), and only that
+            pages = {"financialmodelingprep": img(128, BLUE)}
+            assert logos.warm(["AAPL", "NOPE", "QNBK.QA", "AAPL", "^VIX"]) == 2 and len(asked) == 4  # each: the site icon, then FMP
+            assert colour(c.get("/api/logo/QNBK.QA").content) == BLUE
+            # A sharp site icon (the symbol alone) comes before the full logo; a small one only after every logo source
+            pages = {"google": img(64, RED), "financialmodelingprep": img(128, BLUE)}
+            asked.clear()
+            assert colour(c.get("/api/logo/BBVA.MC").content) == RED and len(asked) == 1
+            pages = {"google": img(40, RED), "financialmodelingprep": img(128, BLUE)}
+            assert colour(c.get("/api/logo/ING.AS").content) == BLUE
+            pages = {"google": img(40, GREY)}
+            assert colour(c.get("/api/logo/SMALL.X").content) == GREY
+    finally:
+        logos._fetch, logos.domain, data.DEMO = real_fetch, real_domain, real_demo
+    with TestClient(app) as c:  # demo mode: never fetched, the page shows letters
+        asked.clear()
+        assert c.get("/api/logo/MSFT").status_code == 204 and not asked
 
 
 if __name__ == "__main__":

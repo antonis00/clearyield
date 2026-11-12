@@ -333,8 +333,9 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .opp-dash.loading .opp-dash-chart { display: none; } /* while scoring, the message has the whole card, centred */
 .opp-dash.loading .opp-dash-list { grid-column: 1 / -1; min-height: 190px; align-items: center; justify-content: center; }
 .opp-dash.loading .dl-loader { width: min(720px, 100%); }
-.opp-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
+.opp-row { display: grid; grid-template-columns: 108px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
 .opp-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opp-row > b:first-child { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 @media (max-width: 900px) { .opp-dash { grid-template-columns: 1fr; } }
 
 /* Why some metrics aren't scored, under the first of them */
@@ -451,3 +452,21 @@ nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu
 .ord-picks .form-row { margin: 0; align-items: center; }
 .ord-picks label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ord-picks input.ord-pick { width: 9em; text-transform: uppercase; }
+
+/* Company logos: the first letter, covered by the logo once it loads */
+.logo { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px;
+  border-radius: 6px; background: var(--line); color: var(--muted); font: 600 12px/1 var(--mono); overflow: hidden; vertical-align: middle; }
+.logo::before { content: attr(data-l); }
+/* White only behind the logo (transparent ones need it), and the logo a touch larger than its tile, so a logo with its
+   own background colour covers the edge instead of leaving a thin white rim where its pixels meet the tile's */
+/* Whole pixels only: a fractional size or offset smears every edge */
+.logo img { position: absolute; top: -1px; left: -1px; width: calc(100% + 2px); height: calc(100% + 2px); max-width: none; object-fit: contain; opacity: 0; }
+.logo.has { background: none; }
+.logo.has::before { content: none; }
+.logo.has img { opacity: 1; }
+.logo.sm { width: 20px; height: 20px; border-radius: 4px; font-size: 10px; }
+.logo.lg { width: 52px; height: 52px; border-radius: 10px; font-size: 22px; }
+.symwrap { display: inline-flex; align-items: center; gap: 9px; min-width: 0; }
+.symwrap > span:last-child { min-width: 0; }
+.stock-id { display: flex; align-items: center; gap: 14px; }
+.stock-id #rLogo:empty { display: none; }
