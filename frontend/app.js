@@ -1061,7 +1061,7 @@ const askStepLi = (s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.to
 // What a running question is doing now, from its latest event
 function askPhase(ev) {
   if (!ev) return "Starting…";
-  if (ev.phase === "waiting") return `Waiting ${ev.seconds} s for the AI's per-minute allowance (free plan)…`;
+  if (ev.phase === "waiting") return "Still working…";  // a pause for the provider's limits: the details aren't the investor's concern
   if (ev.phase === "checking") return "Checking every figure against the data…";
   if (ev.phase === "revising") return `Correcting ${ev.problems === 1 ? "a figure" : `${ev.problems} figures`} that the data doesn't have…`;
   if (ev.looking) return `Looking up: ${ev.looking.map((s) => esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {})).replace(/^Looked up /, "")).join(", ")}…`;
@@ -1089,9 +1089,9 @@ function linkTickers(root, steps) {
 state.askThread = [];
 function askCard(q, r) {
   const card = document.createElement("div"); card.className = "card ask-answer";
-  const secs = r.seconds != null ? `${r.seconds} s, ` : "";
+  const secs = r.seconds != null ? `, ${r.seconds} s` : "";
   card.innerHTML = `<div class="ask-q">${r.followed ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><div class="brief">${markFigures(DOMPurify.sanitize(marked.parse(r.answer)), r.check)}</div>
-    <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}, ${secs}${r.waited ? `${r.waited} s of it waiting for the AI's allowance` : "no waiting"}</summary><ol>${r.steps.map(askStepLi).join("") || "<li>Answered without looking anything up.</li>"}</ol></details>
+    <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}${secs}</summary><ol>${r.steps.map(askStepLi).join("") || "<li>Answered without looking anything up.</li>"}</ol></details>
     ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
   linkTickers($(".brief", card), r.steps);
   // A screen the answer ran opens in the Screener, where every match shows (the answer saw the top ten)

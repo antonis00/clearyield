@@ -608,13 +608,13 @@ const SLOW = 150000;
     await p.route("**/api/ask/start", startAsk); await p.route("**/api/ask/job/*", jobAsk);
     await p.evaluate(() => { state.meta.aiInfo = { ...(state.meta.aiInfo || {}), on: true }; });
     await p.fill("#askInput", "Why did Nvidia move today?"); await p.press("#askInput", "Enter");
-    await p.waitForFunction(() => /Waiting 3 s for the AI/.test(document.querySelector(".ask-live .ask-now-text")?.textContent || ""), null, { timeout: 10000 });
+    await p.waitForFunction(() => /Still working…/.test(document.querySelector(".ask-live .ask-now-text")?.textContent || ""), null, { timeout: 10000 });
     const live = await p.evaluate(() => ({ steps: [...document.querySelectorAll(".ask-live-steps li")].map((li) => li.textContent), now: document.querySelector(".ask-now-text").textContent }));
-    expect("ask: while it works, the page shows each step and what it's waiting for", live.steps.join() === "Looked up NVDA" && /Waiting 3 s/.test(live.now), JSON.stringify(live));
+    expect("ask: while it works, the page shows each step, and a pause plainly, without plan or limit details", live.steps.join() === "Looked up NVDA" && /^Still working…$/.test(live.now.trim()) && !/allowance|plan|limit/i.test(live.now), JSON.stringify(live));
     await p.waitForSelector(".ask-thread .ask-answer", { timeout: 10000 });
     const done1 = await p.evaluate(() => ({ live: !!document.querySelector(".ask-live"), link: document.querySelector(".ask-answer .ask-stock")?.dataset.stock, how: document.querySelector(".ask-answer .ask-steps summary").textContent,
       newBtn: !document.querySelector("#askNew").classList.contains("hidden") }));
-    expect("ask: the answer replaces the progress, its tickers link to Research, and says how long it took", !done1.live && done1.link === "NVDA" && /1 look-up, 2 model calls, \d+ s, 3 s of it waiting/.test(done1.how) && done1.newBtn, JSON.stringify(done1));
+    expect("ask: the answer replaces the progress, its tickers link to Research, and says how long it took", !done1.live && done1.link === "NVDA" && /1 look-up, 2 model calls, \d+ s$/.test(done1.how.trim()) && !/waiting|allowance/.test(done1.how) && done1.newBtn, JSON.stringify(done1));
     polls = 0;
     await p.fill("#askInput", "And its dividend?"); await p.press("#askInput", "Enter");
     await p.waitForFunction(() => document.querySelectorAll(".ask-thread.current .ask-answer").length === 2, null, { timeout: 10000 });
