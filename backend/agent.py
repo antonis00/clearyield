@@ -483,8 +483,7 @@ def _tavily_once(query, news):
         many = len(keys) > 1
         if refused and not limited:
             return {"error": f"The Tavily key{'s were' if many else ' was'} refused: check TAVILY_API_KEY in .env."}
-        return {"error": f"Tavily's allowance is used up for now on {'every key' if many else 'the key'} "
-                         "(the free plan gives 1,000 searches a month, renewed on the 1st)."}
+        return {"error": "Web search isn't available right now. Answer from the app's own data, and say the web wasn't searched."}
     if r.status_code >= 400:
         return {"error": f"Tavily didn't answer ({r.status_code})."}
     results = [{"site": _site(x.get("url")), "title": (x.get("title") or "")[:150], "url": x.get("url"),
@@ -782,10 +781,8 @@ def _limit_message(r, wait, keys=1):
         why = ""
     when = f" in about {round(wait / 60)} minutes" if wait >= 90 else f" in about {round(wait)} seconds" if wait else " later"
     if "per day" in why or "TPD" in why or "RPD" in why:
-        limit = re.search(r"Limit (\d+)", why)
-        return (f"Today's AI allowance is used up{' on every key' if keys > 1 else ''}{f' ({int(limit.group(1)):,} tokens a day on your plan)' if limit else ''}. "
-                f"It comes back gradually: try again{when}. Briefs and screener questions draw on the same allowance.")
-    return f"The AI provider's rate limit was reached. Try again{when}."
+        return f"The AI has done as much as it can for today. Try again{when}."
+    return f"The AI is busy right now. Try again{when}."
 
 
 def _post(c, url, headers, body, need=0):

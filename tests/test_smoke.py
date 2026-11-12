@@ -4352,12 +4352,12 @@ def test_ask_uses_the_tools_and_checks_its_figures():
                            _chat("Second time lucky.")]
             out = c.post("/api/ask", json={"question": "Anything?"}).json()
             assert out["answer"] == "Second time lucky." and len(llm.seen) == 2, out
-            # A day's allowance used up is said plainly, with when it comes back; it isn't waited out
+            # A day's allowance used up is said plainly, with when it comes back, and no plan details; it isn't waited out
             llm.seen.clear()
             daily = (429, {"error": {"message": "Rate limit reached ... on tokens per day (TPD): Limit 200000, Used 199009, Requested 1783.", "code": "rate_limit_exceeded"}}, 0)
             llm.replies = [daily]
             r = c.post("/api/ask", json={"question": "Anything?"})
-            assert r.status_code == 503 and "Today's AI allowance is used up (200,000 tokens a day" in r.json()["detail"] and len(llm.seen) == 1, r.text
+            assert r.status_code == 503 and "done as much as it can for today" in r.json()["detail"] and "tokens" not in r.json()["detail"] and len(llm.seen) == 1, r.text
             # Refused twice after a look-up: a fresh conversation with the question and what was found, and no tools
             llm.seen.clear()
             refused = (400, {"error": {"message": "Tool choice is none, but model called a tool"}}, 0)
@@ -4844,7 +4844,7 @@ def test_ai_keys_take_turns_at_limits():
                     agent.ask("Anything?")
                     raise AssertionError("should have failed")
                 except RuntimeError as e:
-                    assert "used up on every key" in str(e) and len(llm.seen) == 2, (str(e), len(llm.seen))
+                    assert "done as much as it can for today" in str(e) and "key" not in str(e) and len(llm.seen) == 2, (str(e), len(llm.seen))
         # One key, as before: a day's limit is reported, not retried
         with _with_env(AI_PROVIDER="openai_compatible", AI_BASE_URL=llm.url, AI_MODEL="m", AI_API_KEY="gsk_six"):
             llm.seen.clear()
@@ -4852,7 +4852,7 @@ def test_ai_keys_take_turns_at_limits():
             try:
                 agent.ask("Anything?")
             except RuntimeError as e:
-                assert "used up (200,000" in str(e) and len(llm.seen) == 1
+                assert "done as much as it can for today" in str(e) and len(llm.seen) == 1
     finally:
         llm.close()
         _reset()
@@ -4906,7 +4906,7 @@ def test_ask_searches_the_web():
             web.replies = [(401, {"detail": "bad"}, 0)]
             assert agent.web_search("x") == {"error": "The Tavily key was refused: check TAVILY_API_KEY in .env."}
             web.replies = [(432, {"detail": "limit"}, 0)]
-            assert "used up" in agent.web_search("x")["error"]
+            assert "isn't available right now" in agent.web_search("x")["error"] and "plan" not in agent.web_search("x")["error"]
         # Several keys: one that reaches its month's limit hands the search to the next, and is skipped until the 1st
         from backend import db
         with _with_env(AI_PROVIDER="none", TAVILY_API_KEY="tvly-one, tvly-two"):
@@ -4920,11 +4920,11 @@ def test_ask_searches_the_web():
             assert web.seen[-1][1]["authorization"] == "Bearer tvly-two" and len(web.seen) == 3
             # the key itself is never stored, only a fingerprint
             assert not db.q("SELECT key FROM cache WHERE instr(key, 'tvly-') OR instr(value, 'tvly-')")
-            # A minute's limit on the last key: every key is spent for now, said so without another request
+            # A minute's limit on the last key: every key is spent for now, said so (plainly) without another request
             web.replies = [(429, {"detail": "slow down"}, 0)]
-            assert "every key" in agent.web_search("c")["error"]
+            assert "isn't available right now" in agent.web_search("c")["error"]
             n = len(web.seen)
-            assert "every key" in agent.web_search("d")["error"] and len(web.seen) == n
+            assert "isn't available right now" in agent.web_search("d")["error"] and len(web.seen) == n
         # A refused key passes the search on too
         with _with_env(AI_PROVIDER="none", TAVILY_API_KEY="tvly-three,tvly-four"):
             web.seen.clear()
