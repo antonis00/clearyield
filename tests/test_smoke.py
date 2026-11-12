@@ -5113,6 +5113,45 @@ def test_orders_ticker_for_an_empty_class():
         assert "Stocks" not in {e["assetClass"] for e in p["empty"]} and "Crypto" in {e["assetClass"] for e in p["empty"]}
 
 
+def test_recent_days_missing_from_yahoos_daily_series_come_from_intraday():
+    """Yahoo's daily series once stopped at Tuesday 10 Nov on Thursday 12 for VWCE.DE (and later skipped Wednesday),
+    while its 15-minute candles had both days: the missing days are filled from those, so the latest price and the
+    day's change are right."""
+    import datetime as dt
+    import pandas as pd
+    from backend import data
+    thu = dt.date(2026, 11, 12)
+    daily = pd.DataFrame({"Open": [1.0] * 4, "High": [1.0] * 4, "Low": [1.0] * 4, "Close": [163.0, 165.8, 167.4, 167.7], "Volume": [10] * 4},
+                         index=pd.to_datetime(["2026-11-05", "2026-11-06", "2026-11-09", "2026-11-10"]))
+    assert data.missing_sessions("VWCE.DE", daily.index, thu) == [dt.date(2026, 11, 11)]
+    assert data.missing_sessions("VWCE.DE", daily.index, dt.date(2026, 11, 11)) == []  # Wednesday: up to Tuesday is complete
+    assert data.missing_sessions("BTC-USD", daily.index, thu) == [] and data.missing_sessions("^GSPC", daily.index, thu) == []
+    # Gulf markets trade Sunday to Thursday: a missing Sunday counts, a missing Friday doesn't
+    gulf = pd.to_datetime(["2026-11-05", "2026-11-09", "2026-11-10", "2026-11-11"])
+    assert data.missing_sessions("QNBK.QA", gulf, thu) == [dt.date(2026, 11, 8)]
+
+    times = pd.to_datetime(["2026-11-10 09:00", "2026-11-11 09:00", "2026-11-11 12:00", "2026-11-11 17:15", "2026-11-12 09:00", "2026-11-12 09:15"])
+    intra = pd.DataFrame({"Open": [167.9, 169.48, 170.0, 170.8, 170.36, 170.3], "High": [168, 169.6, 171.4, 171.0, 170.5, 170.4],
+                          "Low": [167.5, 169.2, 169.9, 170.5, 170.2, 170.1], "Close": [167.7, 169.5, 170.9, 171.0, 170.3, 170.26],
+                          "Volume": [5, 1, 2, 3, 4, 6]}, index=times)
+    filled = data.sessions_from_intraday(intra, daily, thu)
+    assert list(filled.index.date[-3:]) == [dt.date(2026, 11, 10), dt.date(2026, 11, 11), dt.date(2026, 11, 12)]
+    wed, today = filled.loc["2026-11-11"], filled.loc["2026-11-12"]
+    assert (wed["Open"], wed["High"], wed["Low"], wed["Close"], wed["Volume"]) == (169.48, 171.4, 169.2, 171.0, 6)
+    assert today["Close"] == 170.26 and filled.loc["2026-11-10", "Close"] == 167.7  # a day already there is kept as Yahoo gave it
+    assert data.sessions_from_intraday(intra.iloc[:1], daily, thu) is daily  # nothing new: unchanged
+
+    # In history(): only fetched when a day is missing
+    real_intra, asked = data._fetch_intraday, []
+    data._fetch_intraday = lambda t, i: asked.append(t) or intra
+    try:
+        assert data._with_recent_sessions("VWCE.DE", filled, thu) is filled and not asked
+        again = data._with_recent_sessions("VWCE.DE", daily, thu)
+        assert asked == ["VWCE.DE"] and again.index[-1].date() == thu and again.loc["2026-11-11", "Close"] == 171.0
+    finally:
+        data._fetch_intraday = real_intra
+
+
 def test_logos_from_the_first_source_with_a_real_image():
     """Logos: the sharp site icon first, then each logo source until one gives a real image (no error page, no SVG, no
     tiny icon), tidied into a square PNG (margins trimmed, a white logo on a dark tile), saved beside the database and
