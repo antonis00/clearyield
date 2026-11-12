@@ -341,6 +341,35 @@ def get_watchlist():
     return {"watchlist": out, "no_data": [r["ticker"] for r in rows if "error" in r] or None}
 
 
+def get_plan():
+    """The investor's monthly plan and goal: this month's money, what's gone in, the orders drafted for the rest, and
+    the chance of reaching the goal."""
+    from . import plan
+    p = plan.summary(_settings())
+    if not p["set"]:
+        return {"plan": "not set: the investor can set a monthly amount and a goal in the Your plan card on the Portfolio page"}
+    b, m = p["base"], p["thisMonth"]
+    out = {"monthly_amount": f"{p['monthly']:,.0f} {b}", "month": p["month"], "invested_this_month": f"{m['invested']:,.0f} {b}",
+           "still_to_invest_this_month": f"{m['left']:,.0f} {b}",
+           "suggested_buys_for_the_rest": [f"{o['ticker']}: {o['shares']:g} shares, about {o['value']:,.0f} {b} ({o['assetClass']})" for o in m["orders"]] or None,
+           "notes": m["notes"] or None}
+    g = p.get("goalCheck")
+    if g:
+        out["goal"] = (f"{p['goal']:,.0f} {b} in today's money by {p['by']} ({g.get('years', 0):.1f} years); assumes {p['expected']:.1%} a year "
+                       f"and {p['inflation']:.1%} inflation")
+        if "error" in g:
+            out["goal_check"] = g["error"]
+        else:
+            if g.get("chance") is not None:
+                out["chance_of_reaching_goal"] = f"{g['chance']:.0%} of simulated futures"
+                out["median_outcome_todays_money"] = f"{g['median']:,.0f} {b}"
+                out["range_10th_to_90th_percentile_todays_money"] = f"{g['p10']:,.0f} to {g['p90']:,.0f} {b}"
+            out["monthly_needed_at_a_steady_return"] = f"{g['needed']:,.0f} {b} (at {g['realYearly']:.1%} a year after inflation)"
+            if g.get("note"):
+                out["goal_note"] = g["note"]
+    return out
+
+
 def get_digest():
     """Today's digest, as on the dashboard: alerts, portfolio points, moves and events of holdings and watched stocks,
     market moves and recent headlines, each a sentence worked out by the app's rules."""
@@ -570,6 +599,7 @@ ONE = S({"ticker": {"type": "string"}}, ["ticker"])  # Yahoo symbols (AAPL, SAP.
 TOOLS = {
     "get_portfolio": (get_portfolio, "The investor's holdings, value, gains, return, core/satellite split, currency and sector exposure (funds looked through), warnings.", S({})),
     "get_watchlist": (get_watchlist, "The stocks the investor watches: latest day, past year, score.", S({})),
+    "get_plan": (get_plan, "The investor's monthly plan and goal: this month's amount and what's left to invest, suggested buys, the chance of reaching the goal. Use for 'what should I do this month' and 'am I on track'.", S({})),
     "get_digest": (get_digest, "Today's digest: alerts, portfolio points, moves and events of holdings and watched stocks, market moves, recent headlines.", S({})),
     "get_stock": (get_stock, "One stock, fund or coin: scores, key figures, returns, risk, signals, rank in its sector, latest day.", ONE),
     "screen": (screen, "Find stocks in the app's list (about 400, in the regions followed) by filters, best score first (top 10).",
@@ -671,11 +701,16 @@ def mentioned(question):
 
 
 
+PREFETCH_PLAN = re.compile(r"\b(this month|on track|my (goal|plan)|monthly (plan|amount)|how much (should|do) i (invest|put))\b", re.I)
+
+
 def prefetch(question):
     """The look-ups a question plainly needs, as (tool, args): the portfolio when it's about the investor, each stock it
     names, their news when it asks why something moved or what's new, and the markets when it's about them."""
     stocks = mentioned(question)
     plan = [("get_portfolio", {})] if PREFETCH["portfolio"].search(question) else []
+    if PREFETCH_PLAN.search(question):  # "what do I do this month", "am I on track for my goal"
+        plan.append(("get_plan", {}))
     plan += [("get_stock", {"ticker": t}) for t in stocks]
     if len(stocks) >= 2 and PREFETCH["compare"].search(question):  # side by side, with how closely they move together
         plan.append(("compare", {"tickers": stocks}))

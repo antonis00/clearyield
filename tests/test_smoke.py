@@ -1661,6 +1661,75 @@ def test_review_security_headers():
         assert "img-src 'self' data: blob:" in h["content-security-policy"] and h["referrer-policy"] == "no-referrer"
 
 
+def test_plan_this_month_and_the_goal():
+    """Your plan: the month's money less what went in this month, orders drafted for the rest, the goal's chance from
+    simulated futures, and the monthly amount a steady return needs (checked against the annuity formula)."""
+    import datetime as dt
+    from backend import data, db, plan
+    _reset()
+    with TestClient(app) as c:
+        assert c.get("/api/plan").json()["set"] is False
+        today = dt.date.today()
+        close = data.history("SPY", "1y")["Close"]
+        c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": close.index[-150].strftime("%Y-%m-%d"), "shares": 20, "price": float(close.iloc[-150])})
+        c.post("/api/settings", json={"base_currency": "USD", "targets": {"ETFs": 100}})
+        bad = c.post("/api/settings", json={"plan": {"monthly": -5}})
+        assert bad.status_code == 400
+        by = (today + dt.timedelta(days=365 * 10)).isoformat()
+        r = c.post("/api/settings", json={"plan": {"monthly": 500, "goal": 100000, "by": by}})
+        assert r.status_code == 200 and r.json()["plan"]["expected"] == 0.06  # the defaults fill what wasn't given
+        p = c.get("/api/plan").json()
+        m = p["thisMonth"]
+        assert p["set"] and m["left"] == 500 and m["orders"] and m["orders"][0]["ticker"] == "SPY"
+        assert abs(sum(o["value"] for o in m["orders"]) - 500) < 1
+        g = p["goalCheck"]
+        assert 0 <= g["chance"] <= 1 and g["p10"] <= g["median"] <= g["p90"]
+        # A purchase this month counts against the month's money
+        c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": today.isoformat(), "shares": 1, "price": float(close.iloc[-1])})
+        left = c.get("/api/plan").json()["thisMonth"]["left"]
+        assert abs(left - max(0, 500 - float(close.iloc[-1]))) < 0.01, left
+    # The arithmetic: 100 a month for a year at 0% is 1,200; at 12% a year from 0 it's the annuity due
+    assert abs(plan.needed_monthly(0, 1200, 1, 0.0) - 100) < 1e-9
+    rm = 1.12 ** (1 / 12) - 1
+    assert abs(plan.needed_monthly(0, 1000 * ((1 + rm) ** 120 - 1) / rm * (1 + rm), 10, 0.12) - 1000) < 1e-6
+    assert plan.needed_monthly(10000, 5000, 5, 0.03) == 0.0
+
+
+def test_unrecorded_dividends_dcf_rates_and_momentum_in_dollars():
+    """Dividends Yahoo lists while you held the shares, with none recorded near them; DCF rates by the statement
+    currency; momentum measured in dollars, so a currency's inflation isn't a trend."""
+    import pandas as pd
+    from backend import data, db, insights, portfolio, scoring
+    _reset()
+    real = data.dividend_payments
+    data.dividend_payments = lambda t: [("2026-02-10", 0.5), ("2026-05-11", 0.5), ("2026-08-10", 0.5)] if t == "AAPL" else []
+    try:
+        rows = [{"ticker": "AAPL", "kind": "buy", "date": "2026-03-01", "shares": 10, "price": 200},
+                {"ticker": "AAPL", "kind": "sell", "date": "2026-07-01", "shares": 4, "price": 210},
+                {"ticker": "AAPL", "kind": "dividend", "date": "2026-05-20", "shares": None, "price": 4.25}]
+        got = portfolio.unrecorded_dividends(rows, today=pd.Timestamp("2026-11-01").date())
+        # February was before the purchase; May is recorded (paid 9 days after the ex-date); August is missing, on 6 shares
+        assert [(d["exDate"], d["shares"], d["gross"]) for d in got] == [("2026-08-10", 6, 3.0)], got
+    finally:
+        data.dividend_payments = real
+    assert insights.dcf_rates({"financialCurrency": "BRL"})["discount"] == 0.17
+    assert insights.dcf_rates({"currency": "GBp"})["currency"] == "GBP"
+    odd = insights.dcf_rates({"financialCurrency": "TRY"})
+    assert not odd["known"] and odd["discount"] == 0.09
+    with TestClient(app) as c:
+        d = c.get("/api/dcf/AAPL").json()
+        if "fairValue" in d:
+            assert d["discount"] == d["rates"]["discount"] and c.get("/api/dcf/AAPL?discount=0.12").json()["discount"] == 0.12
+    # A stock up 60% in its own currency while the currency halved is down in dollars
+    idx = pd.bdate_range("2025-01-01", periods=300)
+    local = pd.Series([100 * 1.6 ** (i / 299) for i in range(300)], index=idx)
+    usd = local * pd.Series([1 * 0.5 ** (i / 299) for i in range(300)], index=idx)
+    b = scoring.factor_breakdown({"assetClass": "ETFs"}, local, usd)
+    r12 = next(m for m in b["momentum"] if m["label"].startswith("12-1"))
+    assert r12["label"].endswith("(in USD)") and r12["value"] < 0
+    assert insights.close_in_usd(local, "USD") is None
+
+
 def test_a_stopped_question_always_says_why():
     """A connection error can carry no text at all; the question that stopped must still say what happened (the page
     used to go back to its empty screen with nothing shown)."""

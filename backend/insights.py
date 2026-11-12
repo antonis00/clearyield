@@ -66,8 +66,24 @@ def evaluate_ticker(t, settings):
         # read an oil-price swing as +40% growth for companies whose revenue shrank each year since 2022
         fin = data.financials(t)
         inf = {**fill_from_statements(t, inf, fin), "revenueGrowth3y": multi_year_growth(fin, "revenue"), "earningsGrowth3y": multi_year_growth(fin, "netIncome")}
-    sc = scoring.evaluate(inf, full["Close"], settings.get("weights"))
+    sc = scoring.evaluate(inf, full["Close"], settings.get("weights"), trend=close_in_usd(full["Close"], inf.get("currency")))
     return full, inf, sc
+
+
+def close_in_usd(close, currency):
+    """The closes in US dollars at each day's rate, for momentum: ranked across countries, a return in lira or reais
+    counts inflation as a trend (a Turkish stock up 60% in a year the lira lost 40% ranked top). None for a dollar
+    asset, or when there's no rate history, and momentum then uses the closes as quoted."""
+    if not currency or data.main_unit(currency) == "USD" or close is None or not len(close):
+        return None
+    try:
+        fx = data.fx_series(currency, "USD", close.index)
+    except Exception:
+        return None
+    if fx is None:
+        return None
+    usd = (close * fx).dropna()
+    return usd if len(usd) >= 0.9 * len(close) else None
 
 
 def upcoming(inf, today=None):
@@ -275,7 +291,7 @@ def peer_table(settings, fresh=False, patience=60):
 
 
 def _peer_key(settings):
-    return "peers:v4:" + ",".join(_peer_markets(settings))  # another set of followed regions is another table
+    return "peers:v5:" + ",".join(_peer_markets(settings))  # another set of followed regions is another table
 
 
 _building, _build_lock = set(), __import__("threading").Lock()
@@ -621,6 +637,29 @@ def compare(tickers, period, settings, mode="base"):
     }
 
 
+# Rough rates for a DCF by the currency the cash flows are in: about the 10-year government yield plus 5 points of
+# equity premium, and long-run growth near that economy's inflation (Nov 2026, rounded to half a point). A cash flow in
+# reais can't be discounted at a dollar rate: 9% on Brazilian cash flows, with Brazil's yields near 13%, more than
+# doubled the fair value. Pegged Gulf currencies take the dollar's rates plus a little. Rates you type stand over these.
+DCF_RATES = {
+    "USD": (0.09, 0.025), "EUR": (0.08, 0.02), "GBP": (0.09, 0.025), "CHF": (0.065, 0.015), "JPY": (0.07, 0.01),
+    "CAD": (0.085, 0.02), "AUD": (0.09, 0.025), "SEK": (0.08, 0.02), "DKK": (0.08, 0.02), "NOK": (0.085, 0.02),
+    "HKD": (0.09, 0.025), "SGD": (0.08, 0.02), "TWD": (0.08, 0.02), "KRW": (0.085, 0.02), "CNY": (0.09, 0.025),
+    "ILS": (0.09, 0.02), "SAR": (0.095, 0.025), "QAR": (0.095, 0.025), "AED": (0.095, 0.025), "KWD": (0.095, 0.025),
+    "INR": (0.12, 0.05), "IDR": (0.125, 0.045), "MXN": (0.13, 0.035), "CLP": (0.11, 0.03), "BRL": (0.17, 0.04),
+    "ZAR": (0.14, 0.045),
+}
+
+
+def dcf_rates(inf):
+    """{discount, terminal, currency, known}: the rates for the currency the statements are in (DCF_RATES), else the
+    dollar's, said so."""
+    cur = data.main_unit(inf.get("financialCurrency") or inf.get("currency") or "USD")
+    known = cur in DCF_RATES
+    d, g = DCF_RATES.get(cur, DCF_RATES["USD"])
+    return {"discount": d, "terminal": g, "currency": cur, "known": known}
+
+
 def dcf(inf, growth=None, years=5, discount=0.09, terminal=0.025, fcf=None):
     fcf = fcf if fcf is not None else inf.get("freeCashflow")
     # sharesOutstanding counts one share class only: Roche by 7.5x, Alphabet by 2x
@@ -917,6 +956,22 @@ def portfolio_points(settings):
                               f"{money(cs['newMoney'])} of new money into core would bring it back, without selling."})
     for w in p["warnings"]:
         items.append({"tone": -1, "ticker": None, "priority": 4, "kind": "portfolio", "text": w})
+    from . import plan
+    month = plan.digest_line(settings)
+    if month:
+        pl, m = month
+        items.append({"tone": 0, "ticker": None, "priority": 4, "kind": "portfolio",
+                      "text": f"Your plan for {pl['month']}: {money(m['left'])} of your {money(pl['monthly'])} still to invest. "
+                              "The Your plan card on the Portfolio page drafts the orders."})
+    try:
+        missing = portfolio.unrecorded_dividends()
+    except Exception:
+        missing = []
+    if missing:
+        names = sorted({d["ticker"] for d in missing})
+        items.append({"tone": 0, "ticker": None, "priority": 5, "kind": "portfolio",
+                      "text": f"{len(missing)} dividend{'s' if len(missing) > 1 else ''} Yahoo lists while you held {', '.join(names)} "
+                              f"{'are' if len(missing) > 1 else 'is'} not recorded. Record what your broker paid, so income and returns include {'them' if len(missing) > 1 else 'it'}."})
     return items
 
 

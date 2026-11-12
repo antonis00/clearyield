@@ -543,3 +543,42 @@ def pretrade(settings, ticker, amount=None, entry=None, stop=None, risk=None):
         "sectorMixBefore": None if incomplete or not before["total"] else {k: v / before["total"] for k, v in before["allocation"]["sectorLookThrough"].items()},
         "sectorMixAfter": None if incomplete or not after["total"] else {k: v / after["total"] for k, v in after["allocation"]["sectorLookThrough"].items()}, "missing": sorted(set(before["missing"]) | set(after["missing"])),
     }
+
+
+# ---- dividends Yahoo lists while you held a holding, with none recorded near them
+DIV_BEFORE, DIV_AFTER = 10, 75  # a recorded dividend from 10 days before the ex-date to 75 after it counts as that one
+
+
+def unrecorded_dividends(rows=None, today=None):
+    """Each payment Yahoo lists (by ex-dividend date) when you held shares the day before, with no dividend recorded
+    around it: [{ticker, exDate, perShare, shares, gross, currency}], newest first. `gross` is before any tax withheld at
+    source, in the currency paid (pounds for a pence-quoted stock), so it's a starting figure: the broker's statement
+    says what arrived. Only dated purchases count, since an undated lot can't be placed before or after an ex-date."""
+    import datetime as dt
+    rows = db.q("SELECT * FROM transactions") if rows is None else rows
+    today = (today or dt.date.today()).isoformat()
+    trades = [r for r in ledger.in_todays_shares(rows) if r.get("kind") in ("buy", "sell") and r.get("date")]
+    recorded = {}
+    for r in rows:
+        if r.get("kind") == "dividend" and r.get("date"):
+            recorded.setdefault(r["ticker"], []).append(dt.date.fromisoformat(r["date"]))
+    out = []
+    for t in sorted({r["ticker"] for r in trades}):
+        mine = sorted((r for r in trades if r["ticker"] == t), key=lambda r: r["date"])
+        paid = data.dividend_payments(t)
+        if not paid:
+            continue
+        cur = data.info(t).get("currency") or ""
+        divisor = data.MINOR_UNITS.get(cur, (cur, 1.0))[1]
+        for ex, per in paid:
+            if ex < mine[0]["date"] or ex > today:
+                continue
+            held = sum(r["shares"] if r["kind"] == "buy" else -r["shares"] for r in mine if r["date"] < ex)
+            if held <= 1e-9:
+                continue
+            exd = dt.date.fromisoformat(ex)
+            if any(-DIV_BEFORE <= (d - exd).days <= DIV_AFTER for d in recorded.get(t, [])):
+                continue
+            out.append({"ticker": t, "exDate": ex, "perShare": per / divisor, "shares": held, "gross": held * per / divisor,
+                        "currency": data.main_unit(cur) if cur else None})
+    return sorted(out, key=lambda x: x["exDate"], reverse=True)

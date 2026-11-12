@@ -171,8 +171,8 @@
           <div class="form-row">
             <label>Growth %<input type="number" id="dGrowth" step="0.5"></label>
             <label>Years<input type="number" id="dYears" value="5" min="3" max="15"></label>
-            <label>Discount %<input type="number" id="dDisc" value="9" step="0.5"></label>
-            <label>Terminal %<input type="number" id="dTerm" value="2.5" step="0.25"></label>
+            <label>Discount %<input type="number" id="dDisc" step="0.5"></label>
+            <label>Terminal %<input type="number" id="dTerm" step="0.25"></label>
             <button class="btn sm" id="btnDcf">Recalculate</button>
           </div>
           <div id="dcfOut"></div>
@@ -299,6 +299,7 @@
       </details>
     </div>
     <div class="card"><div class="card-h"><h3>Positions</h3></div><div id="pfTable" class="tablewrap"></div></div>
+    <div class="card hidden" id="divMissCard"><div class="card-h"><h3>Dividends not recorded</h3><span class="muted sm">Yahoo lists these as paid while you held the shares. Record what your broker paid.</span></div><div id="divMiss" class="tablewrap"></div></div>
     <div class="card hidden" id="csCard">
       <div class="card-h"><h3>Core &amp; satellite</h3><span class="muted sm">Broad index funds start as core, everything else as satellite. Switch any holding in Positions; set the target in Settings.</span></div>
       <div class="grid2 cs-body">
@@ -332,6 +333,18 @@
       <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>
       <div id="pfRebal" class="tablewrap"></div>
       <div id="pfRebalNote" class="muted sm" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="planCard">
+      <div class="card-h"><h3>Your plan</h3><span class="muted sm">What you invest each month, and the goal it's for</span></div>
+      <form id="planForm" class="form-row inline plan-form">
+        <label><span>Each month <span class="planBase"></span></span><input type="number" id="planMonthly" min="0" step="any" placeholder="0"></label>
+        <label><span>Goal, in today's money <span class="planBase"></span></span><input type="number" id="planGoal" min="0" step="any" placeholder="0"></label>
+        <label><span>By</span><input type="date" id="planBy"></label>
+        <label><span>Return a year %</span><input type="number" id="planExp" step="0.5" min="-20" max="20"></label>
+        <label><span>Inflation %</span><input type="number" id="planInfl" step="0.5" min="0" max="15"></label>
+        <button class="btn plan-go">Save plan</button>
+      </form>
+      <div id="planOut" class="grid2 plan-out"></div>
     </div>
     <div class="card" id="ordCard">
       <div class="card-h"><h3>Orders</h3><span class="muted sm">Prepared from your targets. You approve them and place them at your broker: ClearYield never trades.</span></div>

@@ -65,6 +65,9 @@ DEFAULT_SETTINGS = {
     "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
     "email_alerts": False,
     "fund_costs": {},  # {ticker: yearly cost as a fraction}, entered from a fund's factsheet; stands over Yahoo's figure
+    # What you invest each month and the goal it's for (plan.py): the goal in today's money by a date, with the yearly
+    # return and inflation the check assumes
+    "plan": {"monthly": 0, "goal": 0, "by": "", "expected": 0.06, "inflation": 0.02},
 }
 
 
@@ -431,6 +434,7 @@ SETTING_CHECKS = {
     "alert_email": _email,
     "email_alerts": _switch("Email alerts"),
     "fund_costs": _fund_costs,
+    "plan": lambda v: {**DEFAULT_SETTINGS["plan"], **__import__("backend.plan", fromlist=["check"]).check(v)},
 }
 
 

@@ -43,7 +43,9 @@ def _avg(parts):
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
-def factor_breakdown(info, close):
+def factor_breakdown(info, close, trend=None):
+    """`trend` is the closes in US dollars for momentum (insights.close_in_usd), so a trend means the same in every
+    currency; None uses `close` as quoted (a dollar asset, or the score research, which judges its own way)."""
     g = info.get
     f = {k: [] for k in FACTORS}
     is_equity = info.get("assetClass") == "Stocks"
@@ -94,14 +96,17 @@ def factor_breakdown(info, close):
         fe, te = g("forwardEps"), g("trailingEps")
         _part(f["growth"], "Forward EPS vs trailing", fe / te - 1 if fe is not None and te and te > 0 else None, -0.05, 0.25, "pct")
 
-    # --- momentum (all assets)
+    # --- momentum (all assets), in dollars where `trend` is given
+    quoted, close = close, trend if trend is not None else close
+    usd = " (in USD)" if trend is not None else ""
     r12 = ind.ret_over(close, 252)
     r1 = ind.ret_over(close, 21)
-    _part(f["momentum"], "12-1 month return", (1 + r12) / (1 + r1) - 1 if r12 is not None and r1 is not None else None, -0.20, 0.40, "pct")
+    _part(f["momentum"], "12-1 month return" + usd, (1 + r12) / (1 + r1) - 1 if r12 is not None and r1 is not None else None, -0.20, 0.40, "pct")
     sma200 = ind.sma(close, 200)
     has_sma = len(close) >= 200 and sma200.iloc[-1] == sma200.iloc[-1]
-    _part(f["momentum"], "Price vs 200-day avg", float(close.iloc[-1] / sma200.iloc[-1] - 1) if has_sma else None, -0.15, 0.15, "pct")
-    _part(f["momentum"], "3-month return", ind.ret_over(close, 63), -0.15, 0.20, "pct")
+    _part(f["momentum"], "Price vs 200-day avg" + usd, float(close.iloc[-1] / sma200.iloc[-1] - 1) if has_sma else None, -0.15, 0.15, "pct")
+    _part(f["momentum"], "3-month return" + usd, ind.ret_over(close, 63), -0.15, 0.20, "pct")
+    close = quoted  # risk is the asset's own swings, in its own currency
 
     # --- risk (higher score = calmer)
     # One scale for every asset, so a risk score means the same risk on a stock, a fund or a coin
@@ -135,8 +140,8 @@ def combine(scores, weights=None):
     return round(sum(scores[k] * w for k, w in used.items()) / total_w, 1) if total_w else None
 
 
-def evaluate(info, close, weights=None):
-    bd = factor_breakdown(info, close)
+def evaluate(info, close, weights=None, trend=None):
+    bd = factor_breakdown(info, close, trend)
     scores = {k: _avg(v) for k, v in bd.items()}
     composite = combine(scores, weights)
     if info.get("assetClass") == "Other":  # an index, currency or future: its trend is shown, but it isn't a holding to rate

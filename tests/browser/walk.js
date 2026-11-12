@@ -420,6 +420,19 @@ const SLOW = 150000;
   await p.click("#ordPlan .ord-discard");
   expect("orders: Discard drops the suggestion, keeping the amount", !(await p.evaluate(() => document.querySelector("#ordPlan").innerHTML.trim())) && (await p.inputValue("#ordMoney")) === "3000"
     && !(await p.evaluate(async () => (await fetch("/api/orders")).json())).open.length);
+  // Your plan: the month's money, where it goes, the goal's chance; Prepare these orders fills the Orders card
+  await p.locator("#planMonthly").pressSequentially("800"); await p.fill("#planGoal", "250000"); await p.fill("#planBy", "2040-01-01");
+  await p.click("#planForm .plan-go");
+  await p.waitForFunction(() => /chance of/.test(document.querySelector("#planOut").innerText) && /still to invest/.test(document.querySelector("#planOut").innerText), null, { timeout: SLOW });
+  const planText = await p.evaluate(() => document.querySelector("#planOut").innerText.replace(/\s+/g, " "));
+  expect("plan: this month and the goal are shown with figures", /\d+% chance of/.test(planText) && /a month/.test(planText) && !/undefined|NaN/.test(planText), planText.slice(0, 220));
+  if (await p.locator("#planToOrders").count()) {
+    await p.click("#planToOrders");
+    await p.waitForFunction(() => document.querySelector("#ordPlan tbody tr"), null, { timeout: SLOW });
+    expect("plan: Prepare these orders drafts the month's money", Number(await p.inputValue("#ordMoney")) > 0 && Number(await p.inputValue("#ordMoney")) <= 800);
+    await p.click("#ordPlan .ord-discard");
+  }
+  await p.evaluate(async () => fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan: { monthly: 0, goal: 0, by: "" } }) }));
 
   // Compare: "My holdings" fills in what's held, largest first
   await nav("compare"); await p.click("#cmpMine");
