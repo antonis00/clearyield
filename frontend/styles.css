@@ -335,7 +335,7 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .opp-dash-list .opp-row { padding: 5px 0; grid-template-columns: 120px minmax(0, 1fr) auto; }
 .opp-dash.loading .opp-dash-chart { display: none; } /* while scoring, the message has the whole card, centred */
 .opp-dash.loading .opp-dash-list { grid-column: 1 / -1; min-height: 300px; align-items: center; justify-content: center; }
-.opp-dash.loading .dl-loader { width: min(720px, 100%); }
+.opp-dash.loading .dl-loader { width: 100%; }  /* the whole card, like the map it stands in for */
 .opp-row { display: grid; grid-template-columns: 108px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
 .opp-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opp-row > b:first-child { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
