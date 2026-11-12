@@ -468,5 +468,6 @@ nav a.nav-ask { margin-top: auto; padding-left: 9px; } /* a tad left of the menu
 .logo.lg { width: 52px; height: 52px; border-radius: 10px; font-size: 22px; }
 .symwrap { display: inline-flex; align-items: center; gap: 9px; min-width: 0; }
 .symwrap > span:last-child { min-width: 0; }
-.stock-id { display: flex; align-items: center; gap: 14px; }
+.stock-id { display: flex; align-items: flex-start; gap: 14px; }
+.stock-id #rLogo { margin-top: 4px; }  /* level with the top of the ticker */
 .stock-id #rLogo:empty { display: none; }
