@@ -498,3 +498,14 @@ nav a.nav-ask { margin-top: auto; } /* at the bottom of the menu, lined up with 
 :root { --field-line: #4a5a72; }
 :root[data-theme="navy"] { --field-line: #566b94; }
 :root[data-theme="light"] { --field-line: #7d8a9b; }
+
+/* Your plan */
+.plan-form label > span:first-child { display: block; }
+.plan-form .plan-go { margin-left: auto; align-self: flex-end; }
+.plan-out { margin-top: 14px; }
+.plan-out h4 { margin: 0 0 8px; }
+.plan-big { font: 600 26px var(--mono); }
+.plan-big small { display: block; font: 400 12px var(--sans, inherit); color: var(--muted); margin-top: 2px; }
+.plan-big.up { color: var(--up); } .plan-big.down { color: var(--down); }
+.plan-buys { list-style: none; margin: 8px 0 10px; padding: 0; }
+.plan-buys li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); cursor: pointer; }

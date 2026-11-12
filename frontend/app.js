@@ -63,7 +63,7 @@ const FACTOR_INFO = {
   value: "Value: is the price cheap for what the company earns and owns? From P/E, forward P/E, price/book, EV/EBITDA and free-cash-flow yield. A higher score means cheaper. Stocks only. Track record (Score check, 2017-2026): suggestive, not proven.",
   quality: "Quality: how profitable and financially sound the business is. From return on equity, operating and net margins, debt/equity and the current ratio. A higher score means a stronger business. Stocks only. Track record (Score check, 2017-2026): it pointed the wrong way, mostly in Europe: read it as a description of the business, not a prediction.",
   growth: "Growth: how fast the business is growing. From revenue and net income growth a year over the last three annual statements (the latest quarter against a year before, where there aren't three years or a loss at either end), and forecast against trailing earnings per share. A higher score means faster growth. Stocks only. Track record (Score check, 2017-2026): no evidence it predicted returns.",
-  momentum: "Momentum: how the price has been trending. From the 12-month return leaving out the last month, the price against its 200-day average, and the 3-month return. A higher score means a stronger trend. All assets. Track record (Score check, 2017-2026): suggestive within countries.",
+  momentum: "Momentum: how the price has been trending. From the 12-month return leaving out the last month, the price against its 200-day average, and the 3-month return, measured in US dollars so a currency's inflation doesn't count as a trend. A higher score means a stronger trend. All assets. Track record (Score check, 2017-2026): suggestive within countries.",
   risk: "Risk: how bumpy the ride has been. From 1-year volatility and the largest fall from a peak in the past year, plus beta for stocks. A higher score means lower risk. One scale for every asset, crypto included. Track record (Score check, 2017-2026): works: calmer-scored stocks stayed calmer.",
 };
 // A small "i" that explains something on hover or keyboard focus; the text is shown by the floating tooltip below
@@ -385,7 +385,7 @@ async function loadDashboard() {
     .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
-const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts, journal reminders and approved orders not yet marked done; your portfolio's latest-day change, its core share against your target and any warnings; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
+const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts, journal reminders and approved orders not yet marked done; your portfolio's latest-day change, its core share against your target, any warnings, this month's planned money not yet invested and dividends Yahoo lists while you held a holding that aren't recorded; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
 $("#digestInfo").innerHTML = infoIcon(DIGEST_RULES);
 // Two tabs: Highlights (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
 // stocks). The choice is remembered; switching only redraws, it doesn't ask the server again.
@@ -454,6 +454,7 @@ async function openStock(t, period) {
     $("#ptRiskLabel").textContent = `Most I'd lose (${state.meta.settings.base_currency})`;
     // The default growth: revenue a year over three years where there are the statements, else the latest quarter
     const g = isNum(s.info.revenueGrowth3y) ? s.info.revenueGrowth3y : s.info.revenueGrowth; $("#dGrowth").value = isNum(g) ? Math.min(Math.max(g * 100, 0), 15).toFixed(1) : 5;
+    $("#dDisc").value = ""; $("#dTerm").value = "";  // the statement currency's rates, filled in by the first run
     if (hasDcf(s)) runDcf();
     loadNews(); loadEarnings(); loadFund(s); loadOwnership(s); renderHistory(s);
   } catch (e) {
@@ -685,18 +686,26 @@ function renderFin(s) {
 }
 async function runDcf() {
   const ticker = state.ticker;
-  const out = $("#dcfOut"); const q = new URLSearchParams({ growth: $("#dGrowth").value / 100, years: $("#dYears").value, discount: $("#dDisc").value / 100, terminal: $("#dTerm").value / 100 });
+  const out = $("#dcfOut"); const q = new URLSearchParams({ growth: $("#dGrowth").value / 100, years: $("#dYears").value });
+  if ($("#dDisc").value !== "") q.set("discount", $("#dDisc").value / 100);
+  if ($("#dTerm").value !== "") q.set("terminal", $("#dTerm").value / 100);
   try {
     const d = await api(`/api/dcf/${encodeURIComponent(ticker)}?${q}`);
     if (ticker !== state.ticker) return;
     if (d.error) { out.innerHTML = `<div class="muted">${esc(d.error)}</div>`; return; }
-    const cur = state.stock.info.currency;
+    const cur = state.stock.info.currency, r = d.rates;
+    if ($("#dDisc").value === "") $("#dDisc").value = +(d.discount * 100).toFixed(2);
+    if ($("#dTerm").value === "") $("#dTerm").value = +(d.terminal * 100).toFixed(2);
+    const own = r && (Math.abs(d.discount - r.discount) > 1e-9 || Math.abs(d.terminal - r.terminal) > 1e-9);
+    const ratesNote = !r ? "" : own ? ` Your own rates; for ${esc(r.currency)} cash flows the starting ones are ${pct(r.discount, 1, false)} and ${pct(r.terminal, 1, false)}.`
+      : r.known ? ` Rates for cash flows in ${esc(r.currency)}: about its 10-year government yield plus 5 points, and long-run growth near its inflation. Type your own to change them.`
+      : ` No rates kept for ${esc(r.currency)}, so these are the dollar's: set ones that fit ${esc(r.currency)}'s yields and inflation.`;
     // What the price assumes comes first: it needs no growth guess. The fair value follows as the central figure and
     // the range across the grid, since a single number looks more precise than a model this sensitive can be.
     const vals = d.grid.fairValue.flat().filter(isNum), lo = Math.min(...vals), hi = Math.max(...vals);
     out.innerHTML = `<p class="sm dcf-lead"><b>What the price assumes:</b> ${isNum(d.impliedGrowth) ? `free cash flow growing <b>${pct(d.impliedGrowth, 1, false)} a year</b> for ${d.years} years, at this discount and terminal rate. Compare it with the growth you think is realistic.` : "no growth rate from -50% to +100% a year reaches today's price with these rates."}</p>
       <div class="dcf-big"><div>${money(d.fairValue, cur)}<small>Fair value at ${pct(d.growth, 1, false)} growth</small></div><div>${vals.length ? `${money(lo, cur, 0)}–${money(hi, cur, 0)}` : "—"}<small>Range across the grid</small></div><div>${money(d.price, cur)}<small>Price</small></div><div class="${cls(d.marginOfSafety)}">${pct(d.marginOfSafety)}<small>Upside at the central figure</small></div></div>
-      <div class="muted sm">Starting FCF ${big(d.startFcf)} ${esc(d.statementCurrency || "")} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)} ${esc(d.statementCurrency || "")}.${d.statementCurrency && !cur.startsWith(d.statementCurrency.slice(0, 2)) ? ` Fair value is converted from ${esc(d.statementCurrency)} at today's rate.` : ""}</div>
+      <div class="muted sm">Starting FCF ${big(d.startFcf)} ${esc(d.statementCurrency || "")} · Terminal value is ${pct(d.terminalShare, 0, false)} of the total, so the result is very sensitive to the discount and terminal rates. Net cash ${big(d.netCash)} ${esc(d.statementCurrency || "")}.${ratesNote}${d.statementCurrency && !cur.startsWith(d.statementCurrency.slice(0, 2)) ? ` Fair value is converted from ${esc(d.statementCurrency)} at today's rate.` : ""}</div>
       <div class="tablewrap"><table class="grid"><tr><th>Growth ↓ · Discount →</th>${d.grid.discount.map((x) => `<th class="num">${pct(x, 1, false)}</th>`).join("")}</tr>${d.grid.fairValue.map((row, r) => `<tr><th>${pct(d.grid.growth[r], 1, false)}</th>${row.map((v) => `<td class="num ${isNum(v) ? cls(v - d.price) : ""}">${money(v, cur, 0)}</td>`).join("")}</tr>`).join("")}</table></div>
       <p class="muted sm">Fair value at each pair of rates. Green is above today's price, red below.</p>`;
   } catch (e) { out.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
@@ -1422,7 +1431,7 @@ async function loadPortfolio() {
   const b = p.base;
   $("#ordBase").textContent = `(${b})`;
   ordDraft = null; ordPicks = {}; $("#ordPlan").innerHTML = "";  // a draft from before this change in holdings is out of date
-  loadOrders();
+  loadOrders(); loadPlan(); loadDivMiss();
   $("#pfIncomplete").classList.toggle("hidden", !p.incomplete);
   if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
   $("#pfKpis").innerHTML = [
@@ -1797,6 +1806,68 @@ function markOrderDone(o) {
 }
 
 $("#ordForm").onsubmit = (e) => { e.preventDefault(); prepareOrders(); };
+
+// ---- Your plan: this month's money and the goal (plan.py)
+async function loadPlan() {
+  const el = $("#planOut");
+  let p;
+  try { p = await api("/api/plan"); } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
+  const b = p.base, m = p.thisMonth, g = p.goalCheck;
+  $$(".planBase").forEach((s) => s.textContent = `(${b})`);
+  const fill = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
+  fill("#planMonthly", p.monthly || ""); fill("#planGoal", p.goal || ""); fill("#planBy", p.by || "");
+  fill("#planExp", +(p.expected * 100).toFixed(2)); fill("#planInfl", +(p.inflation * 100).toFixed(2));
+  const month = !p.monthly ? `<p class="muted sm">Set what you invest each month: this then shows what's still to go in this month and where, by your targets.</p>`
+    : `<div class="plan-big">${money(m.left, b, 0)}<small>still to invest of ${money(p.monthly, b, 0)}</small></div>
+       <p class="sm">${m.trades ? `${money(m.invested, b, 0)} has gone in this month (${m.trades} trade${m.trades > 1 ? "s" : ""}, purchases less sales).` : "Nothing recorded this month yet."}</p>
+       ${m.orders.length ? `<ul class="plan-buys">${m.orders.map((o) => `<li data-stock="${esc(o.ticker)}" tabindex="0">${logoOf(o.ticker, o.name, 22)}<span><b>${esc(o.ticker)}</b> <span class="muted">${esc(o.assetClass)}</span></span><span class="num">${money(o.value, b, 0)}</span></li>`).join("")}</ul>
+         <button type="button" class="btn sm" id="planToOrders">Prepare these orders</button>` : ""}
+       ${(m.empty || []).length ? `<p class="muted sm">${m.empty.map((e) => `${esc(e.assetClass)} is under target and you hold nothing there: the Orders card asks what to buy.`).join(" ")}</p>` : ""}
+       ${m.notes.length ? `<ul class="caveats sm">${m.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
+  let goal;
+  if (!p.goal || !p.by) goal = `<p class="muted sm">Set a goal and its date, and this shows the chance of reaching it with what you hold and invest each month.</p>`;
+  else if (g.error) goal = `<p class="muted sm">${esc(g.error)}</p>`;
+  else {
+    const short = g.needed > p.monthly + 0.5;
+    goal = `${isNum(g.chance) ? `<div class="plan-big ${g.chance >= 0.75 ? "up" : g.chance >= 0.5 ? "" : "down"}">${pct(g.chance, 0, false)}<small>chance of ${money(p.goal, b, 0)} by ${esc(p.by)}${infoIcon(`${g.caveat} ${g.mix ? `The mix: ${g.mix.map((x) => `${x.ticker} ${x.weight}%`).join(", ")}, rebalanced yearly, history from ${g.historyFrom}${g.standIns.length ? ` (${g.standIns.map((u) => `${u.standIn} before ${u.ticker}`).join(", ")})` : ""}.` : ""}`)}</small></div>
+      <p class="sm">Typical outcome ${money(g.median, b, 0)} in today's money; 1 future in 10 ends under ${money(g.p10, b, 0)}, 1 in 10 over ${money(g.p90, b, 0)}.</p>` : ""}
+      <p class="sm">At a steady ${pct(g.realYearly, 1, false)} a year after inflation, ${g.needed > 0 ? `about <b>${money(g.needed, b, 0)} a month</b> reaches it` : "what you hold reaches it without adding more"}${p.monthly && g.needed > 0 ? (short ? `: ${money(g.needed - p.monthly, b, 0)} more than you plan.` : `, within the ${money(p.monthly, b, 0)} you plan.`) : "."}</p>
+      ${g.note ? `<p class="muted sm">${esc(g.note)}</p>` : ""}`;
+  }
+  el.innerHTML = `<div><h4>${esc(p.month)}</h4>${month}</div><div><h4>On track?</h4>${goal}</div>`;
+  const go = $("#planToOrders");
+  if (go) go.onclick = () => { $("#ordMoney").value = +m.left.toFixed(2); $("#ordFrac").checked = true; $("#ordSell").checked = false; prepareOrders(); $("#ordCard").scrollIntoView({ behavior: "smooth", block: "start" }); };
+}
+$("#planForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const n = (id) => Number($(id).value || 0);
+  try {
+    await api("/api/settings", { method: "POST", body: { plan: { monthly: n("#planMonthly"), goal: n("#planGoal"), by: $("#planBy").value, expected: n("#planExp") / 100, inflation: n("#planInfl") / 100 } } });
+    document.activeElement?.blur?.(); toast("Plan saved"); loadPlan();
+  } catch (err) { toast(err.message); }
+};
+
+// ---- Dividends Yahoo lists while you held the shares, with none recorded near them
+async function loadDivMiss() {
+  let rows;
+  try { rows = await api("/api/dividends/unrecorded"); } catch { rows = []; }
+  $("#divMissCard").classList.toggle("hidden", !rows.length);
+  if (!rows.length) return;
+  table($("#divMiss"), [
+    { k: "ticker", label: "Holding", fmt: (v) => symCell(v, {}) }, { k: "exDate", label: "Ex-dividend" },
+    { k: "perShare", label: "Per share", num: true, fmt: (v, r) => money(v, r.currency) }, { k: "shares", label: "Shares held", num: true, fmt: (v) => num(v) },
+    { k: "gross", label: "Before tax", num: true, fmt: (v, r) => money(v, r.currency) },
+    { k: "i", label: "", fmt: (_, r) => `<button type="button" class="btn ghost sm" data-divrec="${rows.indexOf(r)}">Record</button>` },
+  ], rows);
+  $$("[data-divrec]").forEach((btn) => btn.onclick = () => {
+    const r = rows[+btn.dataset.divrec];
+    $("#hKind").value = "dividend"; $("#hTicker").value = r.ticker; $("#hTicker").onchange();
+    $("#hCost").value = +r.gross.toFixed(2); $("#hDate").value = r.exDate; $("#hNote").value = "";
+    $("#hKind").onchange();
+    $("#hKind").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" }); $("#hCost").focus();
+    toast("Filled in before tax: change it to what your broker paid, and the date it arrived");
+  });
+}
 // A switch acts at once: a draft on show is worked out again, so it never disagrees with the switches
 ["#ordFrac", "#ordSell"].forEach((s) => { $(s).onchange = () => { if (ordDraft) prepareOrders(); }; });
 

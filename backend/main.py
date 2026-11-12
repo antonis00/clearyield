@@ -97,7 +97,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, logos, mailer, orders, portfolio, scorecheck, simulate, startup, tax  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, tax  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search, tickers_for  # noqa: E402
 
@@ -572,12 +572,15 @@ def ask_job(jid: str):
 
 
 @app.get("/api/dcf/{ticker}")
-def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: float = 0.09, terminal: float = 0.025):
+def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: float | None = None, terminal: float | None = None):
     t = T(ticker)
     full = _hist_or_404(t, "1y")
     fin = data.financials(t)
     inf = {**data.info(t), "revenueGrowth3y": insights.multi_year_growth(fin, "revenue")}  # the default growth's basis
-    res = insights.dcf(inf, growth, years, discount, terminal)
+    rates = insights.dcf_rates(inf)  # the statement currency's rough rates unless you set your own
+    discount = rates["discount"] if discount is None else discount
+    terminal = rates["terminal"] if terminal is None else terminal
+    res = {**insights.dcf(inf, growth, years, discount, terminal), "rates": rates}
     if "fairValue" in res:
         price = float(full["Close"].iloc[-1])
         res["price"] = price
@@ -585,6 +588,21 @@ def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: floa
         res["impliedGrowth"] = insights.implied_growth(inf, price, years, discount, terminal)
         res["grid"] = insights.sensitivity(inf, res["growth"], years, discount, terminal)
     return ok(res)
+
+
+@app.get("/api/plan")
+def plan_get():
+    """This month's money and the goal: plan.summary()."""
+    try:
+        return ok(plan.summary(db.get_settings()))
+    except ledger.LedgerError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/dividends/unrecorded")
+def dividends_unrecorded():
+    """Dividends Yahoo lists while you held shares, with none recorded near them (portfolio.unrecorded_dividends)."""
+    return ok(portfolio.unrecorded_dividends())
 
 
 @app.get("/api/compare/start")
