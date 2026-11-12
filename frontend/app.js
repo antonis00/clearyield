@@ -1157,7 +1157,16 @@ async function runAsk() {
     card.scrollIntoView({ behavior: "smooth", block: "start" });  // to where the answer begins: answers are long
     state.askThread = [...state.askThread, r.id].slice(-3);
     $("#askNew").classList.remove("hidden"); $("#askInput").placeholder = "Ask a follow-up, or start a new conversation";
-  } catch (e) { live.remove(); if (!thread.children.length) thread.remove(); askLayout(); status.textContent = e.message; $("#askInput").value = q; askGrow(); } finally { btn.disabled = false; }
+  } catch (e) {
+    // The question stays on the page with what stopped it, plainly, and a way to try again; never a silent reset
+    const why = !e.message || /Failed to fetch|NetworkError|Load failed/i.test(e.message)
+      ? "The app didn't answer (it may have restarted, or the connection dropped). Try again." : e.message;
+    live.className = "card ask-live ask-failed";
+    live.innerHTML = `<div class="ask-q">${esc(q)}</div><div class="ask-error" role="alert">${esc(why)}</div>
+      <div class="form-row"><button class="btn sm ask-retry">Try again</button></div>`;
+    $(".ask-retry", live).onclick = () => { live.remove(); if (!thread.children.length) thread.remove(); askLayout(); $("#askInput").value = q; askGrow(); runAsk(); };
+    status.textContent = ""; askLayout();
+  } finally { btn.disabled = false; }
 }
 // Opens Ask with a question: sent at once, or left in the box to edit (the Screener's "Ask about these")
 function askWith(question, send = false) {

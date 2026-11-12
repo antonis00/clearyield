@@ -1575,6 +1575,17 @@ def test_compare_handles_different_calendars_and_histories():
     assert d["series"]["NEW"][0] != d["series"]["NEW"][0] or d["series"]["NEW"][0] is None
 
 
+def test_a_stopped_question_always_says_why():
+    """A connection error can carry no text at all; the question that stopped must still say what happened (the page
+    used to go back to its empty screen with nothing shown)."""
+    import httpx
+    from backend import main
+    code, msg = main._ask_error(httpx.RemoteProtocolError(""))
+    assert code == 503 and "connection to the AI provider failed" in msg and "RemoteProtocolError" in msg
+    assert main._ask_error(RuntimeError("The AI is busy right now. Try again in about 20 seconds."))[1].startswith("The AI is busy")
+    assert main._ask_error(KeyError("x")) == (500, "Something went wrong while answering. Try again.")
+
+
 def test_compare_in_your_currency_over_the_period_shown():
     """Compare converts to the base currency at each day's rate (a fund flat in euros while the euro rises 10% earned
     a dollar holder 10%), says when it can't, works its figures out over the period chosen, and adds fund costs and
