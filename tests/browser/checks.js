@@ -420,7 +420,7 @@ const CHECKS = {
 
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, bypassCSP: true });  // the test tool evaluates its waits as text, which the page's policy forbids
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(BASE, { waitUntil: "load" }); await page.waitForTimeout(800);

@@ -10,7 +10,7 @@ const SLOW = 150000;
 
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true, bypassCSP: true });  // the test tool evaluates its waits as text, which the page's policy forbids
   const p = await ctx.newPage();
   const errs = [], http = [], expected404 = /NOSUCHTICKER|stock\/VWCE\?/;
   p.on("pageerror", (e) => errs.push(e.message));
@@ -49,7 +49,7 @@ const SLOW = 150000;
   const frame = await p.evaluate(() => {
     const links = [...document.querySelectorAll("nav a")], ask = document.querySelector('nav a[data-view="ask"]');
     const top = document.querySelector("header.top").getBoundingClientRect().width, box = document.querySelector(".searchbox").getBoundingClientRect().width;
-    return { ask: ask.innerText.replace("◆", "").trim(), icon: !!ask.querySelector(".nav-mark") && /favicon\.svg$/.test(document.querySelector(".brand img.logo")?.src || ""), last: links[links.length - 1] === ask, gap: ask.getBoundingClientRect().top - links[links.length - 2].getBoundingClientRect().bottom,
+    return { ask: ask.innerText.replace("◆", "").trim(), icon: !!ask.querySelector(".nav-mark") && /favicon\.svg$/.test(document.querySelector(".brand img.brand-mark")?.src || ""), last: links[links.length - 1] === ask, gap: ask.getBoundingClientRect().top - links[links.length - 2].getBoundingClientRect().bottom,
              toLine: document.querySelector("#modeBadge").getBoundingClientRect().top - ask.getBoundingClientRect().bottom,
              quote: document.querySelector("#modeBadge .st.quote")?.dataset.tip || "", oldQuote: !!document.querySelector("header .disclaimer"), share: box / top };
   });
@@ -843,6 +843,18 @@ const SLOW = 150000;
   expect("settings: a change shows as unsaved", (await saveMsg()) === "Unsaved changes" && await p.isVisible("#btnDiscard"), await saveMsg());
   await p.click("#btnDiscard");
   expect("settings: discard puts it back", (await p.isChecked('#sRegions [data-region="Asia-Pacific"]')) === asiaWas && /No unsaved changes/.test(await saveMsg()) && await p.isHidden("#btnDiscard"), await saveMsg());
+  // Asset class targets that disagree with the core target are pointed out, with a one-click match (left unsaved here)
+  const tgt = () => p.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-tgt]")].map((i) => [i.dataset.tgt, Number(i.value)])));
+  const clashShown = await p.isVisible("#tgtClash"), coreNow = Number(await p.inputValue("#sCore"));
+  const tgtBefore = await tgt(), outside = 100 - (tgtBefore.ETFs || 0);
+  expect("settings: targets that disagree with the core target are pointed out", clashShown === (Math.abs(outside - (100 - coreNow)) > 5), `${JSON.stringify(tgtBefore)} core ${coreNow}: ${await txt("#tgtClash")}`);
+  if (clashShown) {
+    await p.click("#tgtMatch");
+    const after = await tgt();
+    expect("settings: Match lines them up (core in ETFs, the rest outside), unsaved until saved", after.ETFs === coreNow && Object.values(after).reduce((a, b) => a + b, 0) === 100
+      && await p.isHidden("#tgtClash") && (await saveMsg()) === "Unsaved changes", JSON.stringify(after));
+    await p.click("#btnDiscard");
+  }
   // Email alerts: the check servers have no mail server, so the card says what to add; on needs an address; the switch saves
   expect("settings: email alerts start off, with no message", !(await txt("#emailStatus")) && !(await p.isChecked("#sEmailOn")) && (await p.isDisabled("#sEmail")), await txt("#emailStatus"));
   await p.check("#sEmailOn"); await p.fill("#sEmail", ""); await p.click("#btnSaveSettings"); await p.waitForTimeout(300);

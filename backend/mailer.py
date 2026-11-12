@@ -76,6 +76,8 @@ def send(to, subject, text):
             if c["security"] == "starttls":
                 server.starttls(context=_context())
             if c["user"]:
+                if c["security"] not in ("ssl", "starttls") and c["host"] not in ("localhost", "127.0.0.1", "::1"):
+                    raise ValueError("The mail login would be sent unencrypted: set SMTP_SECURITY to starttls or ssl in .env.")
                 server.login(c["user"], c["password"])
             server.send_message(msg)
     except smtplib.SMTPAuthenticationError:

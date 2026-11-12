@@ -275,7 +275,7 @@ def peer_table(settings, fresh=False, patience=60):
 
 
 def _peer_key(settings):
-    return "peers:v3:" + ",".join(_peer_markets(settings))  # another set of followed regions is another table
+    return "peers:v4:" + ",".join(_peer_markets(settings))  # another set of followed regions is another table
 
 
 _building, _build_lock = set(), __import__("threading").Lock()
@@ -686,6 +686,13 @@ ALERT_KINDS = {
 }
 
 
+def _send_quietly(mailer, fired, settings):
+    try:
+        mailer.send_alerts(fired, settings)
+    except Exception as e:  # a failed email is logged; the alerts stay in the digest
+        log.warning("alert email failed: %s", e)
+
+
 def check_alerts(settings):
     fired = []
     for a in db.q("SELECT * FROM alerts WHERE active=1"):
@@ -715,8 +722,10 @@ def check_alerts(settings):
             if sc["composite"] is not None and sc["composite"] < v:
                 msg = f"{a['ticker']} composite score dropped to {sc['composite']}"
         if msg:
-            db.x("UPDATE alerts SET active=0, triggered=?, message=? WHERE id=?", (time.time(), msg, a["id"]))
-            fired.append({**a, "message": msg})
+            # Claimed in one conditional update: the dashboard's check and the background loop at the same moment
+            # fire it once, and only the one that claimed it reports (and emails) it
+            if db.x_count("UPDATE alerts SET active=0, triggered=?, message=? WHERE id=? AND active=1", (time.time(), msg, a["id"])):
+                fired.append({**a, "message": msg})
     return fired
 
 
@@ -954,6 +963,10 @@ def recent_headlines(rows, tickers, per_ticker=2):
     return items
 
 
+def _in_days(n):
+    return "today" if n == 0 else "tomorrow" if n == 1 else f"in {n} days"
+
+
 def digest(settings, tiles=None):
     """What's worth knowing today: alerts and journal reminders first, then your portfolio, your holdings and
     watchlist, the market's notable moves, and headlines naming your stocks. Every item is a rule with its figures."""
@@ -976,9 +989,9 @@ def digest(settings, tiles=None):
             items.append({"tone": 1, "ticker": t, "priority": 6, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
         ev = r["events"]
         if t in held and ev["earningsDays"] is not None and ev["earningsDays"] <= 14:
-            items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} reports earnings in {ev['earningsDays']} days ({ev['earnings']})."})
+            items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} reports earnings {_in_days(ev['earningsDays'])} ({ev['earnings']})."})
         if t in held and ev["exDividendDays"] is not None and ev["exDividendDays"] <= 7:
-            items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} goes ex-dividend in {ev['exDividendDays']} days ({ev['exDividend']})."})
+            items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} goes ex-dividend {_in_days(ev['exDividendDays'])} ({ev['exDividend']})."})
         # A thesis is about a company: for a fund or crypto the composite is only trend and calm
         if r["stance"] in ("Weak",) and t in held and r.get("assetClass") == "Stocks":
             items.append({"tone": -1, "ticker": t, "priority": 4, "text": f"{t} is a holding with a Weak composite score ({r['composite']}) - review the thesis."})
@@ -1007,7 +1020,10 @@ def digest(settings, tiles=None):
                       "text": f"{len(waiting)} approved order{'s' if len(waiting) > 1 else ''} not marked done yet "
                               f"({which}; oldest {oldest}). "
                               f"Mark {'them' if len(waiting) > 1 else 'it'} done with the price you got, or cancel, on the Portfolio page."})
-    check_alerts(settings)
+    fired = check_alerts(settings)
+    if fired:  # fired while the dashboard loaded: emailed as the background check would (without making the page wait)
+        from . import mailer
+        threading.Thread(target=lambda: _send_quietly(mailer, fired, settings), daemon=True).start()
     fired = db.q("SELECT * FROM alerts WHERE triggered IS NOT NULL AND dismissed = 0 ORDER BY triggered DESC")
     items = [{"tone": 0, "ticker": a["ticker"], "priority": 0, "text": "Alert: " + a["message"], "alertId": a["id"]} for a in fired] + items
     for extra in (lambda: portfolio_points(settings), lambda: market_moves(tiles or {}), lambda: recent_headlines(rows, tickers)):
@@ -1015,6 +1031,9 @@ def digest(settings, tiles=None):
             items += extra()
         except Exception as e:
             log.warning("digest part failed: %s", e)
+    # A dashboard tile for something you also hold or watch (NVDA moved -4.9%, then "NVIDIA fell 4.9%"): said once
+    moved = {i["ticker"] for i in items if i.get("ticker") and " moved " in i.get("text", "")}
+    items = [i for i in items if not (i.get("kind") == "market" and i.get("ticker") in moved)]
     items.sort(key=lambda i: i["priority"])  # what needs a decision first, then what's coming, then what's just of note
     if not tickers:
         items.append({"tone": 0, "ticker": None, "priority": 9, "text": "Add stocks to your watchlist or portfolio to get a personalised digest."})

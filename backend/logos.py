@@ -141,11 +141,20 @@ def _fetch(url):
     """The bytes at `url`, or None. Kept apart so the tests can stand in for the network."""
     import httpx
     try:
-        r = httpx.get(url, timeout=TIMEOUT, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 ClearYield"})
+        # Read as it arrives and stop past MAX_BYTES, so a misbehaving source can't fill the memory; a few redirects only
+        with httpx.Client(follow_redirects=True, max_redirects=3, timeout=TIMEOUT, headers={"User-Agent": "Mozilla/5.0 ClearYield"}) as client:
+            with client.stream("GET", url) as r:
+                if r.status_code != 200:
+                    return None
+                body = b""
+                for chunk in r.iter_bytes():
+                    body += chunk
+                    if len(body) > MAX_BYTES:
+                        return None
+                return body
     except Exception as e:
         log.info("logo fetch failed %s: %s", url, e)
         return None
-    return r.content if r.status_code == 200 else None
 
 
 def _file(ticker):

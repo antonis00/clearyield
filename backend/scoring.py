@@ -27,6 +27,15 @@ def _part(parts, label, value, bad, good, fmt="num", usable=True, note=None):
 # its debt is what it lends from, and it has no current ratio. Scored like other companies, every bank looked high
 # quality, so for banks these are listed but not scored: quality rests on return on equity.
 BANK_NOTE = "Not scored for banks: a bank's margins, debt and liquidity don't compare with other companies'."
+# Insurers, brokers, exchanges and asset managers hold their customers' money: their cash flow, EV/EBITDA, margins,
+# debt and current ratio don't mean what they mean for an industrial company. Scored as one, a Taiwanese life insurer
+# topped Opportunities on a 15% "FCF yield" and a current ratio of 1.6. Value rests on P/E and P/B, quality on ROE.
+FIN_NOTE = "Not scored for insurers, brokers and asset managers: their cash flow, margins and balance sheet don't compare with other companies'."
+FIN_WORDS = ("insurance", "capital markets", "asset management", "financial data", "stock exchange", "financial conglomerate")
+# Yahoo measures beta against a US index, so for most stocks listed elsewhere it reads low (low correlation with the
+# US, not low risk): scored, it gave nearly every non-US stock full marks (median beta: Latin America 0.19, US 0.87).
+# The Score check's "risk works" verdict rests on volatility and drawdown alone, so those are what's scored.
+BETA_NOTE = "Shown, not scored: Yahoo measures beta against a US index, so it reads low for stocks listed elsewhere."
 
 
 def _avg(parts):
@@ -54,17 +63,25 @@ def factor_breakdown(info, close):
             _part(f["value"], "P/E (trailing)", pe, 40, 10, usable=(pe or 0) > 0)
         _part(f["value"], "Forward P/E", g("forwardPE"), 35, 10, usable=(g("forwardPE") or 0) > 0)
         _part(f["value"], "Price / Book", g("priceToBook"), 8, 1, usable=(g("priceToBook") or 0) > 0)
-        _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), 25, 6, usable=(g("enterpriseToEbitda") or 0) > 0)
+        industry = (info.get("industry") or "").lower()
+        bank = "bank" in industry
+        other_fin = not bank and any(w in industry for w in FIN_WORDS)
+        not_fin = {"usable": not other_fin, "note": FIN_NOTE if other_fin else None}
+        _part(f["value"], "EV / EBITDA", g("enterpriseToEbitda"), 25, 6, usable=(g("enterpriseToEbitda") or 0) > 0 and not other_fin, note=not_fin["note"])
         fcf, mc, fx = g("freeCashflow"), g("marketCap"), g("statementFx", 1.0)
         # FCF is in the statement currency, market cap is not
-        _part(f["value"], src("FCF yield", "freeCashflow"), fcf * fx / mc if fcf is not None and mc and fx else None, 0, 0.08, "pct")
+        _part(f["value"], src("FCF yield", "freeCashflow"), fcf * fx / mc if fcf is not None and mc and fx else None, 0, 0.08, "pct", **not_fin)
         # --- quality
-        bank = "bank" in (info.get("industry") or "").lower()
-        not_bank = {"usable": not bank, "note": BANK_NOTE if bank else None}
+        not_bank = {"usable": not (bank or other_fin), "note": BANK_NOTE if bank else FIN_NOTE if other_fin else None}
         _part(f["quality"], "Return on equity", g("returnOnEquity"), 0, 0.30, "pct")
         _part(f["quality"], "Operating margin", g("operatingMargins"), 0, 0.30, "pct", **not_bank)
         _part(f["quality"], "Net margin", g("profitMargins"), 0, 0.25, "pct", **not_bank)
-        _part(f["quality"], src("Debt / Equity", "debtToEquity"), g("debtToEquity"), 2.0, 0.2, "x", **not_bank)
+        if g("debtToEquity") is None and (g("priceToBook") or 0) < 0 and (g("totalDebt") or 0) > 0 and not (bank or other_fin):
+            # Negative equity with debt (years of buy-backs: MCD, ABBV, PM): the ratio means nothing, but the leverage
+            # is real, so it scores as the most indebted rather than escaping the test
+            f["quality"].append({"label": src("Debt / Equity", "debtToEquity"), "value": None, "score": 0.0, "fmt": "negative equity", "bad": 2.0, "good": 0.2})
+        else:
+            _part(f["quality"], src("Debt / Equity", "debtToEquity"), g("debtToEquity"), 2.0, 0.2, "x", **not_bank)
         _part(f["quality"], src("Current ratio", "currentRatio"), g("currentRatio"), 0.8, 2.0, "x", **not_bank)
         # --- growth
         # Several years of annual statements where there are enough; otherwise the latest quarter, labelled as such
@@ -92,7 +109,7 @@ def factor_breakdown(info, close):
     _part(f["risk"], "Volatility (1y, ann.)", vol, 0.6, 0.15, "pct")
     _part(f["risk"], "Max drawdown (1y)", ind.max_drawdown(ind.window(close, 252)), -0.5, -0.08, "pct")
     if is_equity:
-        _part(f["risk"], "Beta", g("beta"), 2.0, 0.6, "x")
+        _part(f["risk"], "Beta", g("beta"), 2.0, 0.6, "x", usable=False, note=BETA_NOTE)
     return f
 
 

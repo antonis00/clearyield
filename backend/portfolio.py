@@ -210,6 +210,29 @@ def _fund_costs(rows, total):
             "unknown": [{"ticker": r["ticker"], "name": r["name"]} for r in funds if r.get("costRatio") is None]}
 
 
+def _same_money(flows, bench_t, base):
+    """What the benchmark would be worth now had every purchase gone into it on the same date, and every sale and
+    dividend come out of it (the same money in and out): {"value", "ticker"}, or None. It answers "was it worth it?"
+    in money, where a time-weighted return can mislead (months holding one small position count as much as the rest)."""
+    dated = sorted((d, a) for d, a in flows if d)
+    if not dated:
+        return None
+    try:
+        close = data.history(bench_t, "max" if (dt.date.today() - dated[0][0]).days > 1700 else "5y")["Close"]
+        rate = data.fx_series(data.info(bench_t).get("currency"), base, close.index)
+    except data.DataError:
+        return None
+    px = (close * rate).dropna() if rate is not None else close
+    if px.empty or pd.Timestamp(dated[0][0]) < px.index[0] - pd.Timedelta(days=7):
+        return None
+    units = 0.0
+    for d, amount in dated:
+        at = px[px.index <= pd.Timestamp(d)]
+        price = float(at.iloc[-1]) if len(at) else float(px.iloc[0])
+        units += -amount / price  # money in buys units; money out (a sale, a dividend) takes the same amount out
+    return {"value": units * float(px.iloc[-1]), "ticker": bench_t}
+
+
 def summary(settings, extra=None):
     """`extra` is a hypothetical lot, included in the figures but never saved."""
     base = settings.get("base_currency", "USD")
@@ -235,10 +258,14 @@ def summary(settings, extra=None):
         value = p["shares"] * price * fx
         lot_fx = [_lot_fx(lot, cur, base, fx) for lot in p["lots"]]
         cost = sum(lot["shares"] * lot["cost"] * rate for lot, (rate, _) in zip(p["lots"], lot_fx))
+        # Each day's exchange rate: risk is what a holder in the base currency lived through, and the day's change in
+        # the base currency includes the rate's own move (a dollar stock flat in dollars still moves in euros)
+        rate = data.fx_series(cur, base, close.index)
+        prev_fx = float(rate.iloc[-2]) if rate is not None and len(rate) > 1 and rate.iloc[-2] == rate.iloc[-2] else fx
         rows.append({
             "ticker": t, "name": inf.get("name"), "shares": p["shares"], "avgCost": p["costTotal"] / p["shares"],
             "price": price, "currency": cur, "fx": fx, "value": value, "cost": cost, "pnl": value - cost,
-            "pnlPct": (value / cost - 1) if cost else None, "dayPnl": p["shares"] * (price - prev) * fx,
+            "pnlPct": (value / cost - 1) if cost else None, "dayPnl": p["shares"] * (price * fx - prev * prev_fx),
             "dayPct": price / prev - 1 if prev else None, "sector": inf.get("sector") or inf.get("assetClass"),
             "region": inf.get("region"), "country": inf.get("country"), "assetClass": inf.get("assetClass"),
             "dividendYield": inf.get("dividendYield") or 0, "income": _income(t, p["shares"], price, fx, inf), "lots": p["lots"],
@@ -247,8 +274,6 @@ def summary(settings, extra=None):
             **_cost_of(t, inf, settings),
             "fxApprox": not all(exact for _, exact in lot_fx), "stale": data.is_stale(t), "asOf": close.index[-1].strftime("%Y-%m-%d"),
         })
-        # Each day's exchange rate, so risk is what a holder in the base currency lived through, currency moves included
-        rate = data.fx_series(cur, base, close.index)
         series[t] = close * p["shares"] * (rate if rate is not None else fx)
 
     total = sum(r["value"] for r in rows)
@@ -325,6 +350,10 @@ def summary(settings, extra=None):
     perf, risk = None, {}
     try:
         bench_close = data.history(bench_t, "1y")["Close"] if series else None
+        if bench_close is not None:  # in the base currency at each day's rate, like the portfolio it's compared with
+            bench_rate = data.fx_series(data.info(bench_t).get("currency"), base, bench_close.index)
+            if bench_rate is not None:
+                bench_close = (bench_close * bench_rate).dropna()
     except data.DataError:
         bench_close = None
     if series:
@@ -337,6 +366,7 @@ def summary(settings, extra=None):
     if actual is not None:
         perf = {"dates": [d.strftime("%Y-%m-%d") for d in actual.index], "portfolio": [float(v * 100) for v in actual], "start": actual.index[0].strftime("%Y-%m-%d")}
         risk["return1y"] = float(actual.iloc[-1] - 1)
+        risk["since"] = perf["start"]
         if bench_close is not None:
             b = bench_close.reindex(actual.index).ffill().bfill()
             if b.notna().any():
@@ -440,6 +470,7 @@ def summary(settings, extra=None):
         "dayTo": max((r["asOf"] for r in rows), default=None), "allocation": allocation, "performance": perf, "risk": risk,
         "warnings": warnings, "rebalance": rebalance, "rebalanceNewMoney": new_money, "coreSatellite": core_satellite, "annualIncome": income, "fundCosts": fund_costs, "errors": errors,
         "incomplete": incomplete, "missing": missing, "_series": series,
+        "sameMoney": _same_money(flows, bench_t, base) if flows and not incomplete else None,
         "realised": realised_total, "dividends": dividends_total, "totalGain": total - total_cost + realised_total + dividends_total,
         "xirr": annual, "xirrWhy": annual_why, "closed": closed,
         # What you've gained against what you put in (every purchase, at its date's rate), not annualised

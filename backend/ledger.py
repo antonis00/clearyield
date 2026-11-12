@@ -11,6 +11,19 @@ KINDS = ("buy", "sell", "dividend")
 TINY = 1e-9
 
 
+# Checking the ledger and writing to it happen as one step: two sales sent at once (a double click, an order marked
+# done while a sale is typed) both passed the "enough shares" check and oversold, and every page reading the ledger failed
+_WRITE = __import__("threading").RLock()
+
+
+def _serial(fn):
+    def wrapped(*args, **kwargs):
+        with _WRITE:
+            return fn(*args, **kwargs)
+    wrapped.__name__, wrapped.__doc__ = fn.__name__, fn.__doc__
+    return wrapped
+
+
 class LedgerError(ValueError):
     """Transactions that can't be right, such as selling more than was held. The message is for the user."""
 
@@ -131,6 +144,7 @@ def held_tickers():
     return [t for t, p in replay(transactions()).items() if p["lots"]]
 
 
+@_serial
 def add(ticker, kind, date="", shares=None, price=None, amount=None, note=""):
     """Record a transaction if the ledger still adds up with it. Returns its id."""
     if kind not in KINDS:
@@ -183,6 +197,7 @@ def parse_csv(text):
     return rows
 
 
+@_serial
 def add_many(rows):
     """Record several transactions if the ledger still adds up with all of them. Adds all or none."""
     existing = db.q("SELECT * FROM transactions")
@@ -195,6 +210,7 @@ def add_many(rows):
     return len(rows)
 
 
+@_serial
 def delete_ticker(ticker):
     """Delete every transaction of one holding (purchases, sales and dividends) in one go. Other holdings don't
     depend on them, so the ledger still adds up. Returns how many were deleted."""
@@ -203,6 +219,7 @@ def delete_ticker(ticker):
     return n
 
 
+@_serial
 def delete(tid):
     """Delete a transaction unless a later sale depends on it."""
     replay([r for r in db.q("SELECT * FROM transactions") if r["id"] != tid])

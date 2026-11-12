@@ -34,17 +34,33 @@ CAVEATS = [
 ]
 
 
+def held_over_a_year(bought, sold):
+    """Whether a lot sold on `sold` was held more than a year: the day after the anniversary of `bought` or later (an
+    anniversary sale isn't "more than a year"; 29 February counts from 1 March)."""
+    b = dt.date.fromisoformat(bought)
+    try:
+        anniversary = b.replace(year=b.year + 1)
+    except ValueError:  # 29 February
+        anniversary = dt.date(b.year + 1, 3, 1)
+    return dt.date.fromisoformat(sold) > anniversary
+
+
+LEFT_OUT = {}  # holdings the last summary had to leave out (no exchange rate at all), named on the page
+
+
 def _rows(base):
-    """Every sale piece and dividend in the ledger, in the base currency at each date's rate."""
+    """Every sale piece and dividend in the ledger, in the base currency at each date's rate. A holding with no
+    exchange rate at all is left out and named (`left`), never dropped silently."""
     book = ledger.replay(ledger.transactions())
-    sales, dividends, approx = [], [], set()
+    sales, dividends, approx, left = [], [], set(), set()
     for t, p in book.items():
         inf = data.info(t)
         cur = inf.get("currency")
         try:
             fx = data.fx_rate(cur, base)
         except data.DataError:
-            approx.add(t)
+            if p["sales"] or p["dividends"]:
+                left.add(t)
             continue
         for s in p["sales"]:
             sold_at, a = _sale_fx(cur, base, s["date"], fx)
@@ -54,18 +70,24 @@ def _rows(base):
             sales.append({"ticker": t, "name": inf.get("name"), "date": s["date"], "bought": s["bought"] or None, "shares": s["shares"],
                           "price": s["price"], "cost": s["cost"], "currency": cur, "rateSold": sold_at, "rateBought": bought_at,
                           "proceeds": proceeds, "costBase": cost, "gain": proceeds - cost, "heldDays": held,
-                          "long": held is not None and held > LONG_DAYS, "exact": a and b})
+                          "long": held is not None and held_over_a_year(s["bought"], s["date"]), "exact": a and b})
             if not (a and b):
                 approx.add(t)
         pay = data.main_unit(cur)
         for d in p["dividends"]:
-            at, a = _sale_fx(pay, base, d["date"], fx if pay == cur else data.fx_rate(pay, base))
+            try:
+                today_rate = fx if pay == cur else data.fx_rate(pay, base)
+            except data.DataError:
+                left.add(t)
+                continue
+            at, a = _sale_fx(pay, base, d["date"], today_rate)
             fund = inf.get("assetClass") == "ETFs"
             country = country_of(t)
             dividends.append({"ticker": t, "name": inf.get("name"), "date": d["date"], "amount": d["amount"], "currency": pay, "rate": at,
                               "inBase": d["amount"] * at, "country": country, "fund": fund and "." in t, "exact": a})
             if not a:
                 approx.add(t)
+    LEFT_OUT[base] = sorted(left)
     return sales, dividends, approx
 
 
@@ -98,6 +120,7 @@ def summary(settings, year=None):
             "dividendTotal": sum(d["inBase"] for d in dividends),
             "dividendsByCountry": sorted(by_country.values(), key=lambda c: -c["amount"]),
             "approximate": sorted(t for t in approx if any(r["ticker"] == t for r in sales + dividends)),
+            "leftOut": LEFT_OUT.get(base, []),
             "caveats": CAVEATS}
 
 
@@ -109,8 +132,9 @@ def to_csv(s):
     w.writerow(["Sales", s["year"], f"amounts in {b} unless named", "first in, first out"])
     w.writerow(["Date sold", "Ticker", "Name", "Shares", "Date bought", "Days held", "Currency", "Cost per share", "Price per share",
                 f"Rate bought ({b} per unit)", f"Rate sold ({b} per unit)", f"Cost ({b})", f"Proceeds ({b})", f"Gain ({b})", "Rate exact"])
+    from .orders import _cell  # names come from Yahoo and tickers from pasted files: never run as a formula
     for r in s["sales"]:
-        w.writerow([r["date"], r["ticker"], r["name"], f"{r['shares']:.6g}", r["bought"] or "unknown", "" if r["heldDays"] is None else r["heldDays"],
+        w.writerow([r["date"], _cell(r["ticker"]), _cell(r["name"]), f"{r['shares']:.6g}", r["bought"] or "unknown", "" if r["heldDays"] is None else r["heldDays"],
                     r["currency"], f"{r['cost']:.6g}", f"{r['price']:.6g}", f"{r['rateBought']:.6g}", f"{r['rateSold']:.6g}",
                     f"{r['costBase']:.2f}", f"{r['proceeds']:.2f}", f"{r['gain']:.2f}", "yes" if r["exact"] else "no: today's rate"])
     w.writerow(["Total", "", "", "", "", "", "", "", "", "", "", "", f"{s['proceeds']:.2f}", f"{s['net']:.2f}"])
@@ -118,7 +142,7 @@ def to_csv(s):
     w.writerow(["Dividends", s["year"], "as received from the broker"])
     w.writerow(["Date", "Ticker", "Name", "Country listed", "Amount", "Currency", f"Rate ({b} per unit)", f"Amount ({b})", "Rate exact"])
     for d in s["dividends"]:
-        w.writerow([d["date"], d["ticker"], d["name"], d["country"] or "", f"{d['amount']:.2f}", d["currency"], f"{d['rate']:.6g}",
+        w.writerow([d["date"], _cell(d["ticker"]), _cell(d["name"]), _cell(d["country"] or ""), f"{d['amount']:.2f}", d["currency"], f"{d['rate']:.6g}",
                     f"{d['inBase']:.2f}", "yes" if d["exact"] else "no: today's rate"])
     w.writerow(["Total", "", "", "", "", "", "", f"{s['dividendTotal']:.2f}"])
     return out.getvalue()

@@ -163,7 +163,7 @@ def complete(user, system=SYSTEM, max_tokens=900, temperature=0, effort=None):
             )
             if not (is_limit(r.status_code, r.text) and switch_key(c, _retry_after(r))):
                 break
-        r.raise_for_status()
+        _raise_plain(r)
         text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
     else:
         headers = {"content-type": "application/json", "X-Title": "ClearYield"}
@@ -183,12 +183,33 @@ def complete(user, system=SYSTEM, max_tokens=900, temperature=0, effort=None):
             r = httpx.post(f"{c['base']}/chat/completions", headers=headers, timeout=c["timeout"], json=body)
             if not (is_limit(r.status_code, r.text) and switch_key(c, _retry_after(r))):
                 break
-        r.raise_for_status()
+        _raise_plain(r)
         text = ((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     text = clean(text)
     if not text:
         raise RuntimeError("The model returned an empty reply.")
     return text
+
+
+def _raise_plain(r):
+    """A refused call as a sentence for the investor: no plan names, keys or token counts."""
+    if r.status_code < 400:
+        return
+    if r.status_code == 429 or is_limit(r.status_code, r.text):
+        day = re.search(r"per day|\bTPD\b|\bRPD\b", r.text or "")
+        raise RuntimeError("The AI has done as much as it can for today. Try again later." if day else "The AI is busy right now. Try again in about a minute.")
+    if r.status_code == 413 or re.search(r"too large|reduce the length|context length", r.text or "", re.I):
+        raise RuntimeError("That was more than the AI takes at once. Try a narrower question.")
+    r.raise_for_status()
+
+
+def plain_error(e):
+    """An error as a short sentence: a refusal's own words, or what kind of failure it was."""
+    if isinstance(e, httpx.TimeoutException):
+        return "the AI didn't answer in time."
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"the AI service refused the request ({e.response.status_code})."
+    return (str(e) or type(e).__name__)[:200]
 
 
 def _retry_after(r):
@@ -401,7 +422,7 @@ def _near(text, a, b):
     return hi - lo <= NEAR and "|" not in (line(lo), line(hi))
 
 
-_QUOTE = re.compile(r"[“\"]([^”\"\n]{20,400})[”\"]")
+_QUOTE = re.compile(r"[“\"‘«]([^”\"’»\n]{20,400})[”\"’»]")  # straight, curly double and single, guillemets
 
 
 def _words(s):
@@ -451,6 +472,11 @@ def check_figures(text, facts):
                 wrong_way.append({"figure": written, "says": says, "data": "positive" if says == "down" else "negative"})
                 unmatched.append(((value, unit, dec, written), at[n]))
                 continue
+            # "returned 31.9%" when the data has only -31.9%: a lost minus sign, with no word saying it fell
+            if not says and signs == {False} and not written.lstrip().startswith(("-", "−")) and not _said_down(text, at[n], len(written)):
+                wrong_way.append({"figure": written, "says": "up (no minus sign, nothing saying it fell)", "data": "negative"})
+                unmatched.append(((value, unit, dec, written), at[n]))
+                continue
         if found:
             verified.append(((value, unit, dec, written), at[n]))  # a part a worked-out figure may use, even one not checked ("2,000")
         elif not skip:
@@ -484,6 +510,27 @@ def _direction(text, pos, length):
         if re.match(rf"\s*(?:{words})", after):
             return way
     return None
+
+
+_DOWN_CONTEXT = re.compile(r"\b(?:drawdown|draw-down|drop\w*|fall\w*|fell|declin\w*|loss(?:es)?|lost|los(?:e|ing)|down\w*|below|negative|lower\w*|"
+                           r"underperform\w*|lag\w*|trail\w*|minus|deficit|short of|off (?:its|the|their)|under|slid\w*|slip\w*|sank|sink\w*|"
+                           r"plung\w*|tumbl\w*|shed\w*|cut\w*|weak\w*|red|"
+                           # neutral words give a size, not a direction ("moved 6.6%", "swung", "differs by"): nothing claimed to rise
+                           r"mov\w*|swung|swing\w*|chang\w*|vari\w*|volatil\w*|range|spread|gap|differ\w*|apart|magnitude)\b")
+
+
+def _said_down(text, pos, length):
+    """Whether the figure's sentence (its table row, in a table) says anywhere that it's a fall or a shortfall
+    ("a 53.7% drawdown", "below its high by 8%", "Max drop | 12%"), so a figure written without its minus sign is fine."""
+    start = max(text.rfind("\n", 0, pos), max(text.rfind(c, 0, pos) for c in ".;") if "|" not in text[text.rfind("\n", 0, pos) + 1:pos] else -1)
+    end = min([i for i in (text.find("\n", pos), text.find(". ", pos)) if i != -1] or [len(text)])
+    line_start = text.rfind("\n", 0, pos) + 1
+    if text[line_start:pos].lstrip().startswith("|"):  # a table row: its column header says what the figure is
+        col = text[line_start:pos].count("|") - 1
+        header = next((h for h in reversed(text[:line_start].split("\n")) if h.strip().startswith("|") and not set(h.strip()) <= set("|-: ")), "")
+        head = header.split("|")[col + 1] if header.count("|") > col + 1 else ""
+        return bool(_DOWN_CONTEXT.search((head + " " + text[line_start:end]).lower()))
+    return bool(_DOWN_CONTEXT.search(text[start + 1:end].lower()))
 
 
 def _worked_out(fig, parts):
@@ -535,17 +582,19 @@ def brief(ctx):
     if not available():
         return {"source": "rules", "text": rule_brief(ctx)}
     facts = json.dumps(brief_data(ctx), ensure_ascii=False, indent=1)
-    prompt = ("Write a research brief for this asset in markdown with these sections: **Snapshot** (2 sentences), "
+    import datetime as dt
+    prompt = (f"(Today is {dt.date.today():%A %d %B %Y}.) "
+              "Write a research brief for this asset in markdown with these sections: **Snapshot** (2 sentences), "
               "**Bull case** (3 bullets), **Bear case** (3 bullets), **What the numbers say** (valuation, quality, momentum, risk), "
               "**News read**, **What would change the view** (2-3 triggers). Max ~300 words.\n\n" + BRIEF_RULES + "\n\nDATA:\n" + facts)
     c = config()
     try:
         text = complete(prompt)
-        return {"source": "ai", "text": text, "by": f"{c['model']} via {c['server']}", "check": check_brief(text, facts)}
+        return {"source": "ai", "text": text, "by": f"{c['model']} via {c['server']}", "check": {**check_brief(text, facts), "quotes": check_quotes(text, facts)}}
     except httpx.TimeoutException:
         return {"source": "rules", "text": rule_brief(ctx) + f"\n\n_(The AI model didn't answer within {c['timeout']:g} seconds.)_"}
     except Exception as e:
-        return {"source": "rules", "text": rule_brief(ctx) + f"\n\n_(AI call failed: {str(e)[:200]})_"}
+        return {"source": "rules", "text": rule_brief(ctx) + f"\n\n_(The AI brief isn't available: {plain_error(e)})_"}
 
 
 # ---------------------------------------------------------------- natural-language screener
@@ -686,6 +735,10 @@ def _tidy_filters(raw):
             continue
         if (k in FRACTIONS and v > 1) or (k in RETURNS and abs(v) > 5):
             v = v / 100  # "3" or "3%" for a 3% yield
+        if k == "max_de" and v > 10:
+            v = v / 100  # Yahoo's percent style (150 for 1.5x): no company has a debt/equity of 150x to screen for
+        if k in ("min_mcap", "max_mcap") and 0 < v < 1e6:
+            v = v * 1e9  # "10" for $10bn: no listed company is worth under a million
         out[k] = v
     if raw.get("beat_market") in (True, "true", "yes"):
         out["beat_market"] = True
@@ -713,8 +766,10 @@ def _tidy_filters(raw):
             out["countries"] = list(dict.fromkeys([*out.get("countries", []), *picked]))
     if raw.get("sort") in SORTS:
         out["sort"] = raw["sort"]
+    words = {w: s for s, ws in SECTOR_WORDS.items() for w in ws}
     for key in ("sector", "exclude_sector"):
-        sector = {x.lower(): x for x in SECTORS}.get(str(raw.get(key) or "").strip().lower())
+        given = str(raw.get(key) or "").strip().lower()
+        sector = {x.lower(): x for x in SECTORS}.get(given) or words.get(given)  # "Tech" as well as "Technology"
         if sector:
             out[key] = sector
     # Industries in Yahoo's exact names (a model's own words are dropped); "Banks" alone, as the rules give it, stays
@@ -1018,6 +1073,10 @@ def _rules(t):
     t = re.sub(rf"\b(not|non|no|excluding|except|without)[ -]((?:{excl})(?:\s*(?:,|\band\b|\bor\b|\bnor\b)\s*(?:{excl}))+)\b", rule_out_all, t)
     t = re.sub(r"\b(not|non|no|excluding|except|without)[ -](\w+)", rule_out, t)
     t = re.sub(r"\bdividend growth\b", set_aside, t)
+    # Asking for the opposite of a word's meaning: set aside, never read as that meaning ("negative revenue growth" isn't growth)
+    t = re.sub(r"\b(?:negative|declining|shrinking|falling|slowing|weak)\s+(?:(?:revenue|sales|earnings|profit|profits)\s+)?growth\b"
+               r"|\b(?:declining|shrinking|falling)\s+(?:revenue|sales|earnings|profits?)\b|\bhigh(?:er)?\s+(?:debt|leverage)\b", set_aside, t)
+    t = re.sub(r"\blow(?:er)?\s+(?:p/?e|pe ratios?|p/?e ratios?|valuations?)\b", " cheap ", t)
     said = t
     typed, aside, t = _typed_limits(t)
     f.update(typed)
@@ -1097,6 +1156,7 @@ def _rules(t):
 
     known = RULE_WORDS | FILLER_WORDS | {w for ws in (*MARKET_WORDS.values(), *COUNTRY_WORDS.values(), *GROUP_WORDS.values(), *SECTOR_WORDS.values()) for w in ws}
     ignored += [w for w in re.findall(r"[a-z][a-z/.'-]*", t) if w.strip(".'") not in known]
+    ignored += re.findall(r"\d+(?:\.\d+)?\s*%", t)  # a number left over (the 6% in "between 3% and 6%") wasn't applied: said so
     if ignored:
         f["ignored"] = list(dict.fromkeys(ignored))
     return f, set(typed), dict(aside)

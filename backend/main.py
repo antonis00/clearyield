@@ -92,6 +92,7 @@ _trust_windows_certificates()
 
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -203,7 +204,7 @@ app = FastAPI(title="ClearYield", lifespan=lifespan)
 FRONT = ROOT / "frontend"
 
 
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "testserver"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"} | ({"testserver"} if os.environ.get("CLEARYIELD_TESTING") == "1" else set())  # the tests' client
 
 
 @app.middleware("http")
@@ -235,7 +236,18 @@ async def always_revalidate(request, call_next):
     """Without this, browsers can reuse an old page, or another app's page on the same port, without asking."""
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-cache"
+    # The page can't be framed by another site (clicks laid over it), loads nothing it doesn't need from outside (an
+    # answer that slipped in an image pointing elsewhere couldn't send data out), and says nothing to other sites
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = CSP
     return response
+
+
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; "
+       "base-uri 'none'; form-action 'self'; object-src 'none'")
 
 
 app.mount("/static", StaticFiles(directory=FRONT), name="static")
@@ -468,7 +480,8 @@ def stock_fund(ticker: str):
     inf = data.info(t)
     if inf.get("assetClass") != "ETFs":
         return ok({"sectors": {}, "holdings": [], "expenseRatio": None})
-    return ok({**data.fund(t), "expenseRatio": inf.get("netExpenseRatio")})
+    cost = portfolio._cost_of(t, inf, db.get_settings())  # your figure from Settings over Yahoo's, as the Portfolio uses
+    return ok({**data.fund(t), "expenseRatio": cost["costRatio"], "costFrom": cost["costFrom"]})
 
 
 @app.get("/api/stock/{ticker}/news")
@@ -531,8 +544,11 @@ def ask_start(body: dict = Body(...)):
         raise HTTPException(503, ai.config()["problem"] or "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example).")
     jid = __import__("uuid").uuid4().hex[:12]
     job = ASK_JOBS[jid] = {"status": "running", "events": [], "at": time.time()}
-    while len(ASK_JOBS) > ASK_JOBS_KEEP:
-        ASK_JOBS.pop(next(iter(ASK_JOBS)))
+    while len(ASK_JOBS) > ASK_JOBS_KEEP:  # finished ones go first: a question still running is never dropped from under its page
+        done = next((k for k, j in list(ASK_JOBS.items()) if j["status"] != "running"), None)
+        if done is None:
+            break
+        ASK_JOBS.pop(done, None)
 
     def run():
         try:
@@ -688,7 +704,10 @@ def watch_del(ticker: str):
 # ---------------------------------------------------------------- portfolio
 @app.get("/api/portfolio")
 def get_portfolio():
-    p = portfolio.summary(db.get_settings())
+    try:
+        p = portfolio.summary(db.get_settings())
+    except ledger.LedgerError as e:  # transactions that don't add up: said plainly, so they can be fixed, not a bare error
+        raise HTTPException(409, f"Your transactions don't add up: {e} Fix or delete the transaction on the Portfolio page.")
     p.pop("_series")
     return ok(p)
 
@@ -719,9 +738,34 @@ def _record(body):
     try:
         if kind == "buy":
             _hist_or_404(t, "1y")
-        return ok({"id": ledger.add(t, kind, body.get("date", ""), shares, price, amount, body.get("note", ""))})
+        tid = ledger.add(t, kind, body.get("date", ""), shares, price, amount, body.get("note", ""))
+        return ok({"id": tid, "warning": _price_warning(t, kind, body.get("date", ""), price)})
     except ledger.LedgerError as e:
         raise HTTPException(400, str(e))
+
+
+PRICE_SLACK = 0.10  # how far outside the day's low-high range a recorded price may be before it's queried
+
+
+def _price_warning(t, kind, date, price):
+    """A note when a trade's price is far outside that day's trading range on Yahoo: a typo, pounds for pence, or
+    another listing's currency. The trade is saved as entered; a wrong price would skew the gains and the tax figures."""
+    if kind not in ("buy", "sell") or not date or not price:
+        return None
+    try:
+        h = data.history(t, "max")
+        day = h[h.index <= pd.Timestamp(date)].tail(1)
+    except (data.DataError, ValueError):
+        return None
+    if day.empty or (pd.Timestamp(date) - day.index[-1]).days > 7:
+        return None
+    low, high = float(day["Low"].iloc[-1]), float(day["High"].iloc[-1])
+    if low * (1 - PRICE_SLACK) <= price <= high * (1 + PRICE_SLACK):
+        return None
+    cur = data.info(t).get("currency") or ""
+    unit = " London prices are in pence (GBp): 1.50 pounds is 150." if cur in data.MINOR_UNITS else ""
+    return (f"Saved, but check the price: {t} traded between {low:,.2f} and {high:,.2f} {cur} on {day.index[-1]:%d %b %Y}, "
+            f"and {price:,.2f} is far outside that.{unit} Yahoo's prices are adjusted for dividends since, so older days read a little lower.")
 
 
 @app.get("/api/transactions")
@@ -999,7 +1043,10 @@ def email_test(body: dict = Body(default={})):
 def digest():
     settings = db.get_settings()
     shown = set(settings.get("dashboard_tiles") or [])
-    return ok(insights.digest(settings, {t: name for t, name in _tiles(settings).items() if t in shown}))
+    try:
+        return ok(insights.digest(settings, {t: name for t, name in _tiles(settings).items() if t in shown}))
+    except ledger.LedgerError as e:
+        raise HTTPException(409, f"Your transactions don't add up: {e} Fix or delete the transaction on the Portfolio page.")
 
 
 # ---------------------------------------------------------------- settings

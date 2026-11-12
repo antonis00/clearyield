@@ -60,11 +60,11 @@ function toast(msg, ms = 3500) { const t = $("#toast"); t.textContent = msg; t.c
 const missingNote = (p) => `<b>Incomplete:</b> no current data for ${esc(p.missing.join(", "))}, so these totals leave ${p.missing.length > 1 ? "them" : "it"} out and weights and rebalancing are withheld. Check the symbol, or try again later.`;
 const loading = (el, msg = "Loading…") => { el.innerHTML = `<div class="muted"><span class="spinner"></span>${msg}</div>`; };
 const FACTOR_INFO = {
-  value: "Value: is the price cheap for what the company earns and owns? From P/E, forward P/E, price/book, EV/EBITDA and free-cash-flow yield. A higher score means cheaper. Stocks only.",
-  quality: "Quality: how profitable and financially sound the business is. From return on equity, operating and net margins, debt/equity and the current ratio. A higher score means a stronger business. Stocks only.",
-  growth: "Growth: how fast the business is growing. From revenue and net income growth a year over the last three annual statements (the latest quarter against a year before, where there aren't three years or a loss at either end), and forecast against trailing earnings per share. A higher score means faster growth. Stocks only.",
-  momentum: "Momentum: how the price has been trending. From the 12-month return leaving out the last month, the price against its 200-day average, and the 3-month return. A higher score means a stronger trend. All assets.",
-  risk: "Risk: how bumpy the ride has been. From 1-year volatility and the largest fall from a peak in the past year, plus beta for stocks. A higher score means lower risk. One scale for every asset, crypto included.",
+  value: "Value: is the price cheap for what the company earns and owns? From P/E, forward P/E, price/book, EV/EBITDA and free-cash-flow yield. A higher score means cheaper. Stocks only. Track record (Score check, 2017-2026): suggestive, not proven.",
+  quality: "Quality: how profitable and financially sound the business is. From return on equity, operating and net margins, debt/equity and the current ratio. A higher score means a stronger business. Stocks only. Track record (Score check, 2017-2026): it pointed the wrong way, mostly in Europe: read it as a description of the business, not a prediction.",
+  growth: "Growth: how fast the business is growing. From revenue and net income growth a year over the last three annual statements (the latest quarter against a year before, where there aren't three years or a loss at either end), and forecast against trailing earnings per share. A higher score means faster growth. Stocks only. Track record (Score check, 2017-2026): no evidence it predicted returns.",
+  momentum: "Momentum: how the price has been trending. From the 12-month return leaving out the last month, the price against its 200-day average, and the 3-month return. A higher score means a stronger trend. All assets. Track record (Score check, 2017-2026): suggestive within countries.",
+  risk: "Risk: how bumpy the ride has been. From 1-year volatility and the largest fall from a peak in the past year, plus beta for stocks. A higher score means lower risk. One scale for every asset, crypto included. Track record (Score check, 2017-2026): works: calmer-scored stocks stayed calmer.",
 };
 // A small "i" that explains something on hover or keyboard focus; the text is shown by the floating tooltip below
 const infoIcon = (text) => `<span class="info" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
@@ -84,7 +84,14 @@ function compositeBasis(info, scores) {
   const missing = ACCOUNTS.concat(["momentum", "risk"]).filter((k) => !isNum(scores.factors[k]));
   return [null, missing.length ? `Built from the factors that have data. Left out: ${missing.join(", ")}.` : null];
 }
-function mkChart(id, cfg) { state.charts[id]?.destroy(); const ctx = document.getElementById(id); state.charts[id] = new Chart(ctx, cfg); return state.charts[id]; }
+function mkChart(id, cfg) {
+  state.charts[id]?.destroy();
+  const ctx = document.getElementById(id);
+  const title = ctx.closest(".card")?.querySelector("h3, h4")?.textContent;
+  ctx.setAttribute("role", "img"); if (title) ctx.setAttribute("aria-label", `Chart: ${title}`);
+  state.charts[id] = new Chart(ctx, cfg);
+  return state.charts[id];
+}
 
 /* Generic sortable table. cols: {k,label,fmt(v,row),num,sort} */
 function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
@@ -94,7 +101,7 @@ function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
     const data = [...rows];
     if (sortK) data.sort((a, b) => { const x = a[sortK], y = b[sortK]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
     el.innerHTML = `<table><thead><tr>${cols.map((c) => `<th class="${c.num ? "num" : ""}" data-k="${c.k}">${c.label}${sortK === c.k ? (dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>
-      <tbody>${data.map((r, i) => `<tr class="${stock ? "click" : ""}" data-i="${rows.indexOf(r)}"${stock ? ` data-stock="${esc(stock(r))}"` : ""}>${cols.map((c) => `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      <tbody>${data.map((r, i) => `<tr class="${stock ? "click" : ""}" data-i="${rows.indexOf(r)}"${stock ? ` data-stock="${esc(stock(r))}" tabindex="0"` : ""}>${cols.map((c) => `<td class="${c.num ? "num" : ""}">${c.fmt ? c.fmt(r[c.k], r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     $$("th", el).forEach((th) => th.onclick = (e) => { if (e.target.closest(".info")) return; const k = th.dataset.k; if (sortK === k) dir = -dir; else { sortK = k; dir = -1; } draw(); });
     after();
   };
@@ -112,6 +119,9 @@ const logoOf = (t, name, cls = "") => {
 };
 document.addEventListener("load", (e) => { if (e.target.matches?.(".logo img")) e.target.parentNode.classList.add("has"); }, true);
 document.addEventListener("error", (e) => { if (e.target.matches?.(".logo img")) e.target.remove(); }, true);
+// A model's markdown as HTML with nothing that loads or runs: no images (an image's address could carry data out),
+// no styles, forms or embedded content; links open in a new tab
+const safeHtml = (md) => DOMPurify.sanitize(marked.parse(md || ""), { FORBID_TAGS: ["img", "svg", "math", "style", "form", "input", "button", "iframe", "video", "audio", "picture", "source"], FORBID_ATTR: ["style", "srcset"] });
 const symLogo = (t, name) => `<span class="symwrap">${logoOf(t, name, "sm")}<span class="sym">${esc(t)}</span></span>`;
 const symCell = (v, r) => `<span class="symwrap">${logoOf(v, r.name)}<span><span class="sym">${esc(v)}</span>${oldMark(r)}<span class="sub">${esc(r.name || "")}</span></span></span>`;
 
@@ -136,7 +146,7 @@ function show(view, push = true) {
   $$(".view").forEach((v) => v.classList.add("hidden"));
   $(`#view-${view}`).classList.remove("hidden");
   if (other) window.scrollTo(0, 0);
-  $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
+  $$("#nav a").forEach((a) => { a.classList.toggle("active", a.dataset.view === view); a.toggleAttribute("aria-current", a.dataset.view === view); });
   if (view === "research" && state.redrawResearch && state.stock) redrawResearch();
   if (push) {
     const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
@@ -144,7 +154,7 @@ function show(view, push = true) {
   }
   ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare }[view] || (() => {}))();
 }
-$$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
+$$("#nav a").forEach((a) => a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); show(a.dataset.view); });
 
 // Anything marked data-stock opens that stock: a plain click here, a middle click or Ctrl/Cmd+click in a new tab.
 // Buttons and links inside a row keep their own job.
@@ -588,6 +598,7 @@ function fmtBound(v, fmt) {
 }
 function fmtPart(p) {
   if (p.fmt === "loss") return "loss";
+  if (p.fmt === "negative equity") return "negative equity";
   if (p.fmt === "pct") return pct(p.value, 1, false);
   if (p.fmt === "x") return isNum(p.value) ? `${num(p.value, 2)}x` : "—";
   return num(p.value, 2);
@@ -601,7 +612,7 @@ function renderFactors(s) {
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
   $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}<div class="peer" data-peer="${n}"></div>
-    <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}"${p.note ? ` title="${esc(p.note)}"` : ""}>${isNum(p.score) ? num(p.score, 0) : p.note ? "not used" : "n/a"}</span></div>${p.note && p === (s.scores.breakdown[n] || []).find((x) => x.note) ? `<div class="part-note">${esc(p.note)}</div>` : ""}`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
+    <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt === "negative equity" ? "x" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt === "negative equity" ? "x" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}"${p.note ? ` title="${esc(p.note)}"` : ""}>${isNum(p.score) ? num(p.score, 0) : p.note ? "not used" : "n/a"}</span></div>${p.note && p === (s.scores.breakdown[n] || []).find((x) => x.note) ? `<div class="part-note">${esc(p.note)}</div>` : ""}`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
   $$(".factor .fh").forEach((h) => h.onclick = (e) => { if (!e.target.closest(".info")) h.parentElement.classList.toggle("open"); });
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
 }
@@ -740,7 +751,7 @@ async function loadFund(s) {
   const f = await api(`/api/stock/${encodeURIComponent(ticker)}/fund`).catch(() => null);
   if (ticker !== state.ticker || !f) return;
   const sectors = Object.entries(f.sectors).sort((a, b) => b[1] - a[1]);
-  $("#rFund").innerHTML = `<div class="statgrid"><div><span>Yearly cost</span><span>${pct(f.expenseRatio, 2, false)}</span></div></div>
+  $("#rFund").innerHTML = `<div class="statgrid"><div><span>Yearly cost</span><span>${isNum(f.expenseRatio) ? `${pct(f.expenseRatio, 2, false)} <span class="muted sm">${f.costFrom === "you" ? "your figure" : "from Yahoo"}</span>` : '<span class="muted sm">not on Yahoo: set it in the Portfolio\'s Fund costs</span>'}</span></div></div>
     ${sectors.length ? `<h4>Sectors</h4><div class="statgrid">${sectors.map(([k, v]) => `<div><span>${esc(k)}</span><span>${pct(v, 1, false)}</span></div>`).join("")}</div>` : `<p class="muted sm">Yahoo has no sector data for this fund.</p>`}
     ${f.holdings.length ? `<h4>Top holdings</h4><div class="statgrid">${f.holdings.map((h) => `<div><span>${esc(h.ticker)}</span><span>${pct(h.weight, 1, false)}</span></div>`).join("")}</div>` : ""}`;
 }
@@ -754,12 +765,12 @@ async function loadNews() {
   const ul = $("#newsList"); loading(ul);
   const n = await api(`/api/stock/${encodeURIComponent(ticker)}/news`).catch(() => []);
   if (ticker !== state.ticker) return;
-  ul.innerHTML = n.length ? n.map((x) => `<li>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<div class="meta">${esc(x.publisher || "")} · ${x.time ? new Date(x.time).toLocaleString() : ""}</div></li>`).join("") : "<li class='muted'>No recent headlines.</li>";
+  ul.innerHTML = n.length ? n.map((x) => `<li>${/^https?:\/\//i.test(x.url || "") ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<div class="meta">${esc(x.publisher || "")} · ${x.time ? new Date(x.time).toLocaleString() : ""}</div></li>`).join("") : "<li class='muted'>No recent headlines.</li>";
 }
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(DOMPurify.sanitize(marked.parse(r.text)), r.check) + briefFooter(r); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(safeHtml(r.text), r.check) + briefFooter(r); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
 // Who wrote the brief, and whether every figure in it could be found in the data it was given (or worked out from
@@ -1093,7 +1104,7 @@ state.askThread = [];
 function askCard(q, r) {
   const card = document.createElement("div"); card.className = "card ask-answer";
   const secs = r.seconds != null ? `, ${r.seconds} s` : "";
-  card.innerHTML = `<div class="ask-q">${r.followed ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><div class="brief">${markFigures(DOMPurify.sanitize(marked.parse(r.answer)), r.check)}</div>
+  card.innerHTML = `<div class="ask-q">${r.followed ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><div class="brief">${markFigures(safeHtml(r.answer), r.check)}</div>
     <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}${secs}</summary><ol>${r.steps.map(askStepLi).join("") || "<li>Answered without looking anything up.</li>"}</ol></details>
     ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
   linkTickers($(".brief", card), r.steps);
@@ -1112,7 +1123,10 @@ function askCard(q, r) {
   }
   return card;
 }
-document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches?.(".ask-stock")) openStock(e.target.dataset.stock); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  if (e.target.matches?.(".ask-stock, tr[data-stock], [data-stock][tabindex]")) openStock(e.target.dataset.stock);
+});
 function askThreadEl() {
   let t = $("#askAnswers .ask-thread.current");
   if (!t) { t = document.createElement("div"); t.className = "ask-thread current"; $("#askAnswers").append(t); }
@@ -1480,8 +1494,15 @@ async function loadPortfolio() {
     mkChart("pfPerf", { type: "line", data: { labels: p.performance.dates, datasets: ds }, options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 8 } } } } });
   }
   const r = p.risk;
-  $("#pfRisk").innerHTML = [["Your return", cpct(r.return1y)], ["Benchmark", cpct(r.benchmarkReturn)], ["Volatility", pct(r.volatility, 1, false)],
-    ["Max drawdown", cpct(r.maxDrawdown)], ["Sharpe", num(r.sharpe)], ["Sortino", num(r.sortino)], ["Beta", num(r.beta)]]
+  // Returns say over when; "the same money in the benchmark" says in money whether the choices paid off
+  const since = r.since ? new Date(r.since).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  const sm = p.sameMoney, ahead = sm ? p.total - sm.value : null;
+  $("#pfRisk").innerHTML = [
+    [`Your return ${infoIcon(`Time-weighted since ${since || "your first dated trade"}: how the holdings themselves did, whatever you added when. Early months with a small position count as much as later ones.`)}`, cpct(r.return1y)],
+    [`Benchmark ${infoIcon(`${esc(p.performance?.benchmarkName || "")} over the same days, in ${esc(b)}.`)}`, cpct(r.benchmarkReturn)],
+    ...(sm ? [[`Same money in ${esc(sm.ticker)} ${infoIcon(`What your portfolio would be worth now had every purchase gone into ${sm.ticker} on the same date (and every sale and dividend come out of it). You have ${money(p.total, b, 0)}.`)}`,
+      `${money(sm.value, b, 0)} <span class="sm ${cls(ahead)}">${ahead >= 0 ? "you're" : "you're"} ${money(Math.abs(ahead), b, 0)} ${ahead >= 0 ? "ahead" : "behind"}</span>`]] : []),
+    ["Volatility", pct(r.volatility, 1, false)], ["Max drawdown", cpct(r.maxDrawdown)], ["Sharpe", num(r.sharpe)], ["Sortino", num(r.sortino)], ["Beta", num(r.beta)]]
     .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
   $("#pfWarn").innerHTML = p.warnings.map((w) => `<li class="t-1">${esc(w)}</li>`).join("") || (p.positions.length ? `<li class="t1">No concentration warnings.</li>` : "");
   const pie = (id, obj) => mkChart(id, { type: "doughnut", data: { labels: Object.keys(obj), datasets: [{ data: Object.values(obj), backgroundColor: PALETTE, borderColor: C("--panel"), borderWidth: 2 }] },
@@ -1499,8 +1520,33 @@ async function loadPortfolio() {
   ], p.rebalance, { empty: p.incomplete ? "Withheld until every holding has data." : "Add holdings to see rebalancing suggestions." });
   // New money first: rebalancing by what you add costs nothing; selling has fees and may be taxed
   const nm = p.rebalanceNewMoney;
-  $("#pfRebalNote").textContent = !p.rebalance.length ? "" : nm === null ? "Something you hold has a 0% target, so only selling would reach the targets. Selling has costs and may be taxed."
-    : nm < 0.5 ? "On target: nothing to do." : `Without selling anything: about ${money(nm, b, 0)} of new money, split as in the New money column, reaches every target. Selling instead has costs and may be taxed.`;
+  const clash = targetClash(state.meta?.settings?.targets, state.meta?.settings?.core_target);
+  $("#pfRebalNote").innerHTML = (clash ? `<span class="tgt-clash">${esc(clash.text)} <a href="#settings">Line them up in Settings</a>.</span> ` : "") + esc(!p.rebalance.length ? "" : nm === null ? "Something you hold has a 0% target, so only selling would reach the targets. Selling has costs and may be taxed."
+    : nm < 0.5 ? "On target: nothing to do." : `Without selling anything: about ${money(nm, b, 0)} of new money, split as in the New money column, reaches every target. Selling instead has costs and may be taxed.`);
+}
+// The two kinds of target say the same thing only if what's outside ETFs (stocks, crypto) is about the satellite share
+// the core target leaves. ETFs 100 with core 80 asked Rebalancing and Orders to sell every satellite while Core &
+// satellite said "on target". The match keeps the split between the other classes, or 3:1 stocks to crypto.
+function targetClash(targets, core) {
+  const t = Object.fromEntries(Object.entries(targets || {}).map(([k, v]) => [k, Number(v) || 0]));
+  const sum = Object.values(t).reduce((a, b) => a + b, 0);
+  if (!sum || !isNum(core) || !("ETFs" in t)) return null;
+  const outside = 100 * (sum - t.ETFs) / sum, room = 100 - core;
+  if (Math.abs(outside - room) <= 5) return null;
+  const others = Object.keys(t).filter((k) => k !== "ETFs"), was = others.reduce((a, k) => a + t[k], 0);
+  const match = { ETFs: core };
+  others.forEach((k) => { match[k] = was ? (t[k] / was) * room : room * (k === "Stocks" ? 0.75 : k === "Crypto" ? 0.25 : 0); });
+  Object.keys(match).forEach((k) => { match[k] = Math.round(match[k]); });
+  match.ETFs += 100 - Object.values(match).reduce((a, b) => a + b, 0);  // whole numbers adding to 100
+  return { outside, room, match,
+    text: `Your asset class targets put ${num(outside, 0)}% outside ETFs, but your core target of ${num(core, 0)}% leaves ${num(room, 0)}% for satellites. Rebalancing and Orders follow the class targets, so they'd steer you to ${num(outside, 0)}%${outside < room ? " and suggest selling satellites" : ""}.` };
+}
+function showTargetClash() {
+  const c = targetClash(Object.fromEntries($$("[data-tgt]").map((i) => [i.dataset.tgt, Number(i.value)])), Number($("#sCore").value)), el = $("#tgtClash");
+  el.classList.toggle("hidden", !c);
+  if (!c) return;
+  el.innerHTML = `${esc(c.text)} <button type="button" class="btn ghost sm" id="tgtMatch">Match them: ${esc(Object.entries(c.match).map(([k, v]) => `${k} ${v}%`).join(", "))}</button>`;
+  $("#tgtMatch").onclick = () => { $$("[data-tgt]").forEach((i) => { if (i.dataset.tgt in c.match) { i.value = c.match[i.dataset.tgt]; i.dispatchEvent(new Event("input", { bubbles: true })); } }); showTargetClash(); };
 }
 function renderCoreSatellite(p) {
   const cs = p.coreSatellite, b = p.base;
@@ -1565,7 +1611,8 @@ $("#btnAddHolding").onclick = async () => {
   if (kind !== "dividend" && formQuote && value && (Number(value) > formQuote.price * 5 || Number(value) < formQuote.price / 5)
       && !confirm(`${value} is far from the latest price of ${num(formQuote.price)} ${formQuote.currency}. Save it anyway?`)) return;
   try {
-    await api("/api/transactions", { method: "POST", body: { ticker: $("#hTicker").value, kind, date: $("#hDate").value, note: $("#hNote").value, ...figures } });
+    const saved = await api("/api/transactions", { method: "POST", body: { ticker: $("#hTicker").value, kind, date: $("#hDate").value, note: $("#hNote").value, ...figures } });
+    if (saved?.warning) setTimeout(() => toast(saved.warning, 9000), 600);  // after the "added" message, and long enough to read
     ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); $("#hHint").textContent = ""; formQuote = null; toast("Transaction recorded"); loadPortfolio();
   } catch (e) { toast(e.message); }
 };
@@ -1587,7 +1634,7 @@ $("#btnBt").onclick = async () => {
     const m = [["Total return", "totalReturn", (v) => cpct(v)], ["CAGR", "cagr", (v) => cpct(v)], ["Volatility", "volatility", (v) => pct(v, 1, false)],
       ["Sharpe", "sharpe", (v) => num(v)], ["Max drawdown", "maxDrawdown", (v) => cpct(v)], ["Trades", "trades", (v) => num(v, 0)], ["Time in market", "exposure", (v) => pct(v, 0, false)]];
     $("#btTable").innerHTML = `<table><tr><th>Metric</th><th class="num">${esc(d.label)}</th><th class="num">Buy &amp; hold</th></tr>${m.map(([l, k, f]) => `<tr><td>${l}</td><td class="num">${f(d.strategy[k])}</td><td class="num">${k === "exposure" ? "100%" : f(d.benchmark[k])}</td></tr>`).join("")}</table>`;
-    $("#btCaveats").innerHTML = d.caveats.map((c) => `<li class="t-1">${esc(c)}</li>`).join("");
+    $("#btCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
   } catch (e) { toast(e.message); } finally { b.disabled = false; }
 };
 
@@ -1637,7 +1684,8 @@ async function loadTax(year) {
   $("#taxDivs").innerHTML = t.dividendsByCountry.length ? `<table><tr><th>Dividends from</th><th>Holdings</th><th class="num">Received (${esc(b)})</th><th>Usually withheld at source</th></tr>
     ${t.dividendsByCountry.map((c) => `<tr><td>${esc(c.country)}</td><td>${esc(c.tickers.join(", "))}</td><td class="num">${money(c.amount, b, 0)}</td>
       <td class="muted sm">${esc(c.withholding || "Check with your broker what was withheld")}</td></tr>`).join("")}</table>` : "";
-  $("#taxNotes").innerHTML = [...(t.approximate.length ? [`Approximate for ${t.approximate.join(", ")}: a date's exchange rate was missing, so today's was used.`] : []), ...t.caveats]
+  $("#taxNotes").innerHTML = [...((t.leftOut || []).length ? [`Left out: ${t.leftOut.join(", ")}, because no exchange rate to ${t.base} is available right now. Their sales and dividends aren't in these totals; try again later.`] : []),
+    ...(t.approximate.length ? [`Approximate for ${t.approximate.join(", ")}: a date's exchange rate was missing, so today's was used.`] : []), ...t.caveats]
     .map((c) => `<li>${esc(c)}</li>`).join("");
 }
 
@@ -1909,7 +1957,7 @@ $("#pmRunPast").onclick = async () => {
     const bmYear = Object.fromEntries((bm?.yearly || []).map((y) => [y.year, y.return]));
     $("#pmYears").innerHTML = `<table><tr><th>Year</th><th class="num">The mix</th>${bm ? `<th class="num">${esc(bm.ticker)}</th>` : ""}</tr>
       ${p.yearly.map((y) => `<tr><td>${y.year}${y.partial ? ' <span class="muted sm">(part)</span>' : ""}</td><td class="num">${cpct(y.return)}</td>${bm ? `<td class="num">${cpct(bmYear[y.year])}</td>` : ""}</tr>`).join("")}</table>`;
-    $("#pmPastCaveats").innerHTML = d.caveats.map((c) => `<li class="t-1">${esc(c)}</li>`).join("");
+    $("#pmPastCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
   } catch (e) { toast(e.message); } finally { b.disabled = false; }
 };
 
@@ -1943,9 +1991,9 @@ $("#mcRun").onclick = async () => {
           tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${pmMoney(c.parsed.y)}` } } },
         scales: { y: { ticks: { callback: (v) => pmMoney(v) } } } } });
     $("#mcLegend").textContent = `Shaded: the middle half of futures (25th to 75th percentile) and 8 in 10 (10th to 90th). Assumes ${pct(a.usedYearly, 1)} a year`
-      + `${a.expected == null ? ` as in its history` : ` (its history: ${pct(a.historicalYearly, 1)})`}, with history's swings (volatility ${pct(a.historicalVolatility, 1, false)}, worst month ${pct(a.worstMonth, 1)}).`
+      + `${a.expected == null ? ` as in its history${a.historicalYearly > 0.1 ? ": high for planning, since a short history with crypto or single stocks rarely repeats; 5-7% is a prudent figure for a mix mostly in shares" : ""}` : ` (its history: ${pct(a.historicalYearly, 1)})`}, with history's swings (volatility ${pct(a.historicalVolatility, 1, false)}, worst month ${pct(a.worstMonth, 1)}).`
       + ` ${a.paths.toLocaleString()} futures${real ? `, ${pct(a.inflation, 1, false)} inflation taken out` : ""}.`;
-    $("#mcCaveats").innerHTML = d.caveats.map((c) => `<li class="t-1">${esc(c)}</li>`).join("");
+    $("#mcCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
   } catch (e) { toast(e.message); } finally { b.disabled = false; }
 };
 
@@ -2013,6 +2061,8 @@ function loadSettings() {
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)} %<input type="number" name="target-${esc(k)}" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
   $("#sCore").value = s.core_target;
+  showTargetClash();
+  $("#targetInputs").oninput = $("#sCore").oninput = () => showTargetClash();
   $("#sRegions").innerHTML = state.meta.regions.map((r) => `<label><input type="checkbox" name="region" value="${esc(r)}" data-region="${esc(r)}" ${(s.regions || state.meta.regions).includes(r) ? "checked" : ""}> ${esc(r)}</label>`).join("");
   renderTileChoices(new Set(s.dashboard_tiles));
   $("#sEmail").value = s.alert_email || ""; $("#sEmailOn").checked = !!s.email_alerts;
