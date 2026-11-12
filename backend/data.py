@@ -98,7 +98,7 @@ def history(ticker, period="5y"):
     cached = db.cache_get(key, TTL["history"])
     if cached is None:
         try:
-            df = _demo_history(ticker) if DEMO else _fetch_history(ticker, fetch_period)
+            df = _demo_history(ticker) if DEMO else _with_recent_sessions(ticker, _fetch_history(ticker, fetch_period))
             db.cache_set(key, _df_to(df))
             _stale.discard(ticker)
         except DataError:
@@ -111,6 +111,55 @@ def history(ticker, period="5y"):
         df = _df_from(cached)
         _stale.discard(ticker)
     return slice_period(df, period)
+
+
+RECENT_DAYS = 7  # how far back a missing session is looked for
+
+
+def missing_sessions(ticker, index, today=None):
+    """Trading days in the past week, up to yesterday, with no daily bar. Yahoo's daily series sometimes lags a day
+    or two, or skips one, for European listings (VWCE.DE once had no bar for a Wednesday and stopped at Tuesday on
+    the Thursday), while its intraday candles are up to date. A holiday shows up here too; that only costs a look."""
+    if ticker.endswith("-USD") or ticker.startswith("^") or ticker.endswith("=X"):
+        return []  # coins trade every day and indexes and currencies aren't held; their daily series keep up
+    today = today or dt.date.today()
+    open_days = {6, 0, 1, 2, 3} if ticker.endswith(SUN_THU) else {0, 1, 2, 3, 4}
+    have = {d.date() for d in index[-2 * RECENT_DAYS:]}
+    if not have:
+        return []
+    days = [today - dt.timedelta(days=n) for n in range(1, RECENT_DAYS + 1)]
+    return [d for d in days if d.weekday() in open_days and d not in have and d > min(have)]
+
+
+def sessions_from_intraday(intra, daily, today=None):
+    """Daily bars made from intraday candles for the recent days the daily series lacks (today's included, so far):
+    open of the first candle, highest high, lowest low, close of the last, volume summed."""
+    today = today or dt.date.today()
+    have = set(daily.index.date)
+    start = today - dt.timedelta(days=RECENT_DAYS)
+    rows = {}
+    for day, g in intra.groupby(intra.index.date):
+        if day in have or day < start or day > today or g.empty:
+            continue
+        rows[pd.Timestamp(day)] = {"Open": g["Open"].iloc[0], "High": g["High"].max(), "Low": g["Low"].min(),
+                                   "Close": g["Close"].iloc[-1], "Volume": g["Volume"].sum()}
+    if not rows:
+        return daily
+    return pd.concat([daily, pd.DataFrame.from_dict(rows, orient="index")]).sort_index()
+
+
+def _with_recent_sessions(ticker, df, today=None):
+    """The daily series with any recent trading day it lacks filled in from intraday candles (missing_sessions)."""
+    if not missing_sessions(ticker, df.index, today):
+        return df
+    try:
+        intra = _fetch_intraday(ticker, INTRADAY["5d"])
+    except DataError:
+        return df  # no intraday either: the daily series as it is
+    filled = sessions_from_intraday(intra, df, today)
+    if len(filled) > len(df):
+        log.info("%s: %d recent day(s) filled in from intraday prices", ticker, len(filled) - len(df))
+    return filled
 
 
 def _fetch_history(ticker, period):
