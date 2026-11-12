@@ -198,6 +198,7 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 .kpi .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
 .kpi .v { font: 600 20px var(--mono); margin-top: 2px; }
 .kpi .s { font: 12px var(--mono); }
+.kpi .s .kpi-link { display: block; margin-top: 3px; }
 /* The dashboard snapshot's four figures stay on one row, so the card doesn't grow on a narrower window */
 #dashPortfolio { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 #dashPortfolio .kpi { padding: 10px 12px; }

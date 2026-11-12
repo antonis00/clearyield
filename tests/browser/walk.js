@@ -323,7 +323,7 @@ const SLOW = 150000;
   expect("portfolio: no bad text", !/undefined|NaN|\[object/.test(await txt("#view-portfolio")));
   // Fund costs: SPY's yearly cost on what's held, and your own figure from the factsheet standing over Yahoo's
   const costKpi = await p.evaluate(() => [...document.querySelectorAll("#pfKpis .kpi")].map((k) => k.innerText.replace(/\s+/g, " ")).find((t) => /^Fund costs/i.test(t)) || "");
-  expect("portfolio: fund costs a year, as a share of the portfolio", pf.fundCosts.funds.some((f) => f.ticker === "SPY") && /of the portfolio/.test(costKpi) && /Set costs/.test(costKpi), costKpi);
+  expect("portfolio: fund costs a year, as a share of the portfolio", pf.fundCosts.funds.some((f) => f.ticker === "SPY") && /of portfolio/.test(costKpi) && /Set costs/.test(costKpi), costKpi);
   await p.click("#pfCostEdit"); await p.locator('#modal input[name="SPY"]').fill("0.03"); await p.click("#modal form .btn:not(.ghost)");
   await p.waitForFunction(() => /Fund costs saved/.test(document.querySelector("#toast")?.innerText || ""), null, { timeout: SLOW }); await p.waitForTimeout(1500);
   const mine = (await p.evaluate(async () => (await fetch("/api/portfolio")).json())).fundCosts.funds.find((f) => f.ticker === "SPY");

@@ -1308,10 +1308,13 @@ async function loadPortfolio() {
   const fundCostKpi = (p) => {
     const c = p.fundCosts;
     if (!c || (!c.funds.length && !c.unknown.length)) return null;
-    const dearest = c.funds[0], parts = c.funds.length ? [`${pct(c.ofPortfolio, 2, false)} of the portfolio`] : [];
-    if (c.funds.length > 1 && dearest) parts.push(`most from ${esc(dearest.ticker)} (${pct(dearest.ratio, 2, false)} a year)`);
-    if (c.unknown.length) parts.push(`no figure for ${esc(c.unknown.map((u) => u.ticker).join(", "))}`);
-    return ["Fund costs / yr", c.funds.length ? money(c.perYear, p.base, 0) : "—", `${parts.join(" · ")} <a href="#" id="pfCostEdit">Set costs</a>`];
+    // Short lines on the card; which fund costs most and which have no figure go in the "i"
+    const dearest = c.funds[0], n = c.unknown.length;
+    const lines = [c.funds.length ? `${pct(c.ofPortfolio, 2, false)} of portfolio` : "", n ? (c.funds.length ? `${n} fund${n > 1 ? "s" : ""} without a figure` : `no figure for ${esc(c.unknown[0].ticker)}${n > 1 ? ` +${n - 1}` : ""}`) : ""].filter(Boolean);
+    const info = ["What your funds charge a year (their ongoing cost) on what you hold. It's already taken out of their prices, so it isn't a bill; stocks have none.",
+      c.funds.length > 1 && dearest ? `Most from ${dearest.ticker} (${pct(dearest.ratio, 2, false)} a year).` : "",
+      n ? `No figure on Yahoo for ${c.unknown.map((u) => u.ticker).join(", ")}, so ${n > 1 ? "they're" : "it's"} left out: Set costs lets you enter ${n > 1 ? "them" : "it"}.` : ""].filter(Boolean).join(" ");
+    return ["Fund costs / yr", c.funds.length ? money(c.perYear, p.base, 0) : "—", `${lines.join("<br>")}<a href="#" id="pfCostEdit" class="kpi-link">Set costs</a>`, info];
   };
   let p;
   try { p = await api("/api/portfolio"); } catch (e) { t.innerHTML = esc(e.message); return; }
@@ -1325,12 +1328,12 @@ async function loadPortfolio() {
     ["Total value", money(p.total, b, 0)], ["Invested", money(p.cost, b, 0)], ["Unrealised P&L", `<span class="${cls(p.pnl)}">${money(p.pnl, b, 0)}</span>`, pct(p.pnlPct)],
     [dayChange(p)[0], `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`, esc(dayChange(p)[1])], ["Realised P&L", `<span class="${cls(p.realised)}">${money(p.realised, b, 0)}</span>`], ["Dividends received", money(p.dividends, b, 0)],
     // Under a year, the return so far (not annualised); from a year, the annual return with timing
-    isNum(p.xirr) ? ["Annual return", cpct(p.xirr), "Your money's return a year, with timing"]
-      : /^Shown after a year/.test(p.xirrWhy || "") && isNum(p.returnSoFar) ? ["Return so far", cpct(p.returnSoFar), "Not annualised: that starts after a year of history"]
+    isNum(p.xirr) ? ["Annual return", cpct(p.xirr), "with timing", "Your money's return a year, counting when each amount went in and came out (money-weighted, XIRR)."]
+      : /^Shown after a year/.test(p.xirrWhy || "") && isNum(p.returnSoFar) ? ["Return so far", cpct(p.returnSoFar), "not annualised", "Your return since the first purchase. It becomes a yearly figure once there's a year of history: annualising less than a year exaggerates it."]
       : ["Annual return", "—", esc(p.xirrWhy || "")],
-    ["Est. dividend income / yr", money(p.annualIncome, b, 0), "What your holdings paid per share in the past year"],
+    ["Est. income / yr", money(p.annualIncome, b, 0), "past year", "Estimated dividend income a year: what each share you hold actually paid over the past year, times the shares you hold now. Accumulating funds (like VWCE) reinvest instead, so they count as 0."],
     ...(fundCostKpi(p) ? [fundCostKpi(p)] : []), ["Positions", p.positions.length],
-  ].map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
+  ].map(([l, v, s, info]) => `<div class="kpi"><div class="l">${l}${info ? ` ${infoIcon(info)}` : ""}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
   if ($("#pfCostEdit")) $("#pfCostEdit").onclick = (e) => { e.preventDefault(); editFundCosts(p.fundCosts); };
   // Nothing bought or sold yet: no row of zeros that looks like a result
   if (!p.positions.length && !p.closed.length && !p.missing.length) $("#pfKpis").innerHTML = `<div class="muted">No transactions yet. Add a purchase above, or paste your broker's export.</div>`;
