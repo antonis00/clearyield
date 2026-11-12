@@ -496,7 +496,8 @@ def _ask_error(e):
     if isinstance(e, httpx.TimeoutException):
         return 504, "The AI model didn't answer in time. Try again, perhaps with a narrower question."
     if isinstance(e, (RuntimeError, httpx.HTTPError)):
-        return 503, str(e)[:300]
+        # Some connection errors carry no text at all; the page must still say what happened
+        return 503, str(e)[:300] or f"The connection to the AI provider failed ({type(e).__name__}). Try again in a moment."
     log.exception("Ask failed", exc_info=e)
     return 500, "Something went wrong while answering. Try again."
 
@@ -540,6 +541,7 @@ def ask_start(body: dict = Body(...)):
         except Exception as e:
             job["code"], job["error"] = _ask_error(e)
             job["status"] = "error"
+            log.warning("Ask stopped (%s): %s", job["code"], job["error"])  # so a failed question can be looked into
     __import__("threading").Thread(target=run, daemon=True).start()
     return ok({"id": jid})
 

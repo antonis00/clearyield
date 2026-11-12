@@ -664,6 +664,24 @@ const SLOW = 150000;
     answer.steps = [step];
     await p.unroute("**/api/ask/start", startAsk); await p.unroute("**/api/ask/job/*", jobAsk);
     await nav("ask");
+    // A question that stops stays on the page with the reason in plain sight and Try again; an error with no text
+    // (a dropped connection) still says what happened. It used to vanish back to the empty page.
+    await p.evaluate(() => newAskConversation());
+    const failStart = (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "jf" }) });
+    let failWith = "";
+    const failJob = (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "error", error: failWith, code: 503, events: [], elapsed: 1 }) });
+    await p.route("**/api/ask/start", failStart); await p.route("**/api/ask/job/*", failJob);
+    await p.fill("#askInput", "Which EU energy stocks use only fossil fuels?"); await p.press("#askInput", "Enter");
+    await p.waitForSelector(".ask-failed .ask-error", { timeout: 10000 });
+    const failed = await p.evaluate(() => ({ q: document.querySelector(".ask-failed .ask-q").textContent, why: document.querySelector(".ask-failed .ask-error").textContent,
+      retry: !!document.querySelector(".ask-failed .ask-retry"), empty: document.querySelector("#view-ask").classList.contains("ask-empty") }));
+    expect("ask: a question that stops stays, with a plain reason and Try again", /EU energy/.test(failed.q) && /didn't answer|Try again/.test(failed.why) && failed.retry && !failed.empty, JSON.stringify(failed));
+    failWith = "The AI is busy right now. Try again in about 20 seconds.";
+    await p.click(".ask-failed .ask-retry");
+    await p.waitForFunction(() => /busy right now/.test(document.querySelector(".ask-failed .ask-error")?.textContent || ""), null, { timeout: 10000 });
+    expect("ask: Try again asks once more, and shows the new reason", (await p.locator(".ask-failed").count()) === 1);
+    await p.unroute("**/api/ask/start", failStart); await p.unroute("**/api/ask/job/*", failJob);
+    await p.evaluate(() => newAskConversation());
   }
   // A web search step lists its pages as links that open in a new tab; a link that isn't http(s) is dropped
   const links_ = await p.evaluate(() => { const box = document.createElement("div");
