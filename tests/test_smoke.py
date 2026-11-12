@@ -1659,6 +1659,14 @@ def test_review_security_headers():
         h = c.get("/").headers
         assert h["x-frame-options"] == "DENY" and h["x-content-type-options"] == "nosniff" and "frame-ancestors 'none'" in h["content-security-policy"]
         assert "img-src 'self' data: blob:" in h["content-security-policy"] and h["referrer-policy"] == "no-referrer"
+        # Nothing from outside: the fonts are bundled, and the policy names no other site
+        import re
+        page = c.get("/").text
+        assert "https://" not in h["content-security-policy"] and not re.search(r"""(src|href)=["']https?://""", page)
+        css = c.get("/static/vendor/fonts/fonts.css")
+        assert css.status_code == 200 and css.text.count("@font-face") == 14
+        for f in set(re.findall(r"url\(([\w.-]+\.woff2)\)", css.text)):
+            assert c.get(f"/static/vendor/fonts/{f}").status_code == 200, f
 
 
 def test_plan_this_month_and_the_goal():
@@ -3565,7 +3573,8 @@ def test_a_falling_world_fund_does_not_prompt_rethinking_it():
     with _FakeMarket({"VWCE.DE": crash, "AAA": crash}, infos):
         rows = {r["ticker"]: r for r in insights.rows_for(["VWCE.DE", "AAA"], db.get_settings())}
         texts = [i["text"] for i in insights.digest(db.get_settings())["items"]]
-    assert rows["VWCE.DE"]["stance"] in ("Weak", "Caution") and rows["AAA"]["stance"] == "Weak", {t: r["stance"] for t, r in rows.items()}
+    # The fund keeps its low score but gets no band that reads as advice to sell the core
+    assert rows["VWCE.DE"]["stance"] == "Core fund" and rows["VWCE.DE"]["composite"] < 45 and rows["AAA"]["stance"] == "Weak", {t: r["stance"] for t, r in rows.items()}
     # The company is flagged for a rethink; the world fund isn't, and its stance change isn't reported either
     assert any(t.startswith("AAA is a holding with a Weak composite score") for t in texts), texts
     assert not any(t.startswith("VWCE.DE") and ("thesis" in t or "went from" in t) for t in texts), texts

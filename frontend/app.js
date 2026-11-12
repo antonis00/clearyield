@@ -481,7 +481,8 @@ function renderHeader(s) {
   const [kind, why] = compositeBasis(i, s.scores);
   const basis = kind || (Object.values(w).every((v) => Math.abs(v - 0.2) < 0.005) ? "balanced"
     : Object.entries(w).map(([k, v]) => `${k[0].toUpperCase()} ${Math.round(v * 100)}`).join(" · "));
-  $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})${why ? ` ${infoIcon(why)}` : ""}</div>`;
+  const note = s.scores.stanceNote ? `${s.scores.stanceNote} ${why || ""}`.trim() : why;
+  $("#rStance").innerHTML = `${badge(s.scores.stance)}<div class="muted sm">Composite (${esc(basis)})${note ? ` ${infoIcon(note)}` : ""}</div>`;
   $("#btnWatch").textContent = s.watched ? "✓ Watching" : "+ Watchlist";
 }
 // The mouse wheel scrolls the page, as everywhere else; Ctrl (or Cmd) + wheel zooms the chart around the pointer.
@@ -1806,6 +1807,8 @@ function markOrderDone(o) {
 }
 
 $("#ordForm").onsubmit = (e) => { e.preventDefault(); prepareOrders(); };
+// The transaction form sits beside the list of transactions; this takes you there from Positions
+$("#pfToRecord").onclick = (e) => { e.preventDefault(); $("#recordCard").scrollIntoView({ behavior: "smooth", block: "start" }); $("#hTicker").focus({ preventScroll: true }); };
 
 // ---- Your plan: this month's money and the goal (plan.py)
 async function loadPlan() {
@@ -1864,7 +1867,7 @@ async function loadDivMiss() {
     $("#hKind").value = "dividend"; $("#hTicker").value = r.ticker; $("#hTicker").onchange();
     $("#hCost").value = +r.gross.toFixed(2); $("#hDate").value = r.exDate; $("#hNote").value = "";
     $("#hKind").onchange();
-    $("#hKind").closest(".card").scrollIntoView({ behavior: "smooth", block: "start" }); $("#hCost").focus();
+    $("#recordCard").scrollIntoView({ behavior: "smooth", block: "start" }); $("#hCost").focus({ preventScroll: true });
     toast("Filled in before tax: change it to what your broker paid, and the date it arrived");
   });
 }

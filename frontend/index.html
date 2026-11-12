@@ -14,8 +14,7 @@
     document.documentElement.dataset.theme = ["dark", "navy", "light"].includes(t) ? t : "navy";
   })();
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="/static/styles.css">
 <!-- Chart libraries are bundled locally so the app works without a CDN -->
 <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
@@ -280,26 +279,36 @@
   <section id="view-portfolio" class="view hidden">
     <div id="pfIncomplete" class="alertbar hidden"></div>
     <div id="pfKpis" class="kpis big"></div>
-    <div class="card">
-      <div class="card-h"><h3>Record a transaction</h3><span class="muted sm">Prices in the asset's trading currency. Add the date so P&amp;L includes currency moves.</span></div>
-      <div class="form-row">
-        <label>Type<select id="hKind"><option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option></select></label>
-        <label>Ticker<input id="hTicker" placeholder="AAPL"></label>
-        <label id="hSharesWrap">Shares<input type="number" id="hShares" step="any"></label>
-        <label><span id="hCostLabel">Price / share</span><input type="number" id="hCost" step="any"></label>
-        <label>Date<input type="date" id="hDate"></label>
-        <label class="grow">Note<input id="hNote"></label>
-        <button class="btn" id="btnAddHolding">Record</button>
-      </div>
-      <div id="hHint" class="muted sm"></div>
-      <details id="pasteBox"><summary class="muted sm">Paste several at once</summary>
-        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total received in price, in the currency paid (pounds, not pence, for London stocks). If any line has a problem, nothing is added.</p>
-        <textarea id="hPaste" rows="5" aria-label="Transactions to paste, one per line" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
-        <div class="form-row"><button class="btn ghost" id="btnPaste">Add these</button></div>
-      </details>
-    </div>
-    <div class="card"><div class="card-h"><h3>Positions</h3></div><div id="pfTable" class="tablewrap"></div></div>
+    <div class="card"><div class="card-h"><h3>Positions</h3><a href="#portfolio" class="btn ghost sm" id="pfToRecord">+ Record a transaction</a></div><div id="pfTable" class="tablewrap"></div></div>
     <div class="card hidden" id="divMissCard"><div class="card-h"><h3>Dividends not recorded</h3><span class="muted sm">Yahoo lists these as paid while you held the shares. Record what your broker paid.</span></div><div id="divMiss" class="tablewrap"></div></div>
+    <div class="card" id="planCard">
+      <div class="card-h"><h3>Your plan</h3><span class="muted sm">What you invest each month, and the goal it's for</span></div>
+      <form id="planForm" class="form-row inline plan-form">
+        <label><span>Each month <span class="planBase"></span></span><input type="number" id="planMonthly" min="0" step="any" placeholder="0"></label>
+        <label><span>Goal, in today's money <span class="planBase"></span></span><input type="number" id="planGoal" min="0" step="any" placeholder="0"></label>
+        <label><span>By</span><input type="date" id="planBy"></label>
+        <label><span>Return a year %</span><input type="number" id="planExp" step="0.5" min="-20" max="20"></label>
+        <label><span>Inflation %</span><input type="number" id="planInfl" step="0.5" min="0" max="15"></label>
+        <button class="btn plan-go">Save plan</button>
+      </form>
+      <div id="planOut" class="grid2 plan-out"></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>
+      <div id="pfRebal" class="tablewrap"></div>
+      <div id="pfRebalNote" class="muted sm" style="margin-top:8px"></div>
+    </div>
+    <div class="card" id="ordCard">
+      <div class="card-h"><h3>Orders</h3><span class="muted sm">Prepared from your targets. You approve them and place them at your broker: ClearYield never trades.</span></div>
+      <form id="ordForm" class="form-row inline ord-form">
+        <label><span>New money <span id="ordBase"></span></span><input type="number" id="ordMoney" min="0" step="any" placeholder="0"></label>
+        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordFrac" role="switch" checked><span></span></span><span>Fractional shares</span></label>
+        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordSell" role="switch"><span></span></span><span>Rebalance by selling too</span></label>
+        <button class="btn ord-go">Suggest orders</button>
+      </form>
+      <div id="ordPlan"></div>
+      <div id="ordOpen"></div>
+    </div>
     <div class="card hidden" id="csCard">
       <div class="card-h"><h3>Core &amp; satellite</h3><span class="muted sm">Broad index funds start as core, everything else as satellite. Switch any holding in Positions; set the target in Settings.</span></div>
       <div class="grid2 cs-body">
@@ -317,6 +326,24 @@
       <div class="card"><h4>Sector, opening up funds</h4><canvas id="aSector"></canvas></div>
       <div class="card"><h4>Currency, opening up funds</h4><canvas id="aCur"></canvas><div class="muted sm" id="aCurNote"></div></div>
     </div>
+    <div class="card" id="recordCard">
+      <div class="card-h"><h3>Record a transaction</h3><span class="muted sm">Prices in the asset's trading currency. Add the date so P&amp;L includes currency moves.</span></div>
+      <div class="form-row">
+        <label>Type<select id="hKind"><option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option></select></label>
+        <label>Ticker<input id="hTicker" placeholder="AAPL"></label>
+        <label id="hSharesWrap">Shares<input type="number" id="hShares" step="any"></label>
+        <label><span id="hCostLabel">Price / share</span><input type="number" id="hCost" step="any"></label>
+        <label>Date<input type="date" id="hDate"></label>
+        <label class="grow">Note<input id="hNote"></label>
+        <button class="btn" id="btnAddHolding">Record</button>
+      </div>
+      <div id="hHint" class="muted sm"></div>
+      <details id="pasteBox"><summary class="muted sm">Paste several at once</summary>
+        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total received in price, in the currency paid (pounds, not pence, for London stocks). If any line has a problem, nothing is added.</p>
+        <textarea id="hPaste" rows="5" aria-label="Transactions to paste, one per line" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
+        <div class="form-row"><button class="btn ghost" id="btnPaste">Add these</button></div>
+      </details>
+    </div>
     <div class="card">
       <div class="card-h"><h3>Transactions</h3></div>
       <div id="txTable" class="tablewrap"></div>
@@ -328,34 +355,6 @@
       <div id="taxSales" class="tablewrap"></div>
       <div id="taxDivs" class="tablewrap"></div>
       <ul id="taxNotes" class="signals"></ul>
-    </div>
-    <div class="card">
-      <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>
-      <div id="pfRebal" class="tablewrap"></div>
-      <div id="pfRebalNote" class="muted sm" style="margin-top:8px"></div>
-    </div>
-    <div class="card" id="planCard">
-      <div class="card-h"><h3>Your plan</h3><span class="muted sm">What you invest each month, and the goal it's for</span></div>
-      <form id="planForm" class="form-row inline plan-form">
-        <label><span>Each month <span class="planBase"></span></span><input type="number" id="planMonthly" min="0" step="any" placeholder="0"></label>
-        <label><span>Goal, in today's money <span class="planBase"></span></span><input type="number" id="planGoal" min="0" step="any" placeholder="0"></label>
-        <label><span>By</span><input type="date" id="planBy"></label>
-        <label><span>Return a year %</span><input type="number" id="planExp" step="0.5" min="-20" max="20"></label>
-        <label><span>Inflation %</span><input type="number" id="planInfl" step="0.5" min="0" max="15"></label>
-        <button class="btn plan-go">Save plan</button>
-      </form>
-      <div id="planOut" class="grid2 plan-out"></div>
-    </div>
-    <div class="card" id="ordCard">
-      <div class="card-h"><h3>Orders</h3><span class="muted sm">Prepared from your targets. You approve them and place them at your broker: ClearYield never trades.</span></div>
-      <form id="ordForm" class="form-row inline ord-form">
-        <label><span>New money <span id="ordBase"></span></span><input type="number" id="ordMoney" min="0" step="any" placeholder="0"></label>
-        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordFrac" role="switch" checked><span></span></span><span>Fractional shares</span></label>
-        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordSell" role="switch"><span></span></span><span>Rebalance by selling too</span></label>
-        <button class="btn ord-go">Suggest orders</button>
-      </form>
-      <div id="ordPlan"></div>
-      <div id="ordOpen"></div>
     </div>
   </section>
 

@@ -509,3 +509,5 @@ nav a.nav-ask { margin-top: auto; } /* at the bottom of the menu, lined up with 
 .plan-big.up { color: var(--up); } .plan-big.down { color: var(--down); }
 .plan-buys { list-style: none; margin: 8px 0 10px; padding: 0; }
 .plan-buys li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+
+.b-Core { background: color-mix(in srgb, var(--accent2) 15%, transparent); color: var(--accent2); }  /* a broad index fund: no stance band */
