@@ -790,6 +790,29 @@ def fund(ticker):
 SEARCH_TYPES = {"EQUITY": "Stock", "ETF": "ETF", "MUTUALFUND": "Fund", "CRYPTOCURRENCY": "Crypto", "INDEX": "Index"}
 
 
+POPULAR_MIN_CAP = 50e9  # Yahoo's most-traded list also has small speculative names; only large companies are kept
+DEMO_POPULAR = ["NVDA", "MSFT", "AMZN", "AAPL", "META"]
+
+
+def most_traded(n=3):
+    """Today's most traded large companies on Yahoo (its "most actives" screen, US-listed, by volume), kept an hour.
+    Companies worth under POPULAR_MIN_CAP dollars are left out. [] when Yahoo doesn't answer."""
+    if DEMO:
+        return DEMO_POPULAR[:n]
+    key = "popular:v1"
+    hit = db.cache_get(key, 3600)
+    if hit is None:
+        try:
+            quotes = _yf().screen("most_actives", count=50).get("quotes", [])
+        except Exception as e:
+            log.info("most traded list failed: %s", e)
+            return (db.cache_get_stale(key) or [])[:n]
+        hit = [q["symbol"] for q in quotes if q.get("quoteType") == "EQUITY" and (q.get("marketCap") or 0) >= POPULAR_MIN_CAP]
+        if hit:
+            db.cache_set(key, hit)
+    return hit[:n]
+
+
 def search_symbols(text):
     """Yahoo's own symbol search, for anything outside the built-in list. European funds, for example, are only
     listed with an exchange suffix: VWCE doesn't exist, but VWCE.DE does."""

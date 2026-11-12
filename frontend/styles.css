@@ -176,8 +176,6 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 .grid2 > .card, .grid3 > .card, .grid4 > .card { margin-bottom: 0; }
 .grid2:has(> .card.hidden) { grid-template-columns: 1fr; } /* one card left: it takes the whole row */
 .grid2, .grid3, .grid4 { margin-bottom: 16px; }
-/* Compare's metrics table needs about 700px, so its pair stacks well before the other two-column grids */
-@media (max-width: 1700px) { .cmp-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1100px) { .settings-grid > .set-tiles, .settings-grid > .settings-stack { order: 1; } .settings-grid > .save-card { order: 2; } }  /* one column: your settings first, then the app's */
 @media (max-width: 1100px) { .grid2, .grid3, .grid4 { grid-template-columns: 1fr; } .side { width: 64px; } .brand span:not(.logo), nav a { font-size: 0; } nav a::first-letter { font-size: 14px; } }
 .empty { padding: 80px 0; text-align: center; color: var(--muted); }
@@ -228,6 +226,9 @@ td .sym { font: 600 13px var(--mono); } td .sub { color: var(--muted); font-size
 #scrTable td .sub { max-width: 106px; }
 #scrTable .clip { display: block; max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
 #scrTable td:nth-child(2) .clip { max-width: 72px; }
+/* Compare: the figures, fund cost and five scores side by side, without scrolling sideways */
+#cmpTable th, #cmpTable td { padding-left: 6px; padding-right: 6px; }
+#cmpTable td .sub { max-width: 130px; }
 
 .alertbar { border: 1px solid var(--down); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
 

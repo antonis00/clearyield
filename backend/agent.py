@@ -163,9 +163,13 @@ def get_opportunities(markets=None):
 
 def compare(tickers, period="1y"):
     ts = [t.strip().upper() for t in tickers][:5]
-    d = insights.compare(ts, period if period in ("6mo", "1y", "2y", "5y") else "1y", _settings().get("risk_free_rate", 0.04))
-    rows = [{"ticker": m["ticker"], "name": m["name"], f"return_{period}": _f_pct(m["periodReturn"], 1), "volatility_1y": _f_pct(m.get("vol1y"), 1),
-             "max_drawdown_1y": _f_pct(m.get("maxDD1y"), 1), "sharpe_1y": _f_num(m.get("sharpe1y"), 2), "pe": _f_x(m["pe"]) if m.get("pe") else None} for m in d["meta"]]
+    period = period if period in ("6mo", "1y", "2y", "5y") else "1y"
+    d = insights.compare(ts, period, _settings())
+    rows = [{"ticker": m["ticker"], "name": m["name"], f"return_{period}_in_{m['currency']}": _f_pct(m["periodReturn"], 1),
+             "per_year": _f_pct(m.get("perYear"), 1), f"volatility_{period}": _f_pct(m.get("vol"), 1), f"max_drawdown_{period}": _f_pct(m.get("maxDD"), 1),
+             f"sharpe_{period}": _f_num(m.get("sharpe"), 2), "pe": _f_x(m["pe"]) if m.get("pe") else None,
+             "fund_cost_per_year": _f_pct(m.get("costRatio"), 2) if m.get("costRatio") is not None else None,
+             "overall_score": _f_num(m.get("composite"), 0) if m.get("composite") is not None else None, "stance": m.get("stance")} for m in d["meta"]]
     corr = d.get("correlation")
     pairs = {f"{a}-{b}": _f_num(corr["matrix"][i][j], 2) for i, a in enumerate(corr["tickers"]) for j, b in enumerate(corr["tickers"]) if i < j} if corr else {}
     return {"assets": [{k: v for k, v in r.items() if v is not None} for r in rows], "correlation_of_weekly_returns": pairs, "no_data": d["failed"] or None}
@@ -565,7 +569,7 @@ TOOLS = {
                   "question": {"type": "string", "description": "or a short plain question: 'cheap European banks'"}})),
     "get_opportunities": (get_opportunities, "Top ranked stocks; fits_your_portfolio (measured correlation with the holdings: use for diversification); quality on sale.",
                           S({"markets": {"type": "array", "items": {"type": "string", "enum": REGIONS}}})),
-    "compare": (compare, "Up to 5 assets side by side: return, volatility, drawdown, Sharpe, P/E, correlation of each pair.",
+    "compare": (compare, "Up to 5 assets side by side over one period, in the base currency at each day's rate: return, yearly rate (from a year), volatility, drawdown, Sharpe, P/E, fund cost, overall score and stance, and the correlation of each pair.",
                 S({"tickers": {"type": "array", "items": {"type": "string"}}, "period": {"type": "string", "enum": ["6mo", "1y", "2y", "5y"]}}, ["tickers"])),
     "pretrade": (pretrade, "What buying an amount (base currency) of one asset would do to the portfolio: weight, sectors and currencies before/after, beta, warnings.",
                  S({"ticker": {"type": "string"}, "amount": {"type": "number"}}, ["ticker", "amount"])),

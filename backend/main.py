@@ -569,10 +569,23 @@ def dcf(ticker: str, growth: float | None = None, years: int = 5, discount: floa
     return ok(res)
 
 
+@app.get("/api/compare/start")
+def compare_start():
+    """What Compare opens with: today's most traded large companies on Yahoo (up to START_POPULAR), or your
+    benchmark when Yahoo doesn't answer. Your own holdings are one click away (My holdings)."""
+    popular = data.most_traded(START_POPULAR)
+    bench = db.get_settings().get("benchmark") or "SPY"
+    return ok({"tickers": popular or [bench], "popular": popular, "benchmark": bench})
+
+
+START_POPULAR = 5
+
+
 @app.get("/api/compare")
-def compare(tickers: str, period: str = "1y"):
+def compare(tickers: str, period: str = "1y", currency: str = "base"):
+    """Up to 8 assets side by side; `currency` is "base" (your base currency at each day's rate) or "own"."""
     ts = [T(x) for x in tickers.split(",") if x.strip()][:8]
-    return ok(insights.compare(ts, period, db.get_settings().get("risk_free_rate", 0.04)))
+    return ok(insights.compare(ts, period, db.get_settings(), "own" if currency == "own" else "base"))
 
 
 # ---------------------------------------------------------------- screener

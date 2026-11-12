@@ -225,6 +225,11 @@ const SLOW = 150000;
 
   // ---- Compare
   await nav("compare");
+  // It opens with today's most traded large companies, compared at once
+  await p.waitForFunction(() => document.querySelectorAll("#cmpTable tbody tr").length > 0 && !document.querySelector("#btnCompare").disabled, null, { timeout: SLOW });
+  const start = await p.evaluate(() => ({ list: document.querySelector("#cmpTickers").value, note: document.querySelector("#cmpStartNote").textContent }));
+  expect("compare: opens with today's most traded, compared", start.list === "NVDA,MSFT,AMZN,AAPL,META" && /most traded large companies on Yahoo/.test(start.note)
+    && (await p.locator("#cmpTable tbody tr").count()) === start.list.split(",").length, JSON.stringify(start));
   await p.fill("#cmpTickers", "AAPL,SAP.DE,QNBK.QA,BTC-USD"); await p.click("#btnCompare");
   await p.waitForFunction(() => !document.querySelector("#btnCompare").disabled, null, { timeout: SLOW }); await p.waitForTimeout(500);
   expect("compare: table and correlation", (await p.locator("#cmpTable tbody tr").count()) === 4 && (await p.locator("#cmpCorr table tr").count()) === 5);
@@ -234,6 +239,14 @@ const SLOW = 150000;
     return { stacked: b.top >= a.bottom - 1, fullWidth: Math.abs(a.width - b.width) < 1, scroll: t.scrollWidth - t.clientWidth };
   });
   expect("compare: metrics and correlation stack, full width, no sideways scroll", cmpLayout.stacked && cmpLayout.fullWidth && cmpLayout.scroll <= 0, JSON.stringify(cmpLayout));
+  const cmpText = await p.evaluate(() => ({ head: document.querySelector("#cmpTable thead").textContent, note: document.querySelector("#cmpNote").textContent,
+    opt: document.querySelector("#cmpBaseOpt").textContent, row: document.querySelector("#cmpTable tbody").textContent }));
+  expect("compare: in your currency, over the period, with fund cost and scores", /Fund cost/.test(cmpText.head) && /Score/.test(cmpText.head) && /Qual/.test(cmpText.head)
+    && /Over 1 year\. In [A-Z]{3}, at each day's exchange rate/.test(cmpText.note) && /^In [A-Z]{3}$/.test(cmpText.opt) && !/undefined|NaN/.test(cmpText.row), JSON.stringify(cmpText).slice(0, 240));
+  await p.selectOption("#cmpCcy", "own"); await p.click("#btnCompare");
+  await p.waitForFunction(() => /own trading currency/.test(document.querySelector("#cmpNote").textContent), null, { timeout: SLOW });
+  expect("compare: each in its own currency when asked", true);
+  await p.selectOption("#cmpCcy", "base");
   await shot("compare");
 
   // ---- Screener
@@ -407,6 +420,12 @@ const SLOW = 150000;
   await p.click("#ordPlan .ord-discard");
   expect("orders: Discard drops the suggestion, keeping the amount", !(await p.evaluate(() => document.querySelector("#ordPlan").innerHTML.trim())) && (await p.inputValue("#ordMoney")) === "3000"
     && !(await p.evaluate(async () => (await fetch("/api/orders")).json())).open.length);
+
+  // Compare: "My holdings" fills in what's held, largest first
+  await nav("compare"); await p.click("#cmpMine");
+  await p.waitForFunction(() => !document.querySelector("#btnCompare").disabled && document.querySelectorAll("#cmpTable tbody tr").length > 0 && !/AAPL,SAP\.DE/.test(document.querySelector("#cmpTickers").value), null, { timeout: SLOW });
+  const held = await p.evaluate(async () => (await (await fetch("/api/portfolio")).json()).positions.sort((a, b) => b.value - a.value).map((r) => r.ticker).slice(0, 8).join(","));
+  expect("compare: My holdings fills in what you hold", (await p.inputValue("#cmpTickers")) === held && (await p.locator("#cmpTable tbody tr").count()) === held.split(",").length, held);
 
   // ---- Backtest
   await nav("backtest");

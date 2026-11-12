@@ -1561,7 +1561,7 @@ def test_compare_handles_different_calendars_and_histories():
     weekdays = daily[daily.index.day_of_week < 5]  # the same asset, on a stock market's calendar
     short = daily.iloc[-60:]
     with _FakeMarket({"CRYPTO": daily, "STOCK": weekdays, "NEW": short}):
-        d = insights.compare(["CRYPTO", "STOCK", "NEW", "GONE"], "1y")
+        d = insights.compare(["CRYPTO", "STOCK", "NEW", "GONE"], "1y", {})
     assert d["failed"] == ["GONE"] and d["short"] == ["NEW"]
     # The same asset correlates fully, whatever days each market trades
     m = dict(zip(d["correlation"]["tickers"], d["correlation"]["matrix"]))
@@ -1573,6 +1573,72 @@ def test_compare_handles_different_calendars_and_histories():
     first_new = next(v for v in d["series"]["NEW"] if v is not None and v == v)
     assert first_new == 100.0
     assert d["series"]["NEW"][0] != d["series"]["NEW"][0] or d["series"]["NEW"][0] is None
+
+
+def test_compare_in_your_currency_over_the_period_shown():
+    """Compare converts to the base currency at each day's rate (a fund flat in euros while the euro rises 10% earned
+    a dollar holder 10%), says when it can't, works its figures out over the period chosen, and adds fund costs and
+    scores."""
+    import datetime as dt
+    import pandas as pd
+    from backend import data, indicators as ind, insights
+    end = pd.Timestamp(dt.date.today())
+    idx = pd.bdate_range(end=end, periods=300)
+    flat = pd.Series(100.0, index=idx)
+    rising = pd.Series([100 * 1.001 ** i for i in range(300)], index=idx)
+    eur_usd = pd.Series([1.0 + 0.1 * i / 299 for i in range(300)], index=idx)  # the euro up 10% over the span
+    real_fx = data.fx_series
+    data.fx_series = lambda cur, base, index: eur_usd.reindex(index).ffill() if (cur, base) == ("EUR", "USD") else (None if cur == "XXX" else pd.Series(1.0, index=index))
+    try:
+        with _FakeMarket({"FUND.DE": flat, "STOCK": rising, "ODD": rising},
+                         {"FUND.DE": {"currency": "EUR", "assetClass": "ETFs", "netExpenseRatio": 0.0019}, "ODD": {"currency": "XXX"}}):
+            usd = insights.compare(["FUND.DE", "STOCK", "ODD"], "1y", {"base_currency": "USD"})
+            own = insights.compare(["FUND.DE", "STOCK"], "1y", {"base_currency": "USD"}, "own")
+            short = insights.compare(["STOCK"], "6mo", {"base_currency": "USD"})
+    finally:
+        data.fx_series = real_fx
+    m = {r["ticker"]: r for r in usd["meta"]}
+    span = usd["dates"]
+    one_year = eur_usd[eur_usd.index >= idx[-1] - pd.DateOffset(years=1)]
+    assert abs(m["FUND.DE"]["periodReturn"] - (one_year.iloc[-1] / one_year.iloc[0] - 1)) < 1e-9 and m["FUND.DE"]["currency"] == "USD"
+    assert {r["ticker"]: r for r in own["meta"]}["FUND.DE"]["periodReturn"] == 0 and own["mode"] == "own"
+    assert usd["own"] == ["ODD"] and m["ODD"]["currency"] == "XXX"  # no rate history: in its own currency, and said so
+    assert span[0] >= (idx[-1] - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+    # Figures over the period shown: a yearly rate only from a year; a fund's cost; a stock has none
+    assert m["STOCK"]["perYear"] is not None and short["meta"][0]["perYear"] is None and short["meta"][0]["periodReturn"] > 0
+    s6 = data.slice_period(rising.to_frame("Close"), "6mo")["Close"]
+    assert abs(short["meta"][0]["maxDD"] - ind.max_drawdown(s6)) < 1e-12
+    assert m["FUND.DE"]["costRatio"] == 0.0019 and m["STOCK"]["costRatio"] is None
+
+
+def test_compare_starts_with_todays_popular_companies():
+    """Compare opens with today's most traded large companies (your holdings are the My holdings button), or the
+    benchmark when Yahoo's list isn't there; Yahoo's list keeps only companies worth $50bn or more."""
+    from backend import data, db
+    _reset()
+    with TestClient(app) as c:
+        s = c.get("/api/compare/start").json()
+        assert s["tickers"] == s["popular"] == data.DEMO_POPULAR[:5] and s["benchmark"] == "SPY"
+        real = data.most_traded
+        data.most_traded = lambda n=3: []
+        try:
+            assert c.get("/api/compare/start").json()["tickers"] == ["SPY"]
+        finally:
+            data.most_traded = real
+    # Yahoo's list: large companies only, kept an hour
+    real_demo, real_yf = data.DEMO, data._yf
+
+    class FakeYf:
+        @staticmethod
+        def screen(name, count):
+            return {"quotes": [{"symbol": "TINY", "quoteType": "EQUITY", "marketCap": 2e9}, {"symbol": "BIG", "quoteType": "EQUITY", "marketCap": 3e12},
+                               {"symbol": "FUND", "quoteType": "ETF", "marketCap": 5e11}, {"symbol": "MID", "quoteType": "EQUITY", "marketCap": 6e10}]}
+    data.DEMO, data._yf = False, lambda: FakeYf
+    try:
+        db.cache_set("popular:v1", None, ts=1)
+        assert data.most_traded(3) == ["BIG", "MID"]
+    finally:
+        data.DEMO, data._yf = real_demo, real_yf
 
 
 def test_plain_language_parser_reads_what_was_written():

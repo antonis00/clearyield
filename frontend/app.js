@@ -139,7 +139,7 @@ function show(view, push = true) {
     const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView }[view] || (() => {}))();
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare }[view] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = () => show(a.dataset.view));
 
@@ -855,22 +855,64 @@ $("#btnPretrade").onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- compare */
+// The first time Compare opens: today's most traded large companies, compared at once (My holdings shows yours). Anything you type stays: the list is only filled in while you haven't changed it.
+let cmpStarted = false, cmpTouched = false;
+$("#cmpTickers").addEventListener("input", () => { cmpTouched = true; $("#cmpStartNote").classList.add("hidden"); });
+async function startCompare() {
+  if (cmpStarted || cmpTouched) return;
+  cmpStarted = true;
+  let s;
+  try { s = await api("/api/compare/start"); } catch { return; }
+  if (cmpTouched || !s.tickers.length) return;
+  $("#cmpTickers").value = s.tickers.join(",");
+  const note = $("#cmpStartNote");
+  note.textContent = s.popular.length ? "Today's most traded large companies on Yahoo. My holdings shows yours; or type any symbols."
+    : `Yahoo's most traded list isn't available, so this starts with your benchmark (${s.benchmark}). My holdings shows yours.`;
+  note.classList.remove("hidden");
+  $("#btnCompare").click();
+}
+// Your holdings, largest first, as the list to compare
+$("#cmpMine").onclick = async () => {
+  try {
+    const p = await api("/api/portfolio");
+    const ts = [...p.positions].sort((a, b) => b.value - a.value).slice(0, 8).map((r) => r.ticker);
+    if (!ts.length) { toast("You hold nothing yet: add a purchase on the Portfolio page."); return; }
+    $("#cmpTickers").value = ts.join(","); cmpTouched = true; $("#cmpStartNote").classList.add("hidden");
+    $("#btnCompare").click();
+  } catch (e) { toast(e.message); }
+};
+// The currency choice names your base currency, which can change in Settings
+const cmpBaseLabel = () => { $("#cmpBaseOpt").textContent = `In ${state.meta?.settings?.base_currency || "your base currency"}`; };
+const PERIOD_WORDS = { "3mo": "3 months", "6mo": "6 months", "1y": "1 year", "2y": "2 years", "5y": "5 years" };
 $("#btnCompare").onclick = async () => {
   const b = $("#btnCompare"); b.disabled = true;
   try {
-    const d = await api(`/api/compare?tickers=${encodeURIComponent($("#cmpTickers").value)}&period=${$("#cmpPeriod").value}`);
+    const per = $("#cmpPeriod").value, words = PERIOD_WORDS[per] || per;
+    const d = await api(`/api/compare?tickers=${encodeURIComponent($("#cmpTickers").value)}&period=${per}&currency=${$("#cmpCcy").value}`);
     const ts = Object.keys(d.series);
     if (!ts.length) { toast("No data for those tickers"); return; }
     mkChart("cmpChart", {
       type: "line", data: { labels: d.dates, datasets: ts.map((t, i) => ({ label: t, data: d.series[t], borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.6, pointRadius: 0, tension: 0.1, spanGaps: true })) },
       options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 10 } } } },
     });
+    // Which currency the returns are in, said once above the chart and the table
+    const inBase = d.mode === "base", ccyNote = inBase ? `In ${d.base}, at each day's exchange rate${d.own.length ? `; ${d.own.join(", ")} in ${d.own.length > 1 ? "their" : "its"} own currency (no rate history)` : ""}.`
+      : "Each in its own trading currency: currency moves are left out.";
+    $("#cmpChartNote").textContent = ccyNote;
+    $("#cmpNote").textContent = `Over ${words}. ${ccyNote}`;
+    const F = ["value", "quality", "growth", "momentum", "risk"];
     table($("#cmpTable"), [
-      { k: "ticker", label: "Ticker", fmt: symCell }, { k: "periodReturn", label: "Period", num: 1, fmt: (v) => cpct(v) },
-      { k: "ret5yCagr", label: "5Y CAGR", num: 1, fmt: (v) => cpct(v) }, { k: "vol1y", label: "Vol", num: 1, fmt: (v) => pct(v, 1, false) },
-      { k: "maxDD1y", label: "Max DD 1Y", num: 1, fmt: (v) => cpct(v) }, { k: "sharpe1y", label: "Sharpe", num: 1, fmt: (v) => num(v) },
+      { k: "ticker", label: "Ticker", fmt: symCell },
+      { k: "periodReturn", label: `Return ${infoIcon(`Over ${words}, dividends included${inBase ? `, in ${d.base}` : ""}.`)}`, num: 1, fmt: (v) => cpct(v) },
+      { k: "perYear", label: `Per year ${infoIcon("The yearly rate over the period (CAGR). Shown from a year: annualising a shorter period exaggerates it.")}`, num: 1, fmt: (v) => cpct(v) },
+      { k: "vol", label: `Volatility ${infoIcon(`How much it swung, as a yearly figure, over ${words}.`)}`, num: 1, fmt: (v) => pct(v, 1, false) },
+      { k: "maxDD", label: `Max drop ${infoIcon(`The deepest fall from a high over ${words}.`)}`, num: 1, fmt: (v) => cpct(v) },
+      { k: "sharpe", label: `Sharpe ${infoIcon(`Return above cash for each unit of swing, over ${words}. Higher is better; above 1 is good.`)}`, num: 1, fmt: (v) => num(v) },
+      { k: "costRatio", label: `Fund cost ${infoIcon("A fund's yearly cost, already taken out of its price. Set your own figure in the Portfolio's Fund costs card.")}`, num: 1, fmt: (v, r) => r.assetClass !== "ETFs" ? '<span class="muted">—</span>' : isNum(v) ? `${pct(v, 2, false)}${r.costFrom === "you" ? ' <span class="muted sm">yours</span>' : ""}` : '<span class="muted sm">no figure</span>' },
       { k: "pe", label: "P/E", num: 1, fmt: (v) => num(v, 1) }, { k: "divYield", label: "Yield", num: 1, fmt: (v) => pct(v, 2, false) },
-    ], d.meta, { stock: (r) => r.ticker });
+      ...F.map((f) => ({ k: `f_${f}`, label: `${{ value: "Val", quality: "Qual", growth: "Grow", momentum: "Mom", risk: "Risk" }[f]} ${infoIcon(FACTOR_INFO[f] || f)}`, num: 1, fmt: (v) => isNum(v) ? `<span style="color:${scoreColor(v)}">${num(v, 0)}</span>` : '<span class="muted">—</span>' })),
+      { k: "composite", label: "Score", num: 1, fmt: (v, r) => isNum(v) ? `<b style="color:${scoreColor(v)}">${num(v, 0)}</b><span class="sub">${esc(r.stance || "")}</span>` : '<span class="muted">—</span>' },
+    ], d.meta.map((m) => ({ ...m, ...Object.fromEntries(F.map((f) => [`f_${f}`, m.factors?.[f]])) })), { stock: (r) => r.ticker });
     const cm = d.correlation;
     const col = (v) => v >= 0 ? `rgba(239,91,91,${v * 0.7})` : `rgba(79,179,191,${-v * 0.7})`;
     $("#cmpCorr").innerHTML = `<table><tr><th></th>${cm.tickers.map((t) => `<th class="num">${esc(t)}</th>`).join("")}</tr>${cm.matrix.map((row, i) => `<tr><th>${symLogo(cm.tickers[i])}</th>${row.map((v) => `<td class="num" style="background:${col(v)}">${num(v, 2)}</td>`).join("")}</tr>`).join("")}</table>
@@ -2152,7 +2194,7 @@ $("#btnSaveSettings").onclick = async () => {
   const regionsBefore = (state.meta.settings.regions || []).join();
   state.meta.settings = await api("/api/settings", { method: "POST", body });
   if (state.meta.settings.regions.join() !== regionsBefore) {  // other regions: other markets and countries to offer
-    state.meta = await api("/api/meta"); renderMarketChoices(); state.opp = null;
+    state.meta = await api("/api/meta"); renderMarketChoices(); state.opp = null; cmpBaseLabel();
   }
   $("#settingsMsg").textContent = "Saved"; renderModeBadge(); loadSettings(); toast("Settings saved");
 };
@@ -2245,6 +2287,7 @@ function renderMarketChoices() {
 /* ---------------------------------------------------------------- boot */
 (async function boot() {
   state.meta = await api("/api/meta");
+  cmpBaseLabel();
   const m = state.meta;
   renderModeBadge();
   checkFiredAlerts(); setInterval(checkFiredAlerts, 60000);
