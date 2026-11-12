@@ -891,9 +891,42 @@ $("#btnCompare").onclick = async () => {
     const d = await api(`/api/compare?tickers=${encodeURIComponent($("#cmpTickers").value)}&period=${per}&currency=${$("#cmpCcy").value}`);
     const ts = Object.keys(d.series);
     if (!ts.length) { toast("No data for those tickers"); return; }
+    // Each line starts at 100, so its value less 100 is the change in percent since its own first day: written at the
+    // end of each line for the whole period (spaced apart where lines end close together), and in the hover so far
+    const chg = (v) => `${v >= 100 ? "+" : ""}${(v - 100).toFixed(1)}%`;
+    const info = Object.fromEntries(d.meta.map((m) => [m.ticker, m]));
+    // At the end of each line: the latest price in the chart's currency, and the gain over the period in brackets
+    const endText = (t, v) => `${info[t] && isNum(info[t].last) ? `${money(info[t].last, info[t].currency)} ` : ""}(${chg(v)})`;
+    const lastOf = (t) => d.series[t].findLast((v) => v != null && v === v);
+    const labelFont = `600 11px ${getComputedStyle(document.body).fontFamily}`;
+    const measure = document.createElement("canvas").getContext("2d"); measure.font = labelFont;
+    const labelRoom = Math.ceil(Math.max(0, ...ts.filter((t) => lastOf(t) != null).map((t) => measure.measureText(endText(t, lastOf(t))).width))) + 12;
+    const endLabels = {
+      id: "endLabels",
+      afterDatasetsDraw(chart) {
+        const { ctx, chartArea } = chart, gap = 13;
+        const ends = chart.data.datasets.map((ds, i) => {
+          const meta = chart.getDatasetMeta(i);
+          if (meta.hidden) return null;
+          const k = ds.data.findLastIndex((v) => v != null && v === v);
+          return k < 0 ? null : { y: meta.data[k].y, t: ds.ticker, v: ds.data[k], color: ds.borderColor };
+        }).filter(Boolean).sort((a, b) => a.y - b.y);
+        ends.forEach((e, i) => { if (i && e.y - ends[i - 1].y < gap) e.y = ends[i - 1].y + gap; });  // no label on top of another
+        const over = ends.length ? ends.at(-1).y - chartArea.bottom : 0;
+        if (over > 0) ends.forEach((e) => { e.y -= over; });
+        ctx.save(); ctx.font = labelFont; ctx.textBaseline = "middle";
+        ends.forEach((e) => { ctx.fillStyle = e.color; ctx.fillText(endText(e.t, e.v), chartArea.right + 6, e.y); });
+        ctx.restore();
+      },
+    };
+    // The legend names each one: ticker and company, a long name shortened
+    const legendName = (t) => { const n = info[t]?.name || ""; return n && n !== t ? `${t} · ${n.length > 26 ? `${n.slice(0, 25).trim()}…` : n}` : t; };
     mkChart("cmpChart", {
-      type: "line", data: { labels: d.dates, datasets: ts.map((t, i) => ({ label: t, data: d.series[t], borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.6, pointRadius: 0, tension: 0.1, spanGaps: true })) },
-      options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 10 } } } },
+      type: "line", data: { labels: d.dates, datasets: ts.map((t, i) => ({ label: legendName(t), ticker: t, data: d.series[t], borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.6, pointRadius: 0, tension: 0.1, spanGaps: true })) },
+      options: { interaction: { mode: "index", intersect: false }, layout: { padding: { right: labelRoom } },
+        scales: { x: { ticks: { maxTicksLimit: 10 } } },
+        plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.ticker}: ${c.parsed.y.toFixed(1)} (${chg(c.parsed.y)})` } } } },
+      plugins: [endLabels],
     });
     // Which currency the returns are in, said once above the chart and the table
     const inBase = d.mode === "base", ccyNote = inBase ? `In ${d.base}, at each day's exchange rate${d.own.length ? `; ${d.own.join(", ")} in ${d.own.length > 1 ? "their" : "its"} own currency (no rate history)` : ""}.`
