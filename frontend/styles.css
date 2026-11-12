@@ -332,13 +332,13 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .opp-dash { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; align-items: start; }
 .opp-dash-chart { position: relative; height: 300px; }
 .opp-dash-list { display: flex; flex-direction: column; gap: 2px; }
-.opp-dash-list .opp-row { padding: 5px 0; grid-template-columns: 120px minmax(0, 1fr) auto; }
+.opp-dash-list .opp-row { padding: 5px 0; grid-template-columns: 158px minmax(0, 1fr) auto; }  /* room for a long ticker (EMIRATESNBD.AE) beside its logo */
 .opp-dash.loading .opp-dash-chart { display: none; } /* while scoring, the message has the whole card, centred */
 .opp-dash.loading .opp-dash-list { grid-column: 1 / -1; min-height: 300px; align-items: center; justify-content: center; }
 .opp-dash.loading .dl-loader { width: 100%; }  /* the whole card, like the map it stands in for */
 .opp-row { display: grid; grid-template-columns: 108px minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--rowline); }
 .opp-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.opp-row > b:first-child { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.opp-row > b:first-child { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; min-width: 0; overflow: hidden; }  /* a ticker longer still is cut with …, never over the next column */
 @media (max-width: 900px) { .opp-dash { grid-template-columns: 1fr; } }
 
 /* Why some metrics aren't scored, under the first of them */
