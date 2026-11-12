@@ -1295,8 +1295,8 @@ async function loadDashOpp() {
   try { d = await getOpportunities(false); } catch (e) { wrap.classList.add("loading"); list.innerHTML = `<div class="muted sm">${esc(e.message)}</div>`; return; }  // an error, centred too
   wrap.classList.remove("loading");  // the map comes back beside the list
   oppMapChart("dashOppChart", d.map, d.rules.zone, true);
-  const zone = d.map.filter((r) => r.f_value >= d.rules.zone && r.f_momentum >= d.rules.zone).sort((a, b) => b.composite - a.composite).slice(0, 5);
-  list.innerHTML = `<div class="muted sm">Cheap and rising, best first</div>` + (zone.length ? zone.map((r) => `<div class="opp-row"><b>${logoOf(r.ticker, r.name, "sm")} ${esc(r.ticker)}</b><span class="muted">${esc((r.reasons || [])[0] || "")}</span><b style="color:${scoreColor(r.composite)}">${num(r.composite, 0)}</b></div>`).join("")
+  const zone = d.map.filter((r) => r.f_value >= d.rules.zone && r.f_momentum >= d.rules.zone).sort((a, b) => b.composite - a.composite).slice(0, 7);
+  list.innerHTML = `<div class="muted sm">Cheap and rising, best first</div>` + (zone.length ? zone.map((r) => `<div class="opp-row"><b>${logoOf(r.ticker, r.name)} ${esc(r.ticker)}</b><span class="muted">${esc((r.reasons || [])[0] || "")}</span><b style="color:${scoreColor(r.composite)}">${num(r.composite, 0)}</b></div>`).join("")
     : `<div class="muted sm">No stock is in the corner today.</div>`);
 }
 
