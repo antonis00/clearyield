@@ -202,16 +202,17 @@
   <section id="view-compare" class="view hidden">
     <div class="card">
       <div class="form-row">
-        <label class="grow">Tickers (comma-separated, up to 8)<input id="cmpTickers" value="SPY,QQQ,QNBK.QA,SAP.DE,BTC-USD"></label>
-        <label>Period<select id="cmpPeriod"><option>3mo</option><option>6mo</option><option selected>1y</option><option>2y</option><option>5y</option></select></label>
+        <label class="grow">Tickers (comma-separated, up to 8)<input id="cmpTickers" placeholder="e.g. VWCE.DE,IWDA.AS,SPY" autocomplete="off"></label>
+        <button type="button" class="btn ghost" id="cmpMine" title="Fill in what you hold (up to 8, largest first)">My holdings</button>
+        <label>Period<select id="cmpPeriod"><option value="3mo">3 months</option><option value="6mo">6 months</option><option value="1y" selected>1 year</option><option value="2y">2 years</option><option value="5y">5 years</option></select></label>
+        <label>Currency<select id="cmpCcy"><option value="base" id="cmpBaseOpt">Your base currency</option><option value="own">Each in its own</option></select></label>
         <button class="btn" id="btnCompare">Compare</button>
       </div>
+      <p id="cmpStartNote" class="muted sm hidden"></p>
     </div>
-    <div class="card"><div class="card-h"><h3>Growth of 100</h3></div><canvas id="cmpChart" height="110"></canvas></div>
-    <div class="grid2 cmp-grid">
-      <div class="card"><div class="card-h"><h3>Metrics</h3></div><div id="cmpTable" class="tablewrap"></div></div>
-      <div class="card"><div class="card-h"><h3>Correlation of weekly returns</h3></div><div id="cmpCorr" class="tablewrap"></div></div>
-    </div>
+    <div class="card"><div class="card-h"><h3>Growth of 100</h3><span id="cmpChartNote" class="muted sm"></span></div><canvas id="cmpChart" height="110"></canvas></div>
+    <div class="card"><div class="card-h"><h3>Side by side</h3><span id="cmpNote" class="muted sm"></span></div><div id="cmpTable" class="tablewrap"></div></div>
+    <div class="card"><div class="card-h"><h3>Correlation of weekly returns</h3></div><div id="cmpCorr" class="tablewrap"></div></div>
   </section>
 
   <!-- ASK -->

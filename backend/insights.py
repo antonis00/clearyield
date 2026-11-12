@@ -4,6 +4,7 @@ from collections import defaultdict
 import json
 import itertools
 import logging
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -551,8 +552,27 @@ def screen(body, settings):
     return {"rows": out, "failed": failed, "filters": {**f, "markets": markets}, "scanned": len(rows), "notes": notes}
 
 
-def compare(tickers, period, rf=0.04):
-    closes, meta, failed = {}, [], []
+def period_stats(close, rf=0.04):
+    """The figures over exactly the period shown: return, the yearly rate (only from a year, since annualising less
+    exaggerates it), volatility, the deepest fall from a high, and Sharpe."""
+    r = close.pct_change().dropna()
+    years = (close.index[-1] - close.index[0]).days / 365.25 if len(close) > 1 else 0
+    return {
+        "periodReturn": float(close.iloc[-1] / close.iloc[0] - 1) if len(close) > 1 else None,
+        "perYear": ind.cagr(close) if years >= 0.99 else None,
+        "vol": float(r.std() * math.sqrt(ind.bars_per_year(close))) if len(r) > 20 else None,
+        "maxDD": ind.max_drawdown(close),
+        "sharpe": ind.sharpe(close, rf),
+    }
+
+
+def compare(tickers, period, settings, mode="base"):
+    """Side by side over one period: each asset's growth of 100, its figures over that period, fund cost, scores and
+    weekly correlations. In the base currency at each day's rate by default (what you'd actually have got: SPY in
+    dollars overstated a euro holder's 2025 return by the dollar's fall), or each in its own currency (mode="own")."""
+    from . import portfolio  # here, not at the top: portfolio is imported by modules this one serves
+    base, rf = settings.get("base_currency", "USD"), settings.get("risk_free_rate", 0.04)
+    closes, meta, failed, own = {}, [], [], []
     for t in tickers:
         try:
             h = data.history(t, period)
@@ -560,12 +580,28 @@ def compare(tickers, period, rf=0.04):
         except data.DataError:
             failed.append(t)
             continue
-        closes[t] = h["Close"]
-        st = ind.stats(data.history(t, "5y")["Close"], rf)
-        meta.append({"ticker": t, "name": inf.get("name"), "currency": inf.get("currency"), "pe": inf.get("trailingPE"),
-                     "divYield": inf.get("dividendYield"), "periodReturn": float(h["Close"].iloc[-1] / h["Close"].iloc[0] - 1), **st})
+        close, cur = h["Close"], inf.get("currency")
+        if mode == "base" and cur:
+            try:
+                fx = data.fx_series(cur, base, close.index)
+            except data.DataError:
+                fx = None
+            if fx is None:
+                own.append(t)  # no rate history: shown in its own currency, and said so
+            else:
+                close, cur = (close * fx).dropna(), base
+        closes[t] = close
+        row = {"ticker": t, "name": inf.get("name"), "currency": cur, "assetClass": inf.get("assetClass"),
+               "pe": inf.get("trailingPE"), "divYield": inf.get("dividendYield"), **period_stats(close, rf),
+               **portfolio._cost_of(t, inf, settings)}
+        try:
+            sc = evaluate_ticker(t, settings)[2]
+            row.update({"composite": sc["composite"], "stance": sc["stance"], "factors": sc["factors"]})
+        except Exception as e:  # scores are extra: a failure leaves them blank
+            log.info("compare: no scores for %s: %s", t, e)
+        meta.append(row)
     if not closes:
-        return {"series": {}, "meta": [], "correlation": None, "failed": failed, "short": []}
+        return {"series": {}, "meta": [], "correlation": None, "failed": failed, "short": [], "mode": mode, "base": base, "own": own}
     # Each line starts at 100 on its own first day, so a new listing doesn't cut the others short
     df = pd.concat(closes, axis=1).sort_index().ffill()
     norm = df.apply(lambda s: s / s.dropna().iloc[0] * 100).round(3)
@@ -579,7 +615,7 @@ def compare(tickers, period, rf=0.04):
     names = list(closes)
     return {
         "dates": [d.strftime("%Y-%m-%d") for d in norm.index],
-        "series": {t: norm[t].tolist() for t in norm.columns}, "meta": meta, "failed": failed,
+        "series": {t: norm[t].tolist() for t in norm.columns}, "meta": meta, "failed": failed, "mode": mode, "base": base, "own": own,
         "short": [t for t, c in closes.items() if (c.index[0] - earliest).days > 30],
         "correlation": {"tickers": names, "matrix": [[pair(a, b) for b in names] for a in names]},
     }
