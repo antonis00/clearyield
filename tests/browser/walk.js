@@ -339,6 +339,9 @@ const SLOW = 150000;
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
   expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs a date on every purchase and sale/.test(await txt("#pfKpis")), await txt("#pfKpis"));
   expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
+  // Logos: each position has one, or in demo mode (no internet) its first letter on the tile
+  const logoTiles = await p.evaluate(() => [...document.querySelectorAll("#pfTable tbody tr")].map((tr) => tr.querySelector(".logo")?.dataset.l || ""));
+  expect("portfolio: every position has a logo tile", logoTiles.length >= 4 && logoTiles.every((l) => /^[A-Z0-9]$/.test(l)), logoTiles.join(" "));
   // Tax year: the 2025 sale and dividend, in the base currency, with the CSV for that year
   await p.waitForFunction(() => /2025/.test(document.querySelector("#taxYear")?.value || "") && document.querySelector("#taxSales tbody tr"), null, { timeout: SLOW });
   const taxCard = await p.evaluate(() => ({ text: document.querySelector("#taxCard").innerText.replace(/\s+/g, " "), csv: document.querySelector("#taxCsv").getAttribute("href"),

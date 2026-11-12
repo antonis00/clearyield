@@ -96,14 +96,16 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, mailer, orders, portfolio, scorecheck, simulate, startup, tax  # noqa: E402
+from . import agent, ai, backtest, data, db, insights, ledger, logos, mailer, orders, portfolio, scorecheck, simulate, startup, tax  # noqa: E402
 from . import indicators as ind  # noqa: E402
-from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search  # noqa: E402
+from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search, tickers_for  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("clearyield")
-# The page checks /api/progress every second or two while data downloads; those checks stay out of the request log
-logging.getLogger("uvicorn.access").addFilter(lambda r: "/api/progress" not in r.getMessage() and "/api/ask/job/" not in r.getMessage())
+# The page checks /api/progress every second or two while data downloads, and a list asks for a logo per row; those
+# requests stay out of the request log
+_QUIET = ("/api/progress", "/api/ask/job/", "/api/logo/")
+logging.getLogger("uvicorn.access").addFilter(lambda r: not any(q in r.getMessage() for q in _QUIET))
 ALERT_INTERVAL = int(os.getenv("ALERT_CHECK_MINUTES", "15")) * 60
 
 
@@ -186,6 +188,14 @@ async def _warm_loop():
             log.info("background scoring: %d stocks with a sector in %.0f s", len(table), time.time() - started)
         except Exception as e:  # never stop the app over a warm-up
             log.warning("background scoring failed: %s", e)
+        try:  # then the logos not yet saved: the whole list, what you hold and what you watch
+            started = time.time()
+            mine = list(portfolio.positions()) + [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
+            n = await asyncio.to_thread(logos.warm, mine + tickers_for(None) + [t for t in MACRO])
+            if n:
+                log.info("background logos: %d looked up in %.0f s", n, time.time() - started)
+        except Exception as e:
+            log.warning("background logos failed: %s", e)
         await asyncio.sleep(WARM_EVERY)
 
 
@@ -807,6 +817,21 @@ def orders_cancel(oid: int):
 def orders_csv():
     return Response(orders.to_csv(orders.open_orders()), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="clearyield-orders-{dt.date.today()}.csv"'})
+
+
+# ---------------------------------------------------------------- logos
+@app.get("/api/logo/{ticker}")
+def logo(ticker: str):
+    """The company's logo, saved on this computer (logos.py). 204 when there's none: the page shows the first letter."""
+    try:
+        found = logos.get(ticker)
+    except Exception as e:  # a logo is never worth an error page
+        log.info("logo for %s failed: %s", ticker, e)
+        found = None
+    if not found:
+        return Response(status_code=204, headers={"Cache-Control": "max-age=3600"})
+    blob, media = found
+    return Response(blob, media_type=media, headers={"Cache-Control": "max-age=86400", "X-Content-Type-Options": "nosniff"})
 
 
 # ---------------------------------------------------------------- backtest

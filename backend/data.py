@@ -209,6 +209,7 @@ INFO_KEYS = [
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
     "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "financialCurrency",
     "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate", "netExpenseRatio",
+    "website",  # for the company's site icon (logos.py)
 ]
 
 # Quote currencies priced in a fraction of the main unit: (main currency, units per main unit)
@@ -237,7 +238,7 @@ def info(ticker):
 
 
 def _info(ticker):
-    key = f"info:v10:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v11:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached

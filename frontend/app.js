@@ -101,7 +101,15 @@ function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
 }
 // A price Yahoo couldn't refresh is marked wherever it shows, so an old number isn't read as today's
 const oldMark = (r) => r?.stale ? ` <span class="pill warn sm" title="Yahoo isn't responding, so this is the last price it gave${r.asOf ? `, from ${esc(r.asOf)}` : ""}.">old price</span>` : "";
-const symCell = (v, r) => `<span class="sym">${esc(v)}</span>${oldMark(r)}<span class="sub">${esc(r.name || "")}</span>`;
+// A company's logo, saved by the app (logos.py), over its first letter, which stays when there's no logo
+const logoOf = (t, name, cls = "") => {
+  const letter = (String(name || t || "?").replace(/^[^A-Za-z0-9]+/, "")[0] || "?").toUpperCase();
+  const img = /^[A-Za-z0-9][A-Za-z0-9.\-]*$/.test(t || "") ? `<img src="/api/logo/${encodeURIComponent(t)}" alt="" loading="lazy" decoding="async">` : "";
+  return `<span class="logo ${cls}" data-l="${esc(letter)}" aria-hidden="true">${img}</span>`;
+};
+document.addEventListener("load", (e) => { if (e.target.matches?.(".logo img")) e.target.parentNode.classList.add("has"); }, true);
+document.addEventListener("error", (e) => { if (e.target.matches?.(".logo img")) e.target.remove(); }, true);
+const symCell = (v, r) => `<span class="symwrap">${logoOf(v, r.name)}<span><span class="sym">${esc(v)}</span>${oldMark(r)}<span class="sub">${esc(r.name || "")}</span></span></span>`;
 
 function modal(html, onSubmit) {
   const m = $("#modal"); $("#modalCard").innerHTML = html; m.classList.remove("hidden");
@@ -241,7 +249,7 @@ $("#rScoreBox").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e
   const inp = $("#globalSearch"), dd = $("#searchResults");
   let hits = [], hitsFor = "", sel = 0, timer;
   const render = () => {
-    dd.innerHTML = hits.map((h, i) => `<div data-i="${i}" class="${i === sel ? "sel" : ""}">${h.screen ? `<b>${esc(h.name)}</b><span>“${esc(h.ticker)}”</span>` : `<b>${esc(h.ticker)}</b><span>${esc(h.name)}</span>`}<span class="muted sm" style="margin-left:auto">${esc(h.market)}</span></div>`).join("");
+    dd.innerHTML = hits.map((h, i) => `<div data-i="${i}" class="${i === sel ? "sel" : ""}">${h.screen ? `<b>${esc(h.name)}</b><span>“${esc(h.ticker)}”</span>` : `${logoOf(h.ticker, h.name, "sm")}<b>${esc(h.ticker)}</b><span>${esc(h.name)}</span>`}<span class="muted sm" style="margin-left:auto">${esc(h.market)}</span></div>`).join("");
     dd.classList.toggle("hidden", !hits.length);
     $$("div", dd).forEach((d) => d.onmousedown = (e) => {
       const h = hits[+d.dataset.i];
@@ -442,7 +450,7 @@ async function openStock(t, period) {
 }
 function renderHeader(s) {
   const i = s.info, st = s.stats;
-  $("#rSym").textContent = s.ticker; $("#rName").textContent = i.name || "";
+  $("#rSym").textContent = s.ticker; $("#rName").textContent = i.name || ""; $("#rLogo").innerHTML = logoOf(s.ticker, i.name, "lg");
   const when = (iso, days) => (iso ? `${iso} (${days === 0 ? "today" : `in ${days}d`})` : null);
   $("#rTags").innerHTML = [i.assetClass, i.region, i.sector, i.currency].filter(Boolean).map((x) => `<span class="pill">${esc(x)}</span>`).join("")
     + (s.events.earnings ? `<span class="pill warn">Earnings ${esc(when(s.events.earnings, s.events.earningsDays))}</span>` : "")
@@ -1287,7 +1295,7 @@ async function loadDashOpp() {
   wrap.classList.remove("loading");  // the map comes back beside the list
   oppMapChart("dashOppChart", d.map, d.rules.zone, true);
   const zone = d.map.filter((r) => r.f_value >= d.rules.zone && r.f_momentum >= d.rules.zone).sort((a, b) => b.composite - a.composite).slice(0, 5);
-  list.innerHTML = `<div class="muted sm">Cheap and rising, best first</div>` + (zone.length ? zone.map((r) => `<div class="opp-row"><b>${esc(r.ticker)}</b><span class="muted">${esc((r.reasons || [])[0] || "")}</span><b style="color:${scoreColor(r.composite)}">${num(r.composite, 0)}</b></div>`).join("")
+  list.innerHTML = `<div class="muted sm">Cheap and rising, best first</div>` + (zone.length ? zone.map((r) => `<div class="opp-row"><b>${logoOf(r.ticker, r.name, "sm")} ${esc(r.ticker)}</b><span class="muted">${esc((r.reasons || [])[0] || "")}</span><b style="color:${scoreColor(r.composite)}">${num(r.composite, 0)}</b></div>`).join("")
     : `<div class="muted sm">No stock is in the corner today.</div>`);
 }
 
@@ -1583,7 +1591,7 @@ function renderDraft() {
     <div class="tablewrap"><table class="ord-table"><thead><tr><th></th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit price</th><th class="num">About (${esc(b)})</th><th>Why</th></tr></thead><tbody>
     ${d.orders.map((o, i) => `<tr data-i="${i}"><td><input type="checkbox" class="ord-on" checked aria-label="Include this order"></td>
       <td><b class="${o.side === "buy" ? "up" : "down"}">${o.side === "buy" ? "Buy" : "Sell"}</b></td>
-      <td data-stock="${esc(o.ticker)}"><span class="sym">${esc(o.ticker)}</span>${o.stale ? ' <span class="pill warn">old price</span>' : ""}<span class="sub">${esc(o.name || "")}</span></td>
+      <td data-stock="${esc(o.ticker)}"><span class="symwrap">${logoOf(o.ticker, o.name)}<span><span class="sym">${esc(o.ticker)}</span>${o.stale ? ' <span class="pill warn">old price</span>' : ""}<span class="sub">${esc(o.name || "")}</span></span></span></td>
       <td class="num"><input type="number" class="ord-shares" min="0" step="any" value="${o.shares}" aria-label="Shares"></td>
       <td class="num"><input type="number" class="ord-limit" min="0" step="any" value="${+o.limitPrice.toFixed(4)}" aria-label="Limit price"> <span class="muted sm">${esc(o.currency)}</span></td>
       <td class="num">${money(o.value, b, 0)}${gain(o)}</td><td class="sm">${esc(o.reason)}</td></tr>`).join("")}
