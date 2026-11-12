@@ -591,7 +591,7 @@ def compare(tickers, period, settings, mode="base"):
             else:
                 close, cur = (close * fx).dropna(), base
         closes[t] = close
-        row = {"ticker": t, "name": inf.get("name"), "currency": cur, "assetClass": inf.get("assetClass"),
+        row = {"ticker": t, "name": inf.get("name"), "currency": cur, "last": float(close.iloc[-1]), "assetClass": inf.get("assetClass"),
                "pe": inf.get("trailingPE"), "divYield": inf.get("dividendYield"), **period_stats(close, rf),
                **portfolio._cost_of(t, inf, settings)}
         try:
