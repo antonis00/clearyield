@@ -10,6 +10,9 @@ const tint = (token, alpha) => C(token) + alpha; // tokens are #rrggbb, so this 
 Chart.defaults.color = C("--muted");
 Chart.defaults.borderColor = C("--line");
 Chart.defaults.font.family = "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif";
+// A line without a fill colour of its own takes its line colour, so its square in the legend and the hover is filled
+// with that colour, not white (a line that fills an area sets its own)
+Chart.defaults.datasets.line.backgroundColor = (ctx) => ctx.dataset.borderColor;
 
 /* ---------------------------------------------------------------- helpers */
 async function api(path, opts = {}) {
@@ -920,7 +923,7 @@ $("#btnCompare").onclick = async () => {
       },
     };
     // The legend names each one: ticker and company, a long name shortened
-    const legendName = (t) => { const n = info[t]?.name || ""; return n && n !== t ? `${t} · ${n.length > 26 ? `${n.slice(0, 25).trim()}…` : n}` : t; };
+    const legendName = (t) => { const n = info[t]?.name || ""; return n && n !== t ? `${t} · ${n}` : t; };  // the full name: the legend wraps onto more rows
     mkChart("cmpChart", {
       type: "line", data: { labels: d.dates, datasets: ts.map((t, i) => ({ label: legendName(t), ticker: t, data: d.series[t], borderColor: PALETTE[i % PALETTE.length], borderWidth: 1.6, pointRadius: 0, tension: 0.1, spanGaps: true })) },
       options: { interaction: { mode: "index", intersect: false }, layout: { padding: { right: labelRoom } },
