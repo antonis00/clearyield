@@ -565,3 +565,6 @@ nav a.nav-ask { margin-top: auto; } /* at the bottom of the menu, lined up with 
 .pick-tick { color: var(--accent); font-weight: 700; }
 .pick-list .pick-empty { color: var(--muted); cursor: default; white-space: normal; }
 label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
+
+/* A short list (tax years) needs a narrower button than a country */
+#taxYear + .pick-btn { min-width: 110px; }

@@ -1837,6 +1837,7 @@ async function loadTax(year) {
   $("#taxWhere").textContent = `${c.name}, ${r.label}`;
   $("#taxYear").innerHTML = r.years.map((y) => `<option value="${y}" ${y === r.year ? "selected" : ""}>${esc(c.year === "uk" ? `${y}/${String(y + 1).slice(2)}` : String(y))}</option>`).join("");
   $("#taxYear").onchange = () => loadTax($("#taxYear").value);
+  picker($("#taxYear"), { placeholder: "Search years…", empty: "No tax year matches." });
   $("#taxCsv").href = `/api/tax.csv?year=${r.year}`;
   $("#taxReport").href = `/api/tax/report?year=${r.year}`;
   const net = r.sales.reduce((a, p) => a + p.gain, 0), gross = r.dividends.reduce((a, d) => a + d.gross, 0);
@@ -1906,6 +1907,7 @@ function loadTaxPlain(t, year) {
   const b = t.base, years = t.years.length ? t.years : [t.year];
   $("#taxYear").innerHTML = years.map((y) => `<option ${y === t.year ? "selected" : ""}>${esc(y)}</option>`).join("");
   $("#taxYear").onchange = () => loadTax($("#taxYear").value);
+  picker($("#taxYear"), { placeholder: "Search years…", empty: "No tax year matches." });
   $("#taxCsv").href = `/api/tax.csv?year=${encodeURIComponent(t.year)}`;
   if (!t.sales.length && !t.dividends.length) {
     $("#taxKpis").innerHTML = `<div class="muted">No sales or dividends in ${esc(t.year)}.</div>`;

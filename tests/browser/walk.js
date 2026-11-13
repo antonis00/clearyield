@@ -402,10 +402,14 @@ const SLOW = 150000;
   await p.keyboard.type("germ"); await p.waitForTimeout(150);
   const found = await p.evaluate(() => [...document.querySelectorAll(".pick-panel li[data-v]")].map((li) => li.dataset.v));
   await p.keyboard.press("Enter");
-  expect("portfolio: the tax residence picker is wide and searchable, Enter chooses", picker.items === 16 && picker.focus && picker.width >= 340 && found.join() === "DE"
+  expect("portfolio: the tax residence picker is wide and searchable, Enter chooses", picker.items === 17 && picker.focus && picker.width >= 340 && found.join() === "DE"
     && !(await p.evaluate(() => document.querySelector(".pick-panel"))), `${picker.items} countries, ${Math.round(picker.width)}px, found ${found.join()}`);
   await p.waitForFunction(() => /Germany/.test(document.querySelector("#taxWhere").textContent) && document.querySelector("#taxLines table"), null, { timeout: SLOW });
   expect("portfolio: the picker shows the choice", /Germany/.test(await txt("#taxRes + .pick-btn")));
+  // The year is a picker too: choosing 2025 by typing it
+  await p.click("#taxYear + .pick-btn"); await p.keyboard.type("2025"); await p.keyboard.press("Enter");
+  await p.waitForFunction(() => /Germany, 2025/.test(document.querySelector("#taxWhere").textContent), null, { timeout: SLOW });
+  expect("portfolio: the tax year picker chooses the year", /2025/.test(await txt("#taxYear + .pick-btn")));
   await p.selectOption("#taxYear", "2025");
   await p.waitForFunction(() => /Germany, 2025/.test(document.querySelector("#taxWhere").textContent), null, { timeout: SLOW });
   const de = await p.evaluate(() => ({ text: document.querySelector("#taxCard").innerText.replace(/\s+/g, " "), report: document.querySelector("#taxReport").getAttribute("href"),

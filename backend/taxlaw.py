@@ -1317,3 +1317,65 @@ def public(code):
     c = COUNTRIES[code]
     return {"code": code, "name": c["name"], "currency": c["currency"], "year": c["year"], "methods": c["methods"], "options": c["options"], "sources": c["sources"]}
 
+
+
+# ---------------------------------------------------------------- Qatar
+
+US_ESTATE_THRESHOLD = 60000  # US estate tax on a non-US person's US-situs assets above this (18-40%)
+
+
+def qatar(ctx):
+    """No tax on an individual's dividends or gains on securities held outside a business; what still costs money is
+    abroad: US withholding at 30% (no US treaty) and US estate tax on US-situs holdings over $60,000."""
+    from . import data, taxcalc
+    r = Result(ctx)
+    y = ctx["year"]
+    r.line("Gains on shares, funds and crypto", sum(p["gain"] for p in ctx["pieces"]), 0, 0,
+           rule="Exempt for an individual when the securities aren't assets of a business (Law No. 24 of 2018)")
+    divs = dividend_rows(ctx)
+    gross = sum(d["g"] for d in divs)
+    r.line("Dividends", gross, 0, 0, rule="Not taxed in Qatar")
+    lost = sum(d["w"] for d in divs)
+    if lost:
+        r.line("Tax kept abroad on your dividends", lost, None, None, kind="info",
+               rule="A cost, not reclaimable: the US keeps 30% (no US-Qatar treaty); Irish funds pay out without withholding")
+    note_estimates(r, divs)
+    # US estate tax exposure: US-listed shares and US-domiciled funds (not Irish or Luxembourg UCITS, not crypto)
+    end = min(ctx["end"], dt.date.today().isoformat())
+    us_value = 0.0
+    names = []
+    for tk, e in ctx["events"].items():
+        us_situs = (e["category"] == "shares" and e.get("country") == "United States") or (e["category"] == "funds" and e.get("domicile") == "US")
+        if not us_situs:
+            continue
+        n = taxcalc.shares_on(e, end)
+        unit = ctx["value_at"](tk, end)
+        if n > 1e-9 and unit is not None:
+            us_value += n * unit
+            names.append(tk)
+    try:
+        usd = us_value * data.fx_rate(ctx["currency"], "USD")
+    except data.DataError:
+        usd = None
+    if usd is not None:
+        r.line(f"US assets for US estate tax ({', '.join(names) or 'none'})", us_value, None, None, kind="info",
+               rule=f"About ${usd:,.0f} of the ${US_ESTATE_THRESHOLD:,} a non-US person can leave free of US estate tax (18% to 40% above it)")
+        r.extra["usEstate"] = {"usd": usd, "threshold": US_ESTATE_THRESHOLD, "tickers": names}
+        if usd > 0.8 * US_ESTATE_THRESHOLD:
+            r.notes.append(f"Your US-listed holdings (about ${usd:,.0f}) are near or over the ${US_ESTATE_THRESHOLD:,} US estate tax threshold for non-US persons. "
+                           "The same exposure through an Irish-domiciled fund (such as VWCE) isn't US property.")
+    r.notes += ["No personal tax return is needed for investment income in Qatar.",
+                "US dividends: the US withholds 30% from residents of Qatar (no income tax treaty); an Irish fund holding US shares pays 15% inside the fund instead.",
+                "A US citizen or green card holder is taxed by the US wherever they live; some home countries keep taxing for a time after you leave. Then choose that country instead."]
+    r.unsure += ["The dividend exemption is described as for profits already taxed in Qatar or exempt there; foreign dividends to individuals aren't taxed in practice, but PwC's wording is narrower.",
+                 "No US-Qatar income tax treaty was found; check IRS Publication 515 or your broker's withholding."]
+    r.deadlines.append(f"Nothing to file in Qatar for {y} investment income.")
+    return r.out()
+
+
+COUNTRIES["QA"] = {"name": "Qatar", "currency": "QAR", "year": "calendar", "methods": {"shares": "fifo", "funds": "fifo", "crypto": "fifo"},
+                   "compute": qatar, "sourceRates": {"United States": 0.30}, "options": [],
+                   "sources": ["https://taxsummaries.pwc.com/qatar/individual/income-determination",
+                               "https://taxsummaries.pwc.com/Qatar/Individual/Residence",
+                               "https://www.taxesforexpats.com/articles/non-us-citizens/nonresident-alien-estate-tax-exemption-us-situs-assets.html"]}
+ORDER.insert(ORDER.index("ES"), "QA")
