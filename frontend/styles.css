@@ -511,3 +511,32 @@ nav a.nav-ask { margin-top: auto; } /* at the bottom of the menu, lined up with 
 .plan-buys li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 
 .b-Core { background: color-mix(in srgb, var(--accent2) 15%, transparent); color: var(--accent2); }  /* a broad index fund: no stance band */
+
+/* Research's advanced tools, folded away until wanted */
+.adv { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.adv > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 12px; padding: 14px 16px; }
+.adv > summary::-webkit-details-marker { display: none; }
+.adv > summary::before { content: "▸"; color: var(--muted); transition: transform 0.15s; }
+.adv[open] > summary::before { transform: rotate(90deg); }
+.adv-t { font-weight: 600; }
+.adv > .card, .adv > .grid2 { margin: 0 12px 12px; }
+.digest .digest-hidden { border: 0; }
+
+/* The dashboard's first-run checklist */
+.setup { margin-bottom: 14px; }
+.setup-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.setup-steps li { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.setup-steps li .tick { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 12px; }
+.setup-steps li.done .tick { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.setup-steps li.done .st-t { color: var(--muted); text-decoration: line-through; }
+.setup-steps .st-t { font-weight: 600; }
+.setup-steps .st-w { margin: 3px 0 6px; }
+
+/* Tax year under your residence's rules */
+#taxCard h4 { margin: 16px 0 6px; }
+#taxCard tr.tax-total td { font-weight: 700; border-top: 2px solid var(--line); }
+#taxIntro { margin: 4px 0 10px; }
+.tax-plan { border: 1px solid var(--accent); border-radius: 8px; padding: 4px 12px; margin: 12px 0; }
+.tax-setup { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.tax-setup summary { cursor: pointer; font-weight: 600; }
+#taxSources { margin-top: 8px; }

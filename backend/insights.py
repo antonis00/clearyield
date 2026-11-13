@@ -934,7 +934,7 @@ def market_moves(tiles):
             # Green for good news, red for bad: a rising VIX is fear, so it's red; a yield or a currency moving isn't
             # good or bad in itself, so it's neutral
             tone = {"volatility": -1, "yield": 0, "fx": 0}.get(kind, 1) * (1 if main > 0 else -1)
-            items.append({"tone": tone, "ticker": t, "priority": 6.5, "kind": "market",
+            items.append({"tone": tone, "ticker": t, "priority": 6.5, "kind": "market", "short": True,
                           "text": f"{name} {' and '.join(parts)}."})
     return items
 
@@ -953,7 +953,7 @@ def portfolio_points(settings):
     if before and not p["incomplete"]:
         when = "today" if p["dayFrom"] == p["dayTo"] == dt.date.today().isoformat() else (
             f"on {p['dayTo']}" if p["dayFrom"] == p["dayTo"] else f"over each holding's latest day ({p['dayFrom']} to {p['dayTo']})")
-        items.append({"tone": (p["dayPnl"] > 0) - (p["dayPnl"] < 0), "ticker": None, "priority": 3, "kind": "portfolio",
+        items.append({"tone": (p["dayPnl"] > 0) - (p["dayPnl"] < 0), "ticker": None, "priority": 3, "kind": "portfolio", "short": True,
                       "text": f"Your portfolio {'gained' if p['dayPnl'] >= 0 else 'lost'} {money(abs(p['dayPnl']))} ({p['dayPnl'] / before:+.2%}) {when}. "
                               f"It's worth {money(p['total'])}, {money(p['pnl'])} ({p['pnlPct']:+.2%}) against what you paid."})
     # Only satellite over its share (the riskier side) is worth a line every day; more in core than the target
@@ -972,6 +972,7 @@ def portfolio_points(settings):
         items.append({"tone": 0, "ticker": None, "priority": 4, "kind": "portfolio",
                       "text": f"Your plan for {pl['month']}: {money(m['left'])} of your {money(pl['monthly'])} still to invest. "
                               "The Your plan card on the Portfolio page drafts the orders."})
+    items += tax_points(settings, money)
     try:
         missing = portfolio.unrecorded_dividends()
     except Exception:
@@ -982,6 +983,25 @@ def portfolio_points(settings):
                       "text": f"{len(missing)} dividend{'s' if len(missing) > 1 else ''} Yahoo lists while you held {', '.join(names)} "
                               f"{'are' if len(missing) > 1 else 'is'} not recorded. Record what your broker paid, so income and returns include {'them' if len(missing) > 1 else 'it'}."})
     return items
+
+
+def tax_points(settings, money):
+    """Near the end of the tax year (the last 61 days), the year's planning notes: an allowance left unused against
+    unrealised gains, losses that could offset taxed gains, holdings about to cross a holding period."""
+    code = settings.get("tax_residence")
+    if code in ("", "other", None):
+        return []
+    from . import tax
+    try:
+        r = tax.residence_summary(settings)
+    except Exception as e:
+        log.info("tax digest skipped: %s", e)
+        return []
+    days = (dt.date.fromisoformat(r["end"]) - dt.date.today()).days
+    if days > 61:
+        return []
+    return [{"tone": 0, "ticker": p.get("ticker"), "priority": 4.5, "kind": "portfolio",
+             "text": f"Tax year {r['label']} ends in {days} days: {p['text']}"} for p in r["planning"]]
 
 
 HEADLINE_DAYS = 3
@@ -1033,7 +1053,9 @@ def _in_days(n):
 
 def digest(settings, tiles=None):
     """What's worth knowing today: alerts and journal reminders first, then your portfolio, your holdings and
-    watchlist, the market's notable moves, and headlines naming your stocks. Every item is a rule with its figures."""
+    watchlist, the market's notable moves, and headlines naming your stocks. Every item is a rule with its figures.
+    The short-term lines (a day's moves, RSI, stance changes, market moves) carry `short`, so the page's Long-term
+    view can leave them out and keep what a buy-and-hold investor acts on."""
     held = ledger.held_tickers()
     watched = [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
     tickers = list(dict.fromkeys(held + watched))
@@ -1046,11 +1068,11 @@ def digest(settings, tiles=None):
             continue
         tag = "holding" if t in held else "watchlist"
         if r["day"] is not None and abs(r["day"]) >= 0.03:
-            items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "priority": 5, "text": f"{t} ({tag}) moved {r['day']:+.1%} {r['moveDay']}."})
+            items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "priority": 5, "short": True, "text": f"{t} ({tag}) moved {r['day']:+.1%} {r['moveDay']}."})
         if r["rsi"] >= 70:
-            items.append({"tone": -1, "ticker": t, "priority": 6, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
+            items.append({"tone": -1, "ticker": t, "priority": 6, "short": True, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
         elif r["rsi"] <= 30:
-            items.append({"tone": 1, "ticker": t, "priority": 6, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
+            items.append({"tone": 1, "ticker": t, "priority": 6, "short": True, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
         ev = r["events"]
         if t in held and ev["earningsDays"] is not None and ev["earningsDays"] <= 14:
             items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} reports earnings {_in_days(ev['earningsDays'])} ({ev['earnings']})."})
@@ -1064,7 +1086,7 @@ def digest(settings, tiles=None):
     for t in [x for x in tickers if x not in CORE_FUNDS]:
         change = score_change(t)
         if change:
-            items.append({"tone": 0, "ticker": t, "priority": 4, "text": change})
+            items.append({"tone": 0, "ticker": t, "priority": 4, "short": True, "text": change})
     today = dt.date.today().isoformat()
     for j in open_entries:
         r = rows.get(j["ticker"])

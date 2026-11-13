@@ -97,7 +97,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, tax  # noqa: E402
+from . import agent, ai, backtest, data, db, firstrun, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, tax, taxlaw, taxreport  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search, tickers_for  # noqa: E402
 
@@ -314,7 +314,8 @@ def meta():
     return ok({"demo": data.DEMO, "ai": ai.available(), "aiInfo": {**ai.describe(), "web": agent.web_source()}, "tiles": _tile_list(settings),
                "settings": settings, "markets": [*insights.followed(settings), "ETFs", "Crypto"], "stockMarkets": insights.followed(settings), "regions": REGIONS,
                "countries": {r: countries_in(r) for r in insights.followed(settings)}, "countryGroups": COUNTRY_GROUPS, "currencies": data.CURRENCIES, "alertKinds": insights.ALERT_KINDS,
-               "email": mailer.status(), "startup": startup.status(), "autoBackup": db.auto_backup_status(), "strategies": backtest.STRATEGIES})
+               "email": mailer.status(), "startup": startup.status(), "autoBackup": db.auto_backup_status(), "strategies": backtest.STRATEGIES,
+               "taxCountries": [{"code": c, "name": taxlaw.COUNTRIES[c]["name"], "currency": taxlaw.COUNTRIES[c]["currency"]} for c in taxlaw.ORDER]})
 
 
 @app.get("/api/search")
@@ -599,6 +600,19 @@ def plan_get():
         raise HTTPException(409, str(e))
 
 
+@app.get("/api/setup")
+def setup_get():
+    """The dashboard's first-run checklist: each step ticked from what's saved (firstrun.summary)."""
+    return ok(firstrun.summary(db.get_settings()))
+
+
+@app.post("/api/setup/dismiss")
+def setup_dismiss(body: dict = Body(default={})):
+    """Hide the checklist (or show it again with {"dismissed": false})."""
+    db.set_settings({"setup_dismissed": bool(body.get("dismissed", True))})
+    return ok(firstrun.summary(db.get_settings()))
+
+
 @app.get("/api/dividends/unrecorded")
 def dividends_unrecorded():
     """Dividends Yahoo lists while you held shares, with none recorded near them (portfolio.unrecorded_dividends)."""
@@ -652,7 +666,13 @@ def tax_year(year: str = ""):
     if year and not (year.isdigit() and len(year) == 4):
         raise HTTPException(400, "The year must look like 2026.")
     try:
-        return ok(tax.summary(db.get_settings(), year or None))
+        s = db.get_settings()
+        out = tax.summary(s, year or None)
+        if s.get("tax_residence") not in ("", "other"):
+            out["residence"] = tax.residence_summary(s, year or None)
+        out["countries"] = [taxlaw.public(c) | {"code": c} for c in taxlaw.ORDER]
+        out["residenceCode"] = s.get("tax_residence")
+        return ok(out)
     except ledger.LedgerError as e:
         raise HTTPException(400, str(e))
 
@@ -661,9 +681,29 @@ def tax_year(year: str = ""):
 def tax_csv(year: str = ""):
     if year and not (year.isdigit() and len(year) == 4):
         raise HTTPException(400, "The year must look like 2026.")
-    s = tax.summary(db.get_settings(), year or None)
+    settings = db.get_settings()
+    if settings.get("tax_residence") not in ("", "other"):
+        r = tax.residence_summary(settings, year or None)
+        return Response(tax.residence_csv(r), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="clearyield-tax-{r["label"].replace("/", "-")}-{r["residence"]["code"]}.csv"'})
+    s = tax.summary(settings, year or None)
     return Response(tax.to_csv(s), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="clearyield-tax-{s["year"]}.csv"'})
+
+
+@app.get("/api/tax/report")
+def tax_report(year: str = ""):
+    """The tax year as a printable page (taxreport.py): print it or save it as a PDF from the browser."""
+    if year and not (year.isdigit() and len(year) == 4):
+        raise HTTPException(400, "The year must look like 2026.")
+    settings = db.get_settings()
+    if settings.get("tax_residence") in ("", "other"):
+        raise HTTPException(400, "Choose your tax residence first (Settings, or the Tax year card).")
+    try:
+        r = tax.residence_summary(settings, year or None)
+    except ledger.LedgerError as e:
+        raise HTTPException(409, str(e))
+    return Response(taxreport.html(r, settings), media_type="text/html; charset=utf-8")
 
 
 @app.get("/api/scorecheck")
@@ -749,14 +789,17 @@ def add_holding(body: dict = Body(...)):
 
 def _record(body):
     t, kind = _ticker(body), body.get("kind", "buy")
+    withheld = None
     if kind == "dividend":
         shares, price, amount = None, None, _number(body, "amount")
+        if body.get("withheld") not in (None, ""):
+            withheld = _number(body, "withheld")
     else:
         shares, price, amount = _number(body, "shares"), _number(body, "price"), None
     try:
         if kind == "buy":
             _hist_or_404(t, "1y")
-        tid = ledger.add(t, kind, body.get("date", ""), shares, price, amount, body.get("note", ""))
+        tid = ledger.add(t, kind, body.get("date", ""), shares, price, amount, body.get("note", ""), withheld)
         return ok({"id": tid, "warning": _price_warning(t, kind, body.get("date", ""), price)})
     except ledger.LedgerError as e:
         raise HTTPException(400, str(e))

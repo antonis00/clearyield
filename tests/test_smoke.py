@@ -2149,7 +2149,7 @@ def test_ledger_matches_sales_to_the_oldest_lots():
     assert [(l["id"], l["shares"], l["cost"], l["bought"]) for l in a["lots"]] == [(2, 5, 120, "2024-06-03")]
     assert [(s["shares"], s["cost"], s["bought"], s["price"], s["date"]) for s in a["sales"]] == [
         (10, 100, "2024-01-02", 150, "2025-01-02"), (5, 120, "2024-06-03", 150, "2025-01-02")]
-    assert a["dividends"] == [{"id": 4, "date": "2025-02-03", "amount": 12.5}]
+    assert a["dividends"] == [{"id": 4, "date": "2025-02-03", "amount": 12.5, "withheld": None}]
     # Date order decides, not the order they were typed in, and a same-day buy comes before a sale
     shuffled = ledger.replay([rows[2], rows[1], rows[0]])["A"]
     assert shuffled["lots"][0]["shares"] == 5 and shuffled["sales"][0]["cost"] == 100
@@ -2785,6 +2785,9 @@ def test_digest_puts_urgent_items_first():
     own = [i["text"] for i in d["items"] if i.get("kind") != "news"]  # headlines come after everything else
     assert "review due" in texts[2] and "overbought" in own[-1], texts
     assert "rows" not in d
+    # The Long-term view leaves out what's about a day or a week: RSI here; alerts, stops and reviews stay
+    short = {i["text"].split(" (")[0] for i in d["items"] if i.get("short")}
+    assert any("overbought" in t for t in short) and not any(i.get("short") for i in d["items"] if i["text"].startswith("Alert:") or "stop" in i["text"] or "review due" in i["text"]), short
 
 
 def test_digest_covers_portfolio_markets_and_headlines():
@@ -5479,6 +5482,176 @@ def test_logos_from_the_first_source_with_a_real_image():
     with TestClient(app) as c:  # demo mode: never fetched, the page shows letters
         asked.clear()
         assert c.get("/api/logo/MSFT").status_code == 204 and not asked
+
+
+
+def test_tax_matching_methods_are_hand_calculated():
+    """First in first out, weighted average, the UK's same day / 30 days / pool, the US wash-sale rule and Ireland's
+    four-week rule, each against figures worked out by hand."""
+    from backend import taxcalc as tc
+    n = iter(range(1, 100))
+    tr = lambda kind, date, shares, price: {"id": next(n), "kind": kind, "date": date, "shares": shares, "price": price, "rate": 1.0, "exact": True, "value": shares * price}  # noqa: E731
+    t = [tr("buy", "2025-01-02", 10, 100), tr("buy", "2025-02-03", 10, 200), tr("sell", "2026-03-02", 15, 300)]
+    p, _ = tc.fifo(t)
+    assert [(x["shares"], x["cost"], x["gain"], x["long"]) for x in p] == [(10, 1000, 2000, True), (5, 1000, 500, True)]
+    p, lots = tc.average(t)
+    assert [(x["cost"], x["gain"]) for x in p] == [(2250, 2250)] and lots[0]["shares"] == 5 and lots[0]["cost"] == 750
+    # UK: 100 sold on 1 March: 50 bought that day first, then 50 of the 100 bought on 15 March; the rest stays pooled
+    u = [tr("buy", "2026-01-10", 100, 10), tr("buy", "2026-03-01", 50, 7), tr("sell", "2026-03-01", 100, 8), tr("buy", "2026-03-15", 100, 9)]
+    p, pool = tc.uk(u)
+    assert [(x["rule"], x["shares"], x["cost"], x["gain"]) for x in p] == [("Same day", 50, 350, 50), ("Bought back within 30 days", 50, 450, -50)]
+    assert pool == [{"shares": 150, "cost": 1450, "bought": None, "exact": True}]
+    # HMRC's own example shape: pool 1,000 for 10,000; sell 600 at 15; same day 100 at 14; 200 at 12 within 30 days
+    h = [tr("buy", "2025-01-01", 1000, 10), tr("sell", "2026-03-01", 600, 15), tr("buy", "2026-03-01", 100, 14), tr("buy", "2026-03-20", 200, 12)]
+    p, pool = tc.uk(h)
+    assert sum(x["cost"] for x in p) == 6800 and sum(x["gain"] for x in p) == 2200 and pool[0]["shares"] == 700 and pool[0]["cost"] == 7000
+    # US: the 200 loss is disallowed and added to the shares bought 18 days later, whose holding period starts earlier
+    w = [tr("buy", "2026-01-02", 10, 100), tr("sell", "2026-03-02", 10, 80), tr("buy", "2026-03-20", 10, 85), tr("sell", "2026-06-01", 10, 120)]
+    p, _ = tc.us(w)
+    assert [(x["gain"], x.get("washDisallowed")) for x in p] == [(0, 200), (150, None)] and p[1]["bought"] == "2026-01-20"
+    assert [x["gain"] for x in tc.us(w, wash=False)[0]] == [-200, 350]
+    # Ireland: shares sold within four weeks of buying are matched with that purchase first
+    i = [tr("buy", "2026-01-02", 10, 100), tr("buy", "2026-03-01", 10, 150), tr("sell", "2026-03-10", 10, 140)]
+    p, _ = tc.ie(i)
+    assert [(x["cost"], x["rule"][:10]) for x in p] == [(1500, "Bought wit")]
+
+
+def _tax_ledger(c):
+    post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+    for b in [dict(ticker="ASML.AS", kind="buy", date="2024-02-01", shares=2, price=500), dict(ticker="ASML.AS", kind="sell", date="2025-02-03", shares=2, price=400),
+              dict(ticker="SAP.DE", kind="buy", date="2025-01-10", shares=10, price=100), dict(ticker="SAP.DE", kind="buy", date="2025-06-02", shares=10, price=200),
+              dict(ticker="SAP.DE", kind="sell", date="2026-03-02", shares=15, price=300), dict(ticker="SAP.DE", kind="dividend", date="2026-05-04", amount=73.625, withheld=26.375)]:
+        r = post(**b)
+        assert r.status_code == 200, r.text
+
+
+def test_tax_residence_rules_are_hand_calculated():
+    """The same ledger under France, Germany, Spain, the US and the UK, each total worked out by hand: a 2025 loss
+    carried into 2026, a dividend with its withholding, each country's matching, rates and allowance."""
+    from backend import data
+    _reset()
+    with TestClient(app) as c:
+        _tax_ledger(c)
+        assert c.get("/api/transactions").json()[0]["withheld"] == 26.375
+        got = {}
+        for code in ("FR", "DE", "ES", "US", "UK", "IT"):
+            assert c.post("/api/settings", json={"tax_residence": code}).status_code == 200
+            r = c.get(f"/api/tax?year={2025 if code == 'UK' else 2026}").json()["residence"]
+            got[code] = r
+        # France: average cost 150, so 15 sold gain 2,250; less the 200 carried from 2025; 12.8% + 18.6%; the dividend's
+        # income tax is wiped out by the German withholding (credited up to 12.8%), its social charges stay
+        fr = got["FR"]["result"]
+        assert abs(fr["tax"] - (2050 * 0.128 + 2050 * 0.186 + 100 * 0.186)) < 1e-6, fr["tax"]
+        assert fr["carry"]["fr_losses"] == [] and any(f["box"] == "3VG" and abs(f["amount"] - 2050) < 1e-9 for f in fr["forms"])
+        # Germany: first in first out, gain 2,500; the share-loss pot 200; plus the dividend; less the €1,000 allowance
+        de = got["DE"]["result"]
+        assert abs(de["tax"] - (2500 - 200 + 100 - 1000) * 0.26375) < 1e-6, de["tax"]
+        assert de["carry"]["de_share_pot"] == 0 and de["allowances"][0]["left"] == 0
+        # Spain: savings base 2,300 + 100 at 19%, less the foreign tax up to the 15% treaty rate
+        es = got["ES"]["result"]
+        assert abs(es["tax"] - (2400 * 0.19 - 15)) < 1e-6, es["tax"]
+        # The US: in dollars at each date's rate; 10 shares held over a year (long-term 15%), 5 under (22%); the
+        # dividend qualified at 15%; the German tax credited in full (under $300). The 2025 loss used up in 2025
+        us = got["US"]["result"]
+        r = lambda d: data.fx_on("EUR", "USD", d)  # noqa: E731
+        lt = 10 * (300 * r("2026-03-02") - 100 * r("2025-01-10"))
+        st = 5 * (300 * r("2026-03-02") - 200 * r("2025-06-02"))
+        div, wh = 100 * r("2026-05-04"), 26.375 * r("2026-05-04")
+        assert abs(us["tax"] - (st * 0.22 + (lt + div) * 0.15 - wh)) < 1e-6, (us["tax"], st, lt)
+        assert us["carry"] == {"us_st": 0.0, "us_lt": 0.0}
+        # The UK: 2025/26, in pounds; the pool's average cost; under the £3,000 exempt amount, so nothing to pay, and
+        # the 2024/25 loss is kept (brought-forward losses only bring gains down to the exempt amount)
+        uk = got["UK"]
+        g = lambda d: data.fx_on("EUR", "GBP", d)  # noqa: E731
+        gain = 15 * 300 * g("2026-03-02") - 15 * (1000 * g("2025-01-10") + 2000 * g("2025-06-02")) / 20
+        assert uk["label"] == "2025/26" and uk["result"]["tax"] == 0 and abs(sum(p["gain"] for p in uk["sales"]) - gain) < 1e-6
+        assert abs(uk["result"]["carry"]["uk_losses"] - 2 * (500 * g("2024-02-01") - 400 * g("2025-02-03"))) < 1e-6
+        # Italy: weighted average; the 2025 loss carried; dividends declared at 26% of the gross
+        it = got["IT"]["result"]["lines"]
+        assert abs(it[0]["tax"] - 2050 * 0.26) < 1e-6 and any(x["label"].startswith("Dividends") and abs(x["tax"] - 26) < 1e-9 for x in it)
+        # The report and the spreadsheet carry the same figures
+        rep = c.get("/api/tax/report?year=2026")
+        assert rep.status_code == 200 and "Tax year 2026: Italy" in rep.text and "not tax advice" in rep.text and "http" in rep.text
+        assert "fonts.googleapis" not in rep.text
+        csv_text = c.get("/api/tax.csv?year=2026")
+        assert 'clearyield-tax-2026-IT.csv' in csv_text.headers["content-disposition"] and "Quadro RT" in csv_text.text
+        # Asked what's due, Ask's tool gives the same lines
+        from backend import agent
+        a = agent.get_tax(2026)
+        assert a["residence"] == "Italy" and a["lines"][0]["rule"].startswith("26%")
+        # A bad answer is refused, the options are kept per country
+        assert c.post("/api/settings", json={"tax_residence": "XX"}).status_code == 400
+        assert c.post("/api/settings", json={"tax_options": {"IT": {"marginal": 99}}}).status_code == 400
+        assert c.post("/api/settings", json={"tax_options": {"IT": {"broker": "home"}}}).status_code == 200
+        lines = c.get("/api/tax?year=2026").json()["residence"]["result"]["lines"]
+        assert not any(x["label"].startswith("IVAFE") for x in lines), "an Italian broker: no IVAFE to declare"
+        assert c.post("/api/transactions", json=dict(ticker="SAP.DE", kind="dividend", date="2026-06-01", amount=5, withheld=-1)).status_code == 400
+    _reset()
+
+
+def test_tax_rules_with_their_own_formulas():
+    """France's crypto portfolio formula, Germany's Vorabpauschale, the Dutch box 3, Belgium's 2025 step-up and
+    Ireland's deemed disposal after eight years, each from its stated formula."""
+    from backend import taxlaw
+    _reset()
+    with TestClient(app) as c:
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        assert post(ticker="BTC-USD", kind="buy", date="2025-01-05", shares=0.1, price=60000).status_code == 200
+        assert post(ticker="BTC-USD", kind="sell", date="2026-02-05", shares=0.05, price=70000).status_code == 200
+        c.post("/api/settings", json={"tax_residence": "FR"})
+        fr = c.get("/api/tax?year=2026").json()["residence"]["result"]
+        # The whole portfolio was worth 0.1 x 70,000 before the sale: half sold takes half the 6,000 cost
+        sale = fr["cryptoSales"][0]
+        assert abs(sale["cost"] / sale["proceeds"] - 3000 / 3500) < 1e-9 and abs(sale["portfolio"] / sale["proceeds"] - 2) < 1e-9
+        # Germany: held over a year, so tax-free
+        c.post("/api/settings", json={"tax_residence": "DE"})
+        de = c.get("/api/tax?year=2026").json()["residence"]["result"]
+        assert de["tax"] == 0 and any(x["label"] == "Crypto held over a year" for x in de["lines"])
+    _reset()
+    # Vorabpauschale: 1 Jan price 100, 2.53% x 0.7 = 1.771 a unit, under the year's rise; 10 units, 2 bought in April lose 3/12
+    ev = {"VWCE.DE": {"category": "funds", "fundKind": "equity", "dividends": [],
+                      "trades": [{"kind": "buy", "date": "2024-05-01", "shares": 8, "id": 1}, {"kind": "buy", "date": "2025-04-10", "shares": 2, "id": 2}]}}
+    prices = {"2024-12-31": 100.0, "2025-12-31": 110.0}
+    vp = taxlaw.vorabpauschale({"events": ev, "price_of": lambda t, d: prices.get(d)}, 2025)
+    assert abs(vp[0]["perUnit"] - 1.771) < 1e-12 and abs(vp[0]["amount"] - 1.771 * (10 - 2 * 3 / 12)) < 1e-12
+    prices["2025-12-31"] = 101.0  # a rise of 1.00 caps it
+    assert abs(taxlaw.vorabpauschale({"events": ev, "price_of": lambda t, d: prices.get(d)}, 2025)[0]["perUnit"] - 1.0) < 1e-12
+    # Box 3 2026: €100,000 of investments, no savings or debts: 6% deemed, 40.643% of the base above the allowance, 36%
+    ctx = {"year": 2026, "options": {}, "carry": {}, "pieces": [], "dividends": [], "trades": [], "year_start_value": 100000, "year_end_value": None}
+    nl = taxlaw.netherlands(ctx)
+    assert abs(nl["tax"] - 100000 * 0.06 * (100000 - 59357) / 100000 * 0.36) < 1e-6, nl["tax"]
+    # Belgium: bought in 2024 for 1,000, worth 1,500 on 31 Dec 2025, sold in 2026 for 13,000: the gain counts from 1,500
+    piece = {"ticker": "X", "date": "2026-05-01", "bought": "2024-03-01", "shares": 10, "proceeds": 13000, "cost": 1000, "gain": 12000, "category": "shares", "rule": "FIFO"}
+    be = taxlaw.belgium({"year": 2026, "options": {}, "carry": {}, "pieces": [piece], "dividends": [], "trades": [], "buys": [],
+                         "value_at": lambda t, d: 150.0, "year_end_value": 0})
+    assert abs(be["tax"] - (13000 - 1500 - 10000) * 0.10) < 1e-9 and be["carry"]["be_unused"] == []
+    # Ireland: a fund bought in 2018 is deemed sold on its eighth anniversary
+    _reset()
+    with TestClient(app) as c:
+        assert c.post("/api/transactions", json=dict(ticker="VWCE.DE", kind="buy", date="2018-03-01", shares=10, price=60)).status_code == 200
+        c.post("/api/settings", json={"tax_residence": "IE"})
+        ie = c.get("/api/tax?year=2026").json()["residence"]["result"]
+        dd = [d for d in ie["deemedDisposals"] if d["date"] == "2026-03-01"]
+        assert dd and dd[0]["shares"] == 10 and any(x["label"].startswith("Deemed disposals") and x["rate"] == 0.38 for x in ie["lines"])
+    _reset()
+
+
+def test_first_run_checklist_ticks_from_what_is_saved():
+    """Each step is done when what it asks for is saved; the card goes when all the needed ones are, or when hidden."""
+    _reset()
+    with TestClient(app) as c:
+        s = c.get("/api/setup").json()
+        assert s["show"] and s["left"] == s["needed"] == 4 and not any(x["done"] for x in s["steps"] if not x.get("optional"))
+        c.post("/api/settings", json={"base_currency": "EUR"})
+        c.post("/api/settings", json={"tax_residence": "DE"})
+        c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "shares": 1, "price": 100})
+        s = c.get("/api/setup").json()
+        assert s["left"] == 1 and [x["key"] for x in s["steps"] if not x["done"] and not x.get("optional")] == ["plan"]
+        assert c.post("/api/setup/dismiss", json={}).json()["show"] is False
+        assert c.post("/api/setup/dismiss", json={"dismissed": False}).json()["show"] is True
+        c.post("/api/settings", json={"plan": {"monthly": 500}})
+        assert c.get("/api/setup").json()["show"] is False
+    _reset()
 
 
 if __name__ == "__main__":

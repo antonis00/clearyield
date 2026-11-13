@@ -146,3 +146,232 @@ def to_csv(s):
                     f"{d['inBase']:.2f}", "yes" if d["exact"] else "no: today's rate"])
     w.writerow(["Total", "", "", "", "", "", "", f"{s['dividendTotal']:.2f}"])
     return out.getvalue()
+
+
+# ---------------------------------------------------------------- your tax residence's rules (taxlaw.py, taxcalc.py)
+
+import copy  # noqa: E402
+
+from . import taxcalc, taxlaw  # noqa: E402
+
+RESIDENCE_CAVEATS = [
+    "Arithmetic on your records under the rules listed, not tax advice. Rules change every year and depend on your whole situation: check with your tax office or an adviser before filing.",
+    "Each amount is converted to the tax currency at the rate on its own date (Yahoo's daily rate; tax offices may name another source, such as the ECB's).",
+    "Fees are in the prices you recorded. Dividends are what arrived; tax withheld abroad is what you entered, or the source country's usual rate when you didn't.",
+]
+HARVEST_WINDOW = {"US": ("wash-sale rule", 30), "UK": ("30-day rule", 30), "IE": ("four-week rule", 28), "ES": ("two-month rule", 61)}
+# Holding periods after which a gain is taxed less: (days, what happens), by residence and kind of asset
+CROSSINGS = {"US": {"shares": (365, "becomes long-term (lower rates)"), "funds": (365, "becomes long-term (lower rates)"), "crypto": (365, "becomes long-term (lower rates)")},
+             "DE": {"crypto": (365, "becomes tax-free")}, "PT": {"crypto": (365, "becomes tax-free"), "shares": (365, "no longer counts as a short holding"),
+                                                                 "funds": (365, "no longer counts as a short holding")}}
+
+
+def year_bounds(code, y):
+    if taxlaw.COUNTRIES[code]["year"] == "uk":
+        return f"{y}-04-06", f"{y + 1}-04-05", f"{y}/{str(y + 1)[2:]}"
+    return f"{y}-01-01", f"{y}-12-31", str(y)
+
+
+def year_of(code, date):
+    y = int(date[:4])
+    if taxlaw.COUNTRIES[code]["year"] == "uk" and date[5:] < "04-06":
+        return y - 1
+    return y
+
+
+def _flags(tk, e):
+    """Transaction taxes that depend on the company: France's, Spain's and Italy's on their large listed companies."""
+    cap = e["info"].get("marketCap") or 0
+    try:
+        cap_eur = cap * data.fx_rate(e["currency"], "EUR") if cap else 0
+    except data.DataError:
+        cap_eur = 0
+    stock = e["category"] == "shares"
+    return {"ttf": stock and tk.endswith(".PA") and cap_eur > 1e9, "ftt_es": stock and tk.endswith(".MC") and cap_eur > 1e9,
+            "tobin": stock and tk.endswith(".MI") and cap_eur > 5e8}
+
+
+def _unit(evs, tk, date, cur):
+    """One unit of `tk` in the tax currency on `date`: the quoted close then, at that day's rate (None without a price)."""
+    v = taxcalc.value_on({tk: {**evs[tk], "trades": [{"kind": "buy", "date": "", "shares": 1, "value": 0}]}}, date, cur)
+    return v[0]["value"] if v and v[0]["value"] is not None else None
+
+
+def residence_summary(settings, year=None, today=None):
+    """Your tax year under your residence's rules: every line with its rule, forms and boxes, deadlines, losses carried
+    from earlier years (each year worked out in turn from your first trade), and planning notes for the year under way."""
+    code = settings.get("tax_residence")
+    c = taxlaw.COUNTRIES[code]
+    cur = c["currency"]
+    today = today or dt.date.today().isoformat()
+    evs, left = taxcalc.events(cur)
+    overrides = settings.get("fund_tax") or {}
+    pieces, dividends, trades = [], [], []
+    for tk, e in evs.items():
+        e["country"] = country_of(tk)
+        if e["category"] == "funds":
+            e["fundKind"], e["domicile"], e["assumed"] = taxlaw.fund_profile(tk, e["info"], overrides)
+        method = c["methods"][e["category"]]
+        ps, _ = taxcalc.match(e, method)
+        for p in ps:
+            pieces.append({**p, "ticker": tk, "name": e["name"], "category": e["category"], "fundKind": e.get("fundKind"), "domicile": e.get("domicile"), "method": method})
+        for d in e["dividends"]:
+            dividends.append({**d, "ticker": tk, "name": e["name"], "category": e["category"], "country": e["country"], "fund": e["category"] == "funds",
+                              "fundKind": e.get("fundKind"), "domicile": e.get("domicile"), "sourceRates": c.get("sourceRates")})
+        for t in e["trades"]:
+            if t["date"]:
+                trades.append({**t, "ticker": tk, "category": e["category"], "domicile": e.get("domicile"), **_flags(tk, e)})
+    dated = [p["date"] for p in pieces] + [d["date"] for d in dividends] + [t["date"] for t in trades]
+    this_year = year_of(code, today)
+    years = sorted({year_of(code, d) for d in dated} | {this_year}, reverse=True)
+    target = int(year) if year else this_year
+    prices = {}
+
+    def value_at(tk, date):
+        key = (tk, date)
+        if key not in prices:
+            prices[key] = _unit(evs, tk, min(date, today), cur)
+        return prices[key]
+
+    def totals(date):
+        vals = taxcalc.value_on(evs, min(date, today), cur)
+        by = {}
+        for v in vals:
+            by[v["category"]] = by.get(v["category"], 0) + (v["value"] or 0)
+        return sum(by.values()), by
+
+    def bought_near(tk, date, days, piece, after_only=False):
+        d0 = dt.date.fromisoformat(date)
+        for t in evs[tk]["trades"]:
+            if t["kind"] != "buy" or not t["date"] or t["date"] == piece.get("bought"):
+                continue
+            gap = (dt.date.fromisoformat(t["date"]) - d0).days
+            if (0 < gap <= days) if after_only else (abs(gap) <= days):
+                return True
+        return False
+
+    def deemed_disposals(every):
+        """Each fund lot's deemed sale every `every` years after purchase (Ireland's eight), with what it would be
+        worth then: the price that day once it's passed, today's price as an estimate before."""
+        out = []
+        for tk, e in evs.items():
+            if e["category"] != "funds" or e.get("domicile") == "other":
+                continue
+            for b in [t for t in e["trades"] if t["kind"] == "buy" and t["date"]]:
+                d = dt.date.fromisoformat(b["date"])
+                for k in range(1, 4):
+                    try:
+                        when = d.replace(year=d.year + every * k).isoformat()
+                    except ValueError:
+                        when = dt.date(d.year + every * k, 3, 1).isoformat()
+                    _, lots = taxcalc.fifo([t for t in e["trades"] if (t["date"] or "") <= when])
+                    lot = next((x for x in lots if x["bought"] == b["date"]), None)
+                    if not lot or lot["shares"] <= 1e-9:
+                        break
+                    unit = value_at(tk, when)
+                    out.append({"ticker": tk, "date": when, "bought": b["date"], "shares": lot["shares"], "cost": lot["cost"],
+                                "value": unit * lot["shares"] if unit is not None else None,
+                                "gain": (unit * lot["shares"] - lot["cost"]) if unit is not None else 0.0, "estimate": when > today})
+        return sorted(out, key=lambda x: x["date"])
+
+    carry, result, year_pieces, year_divs = {}, None, [], []
+    for y in range(min(years), target + 1):
+        start, end, label = year_bounds(code, y)
+        ctx = {"year": y, "label": label, "start": start, "end": end, "currency": cur, "events": evs, "carry": carry,
+               "options": taxlaw.options_for(code, settings.get("tax_options")),
+               "pieces": [copy.deepcopy(p) for p in pieces if start <= p["date"] <= end],
+               "dividends": [d for d in dividends if start <= d["date"] <= end],
+               "trades": [t for t in trades if start <= t["date"] <= end],
+               "value_at": value_at, "price_of": value_at, "bought_near": bought_near, "deemed_disposals": deemed_disposals}
+        ctx["buys"] = [t for t in ctx["trades"] if t["kind"] == "buy"]
+        prev = (dt.date.fromisoformat(start) - dt.timedelta(days=1)).isoformat()
+        if y == target or code in ("NL", "BE", "ES", "IT", "CH"):
+            ctx["year_end_value"], ctx["year_end_by_cat"] = totals(end)
+            ctx["year_start_value"] = totals(prev)[0]
+        else:  # earlier years only pass their carried losses on, which don't depend on values
+            ctx["year_end_value"], ctx["year_end_by_cat"], ctx["year_start_value"] = None, {}, None
+        result = c["compute"](ctx)
+        carry = result["carry"]
+        year_pieces, year_divs = ctx["pieces"], ctx["dividends"]
+    start, end, label = year_bounds(code, target)
+    planning = _planning(code, evs, cur, result, today) if start <= today <= end else []
+    approx = sorted({p["ticker"] for p in year_pieces if not p["exact"] or not p.get("exactCost", True)} | {d["ticker"] for d in year_divs if not d["exact"]})
+    divs = []
+    for d in year_divs:
+        g, w, est = taxlaw.gross_and_withheld(d)
+        divs.append({**d, "gross": g, "withheldEst": w, "estimated": est})
+    return {"residence": taxlaw.public(code), "year": target, "label": label, "start": start, "end": end, "years": years, "currency": cur,
+            "result": result, "sales": year_pieces, "dividends": divs,
+            "funds": [{"ticker": tk, "name": e["name"], "kind": e["fundKind"], "domicile": e["domicile"], "assumed": e["assumed"]} for tk, e in evs.items() if e["category"] == "funds"],
+            "methodNames": taxcalc.METHOD_NAMES, "planning": planning, "leftOut": left, "approximate": approx,
+            "verified": taxlaw.VERIFIED, "caveats": RESIDENCE_CAVEATS}
+
+
+def _planning(code, evs, cur, result, today):
+    """For the year under way: the allowance left against unrealised gains, unrealised losses that could offset the
+    year's taxed gains (with the country's rule on buying back), and holdings about to cross a holding period that
+    lowers their tax."""
+    notes, gains, losses = [], [], []
+    for tk, e in evs.items():
+        _, lots = taxcalc.match(e, "fifo")
+        if not lots:
+            continue
+        unit = _unit(evs, tk, today, cur)
+        if unit is None:
+            continue
+        for lot in lots:
+            g = unit * lot["shares"] - lot["cost"]
+            # Ireland's funds pay exit tax, with no exemption and no use for losses: not part of the CGT planning
+            if code == "IE" and e["category"] == "funds":
+                continue
+            (gains if g >= 0 else losses).append({"ticker": tk, "gain": g})
+            cross = CROSSINGS.get(code, {}).get(e["category"])
+            if cross and lot["bought"] and g > 0:
+                days = (dt.date.fromisoformat(today) - dt.date.fromisoformat(lot["bought"])).days
+                if 0 < cross[0] - days <= 60:
+                    notes.append({"kind": "holding", "ticker": tk, "text": f"{tk} bought {lot['bought']} {cross[1]} in {cross[0] - days} days, "
+                                                                          f"on an unrealised gain of {g:,.0f} {cur}: selling before then costs more."})
+    ug, ul = sum(x["gain"] for x in gains), sum(x["gain"] for x in losses)
+    for a in result.get("allowances", []):
+        if a["left"] > 0 and ug > 0 and "ividend" not in a["name"] and "Box 3" not in a["name"]:
+            notes.append({"kind": "allowance", "text": f"{a['name']}: {a['left']:,.0f} {cur} unused this year, with {ug:,.0f} {cur} of unrealised gains. "
+                                                       "Realising gains up to it costs no tax (check the rules on buying back the same day)."})
+    taxed = sum(x["tax"] for x in result.get("lines", []) if x["kind"] == "tax" and (x["tax"] or 0) > 0)
+    if losses and taxed > 0:
+        rule = HARVEST_WINDOW.get(code)
+        notes.append({"kind": "losses", "text": f"Unrealised losses of {-ul:,.0f} {cur} ({', '.join(sorted({x['ticker'] for x in losses}))}) could offset this year's taxed gains if sold"
+                      + (f"; mind the {rule[0]}: buying the same back within {rule[1]} days changes how the loss counts." if rule else ".")})
+    return notes
+
+
+def residence_csv(s):
+    """The year under your residence's rules as a spreadsheet: the tax lines, the forms, each sale and each dividend."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    from .orders import _cell
+    c, cur = s["residence"], s["currency"]
+    w.writerow([f"Tax year {s['label']}", c["name"], f"amounts in {cur}", f"rules checked {s['verified']}"])
+    w.writerow([])
+    w.writerow(["Line", "Amount", "Rate", "Tax", "Rule", "Form"])
+    for x in s["result"]["lines"]:
+        w.writerow([x["label"], f"{x['base']:.2f}" if x["base"] is not None else "", f"{x['rate']:.4%}" if x["rate"] is not None else "",
+                    f"{x['tax']:.2f}" if x["tax"] is not None else "", x["rule"] + (" (shown, not added up)" if x["kind"] == "info" else ""), x["form"] or ""])
+    w.writerow(["Estimated tax", "", "", f"{s['result']['tax']:.2f}"])
+    w.writerow([])
+    w.writerow(["Form", "Box", "What", "Amount", "Note"])
+    for f in s["result"]["forms"]:
+        w.writerow([f["form"], f["box"], f["label"], "" if f["amount"] is None else f"{f['amount']:.2f}", f["note"]])
+    w.writerow([])
+    w.writerow(["Sold", "Ticker", "Name", "Kind", "Shares", "Bought", "Days held", f"Cost ({cur})", f"Proceeds ({cur})", f"Gain ({cur})", "Matched by", "Rate exact"])
+    for p in s["sales"]:
+        w.writerow([p["date"], _cell(p["ticker"]), _cell(p["name"]), p["category"], f"{p['shares']:.6g}", p["bought"] or "pool", "" if p["heldDays"] is None else p["heldDays"],
+                    f"{p['cost']:.2f}", f"{p['proceeds']:.2f}", f"{p['gain']:.2f}", p["rule"], "yes" if p["exact"] and p.get("exactCost", True) else "no"])
+    w.writerow([])
+    w.writerow(["Paid", "Ticker", "Name", "Country", f"Received ({cur})", f"Withheld ({cur})", f"Gross ({cur})", "Withheld entered"])
+    for d in s["dividends"]:
+        w.writerow([d["date"], _cell(d["ticker"]), _cell(d["name"]), _cell(d["country"] or ""), f"{d['net']:.2f}", f"{d['withheldEst']:.2f}", f"{d['gross']:.2f}",
+                    "yes" if d["withheldKnown"] else "no: usual rate assumed"])
+    w.writerow([])
+    for line in s["result"]["notes"] + s["result"]["unsure"] + s["caveats"]:
+        w.writerow([line])
+    return out.getvalue()

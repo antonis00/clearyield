@@ -45,6 +45,23 @@ const SLOW = 150000;
   const meta = await p.evaluate(async () => (await fetch("/api/meta")).json());
   expect(`mode is ${MODE}`, meta.demo === (MODE === "demo"), `base ${meta.settings.base_currency}, AI ${meta.ai}`);
 
+  // ---- The first-run checklist: on a fresh app every needed step is open; a step's button goes where it's done; Hide hides it
+  await p.waitForFunction(() => document.querySelector("#setupSteps li"), null, { timeout: SLOW });
+  const setup = await p.evaluate(() => ({ shown: !document.querySelector("#setupCard").classList.contains("hidden"), left: document.querySelector("#setupLeft").textContent,
+    steps: [...document.querySelectorAll("#setupSteps li")].map((li) => ({ key: li.dataset.step, done: li.classList.contains("done"), text: li.innerText })) }));
+  expect("dashboard: the first-run checklist lists what to set up", setup.shown && /^0 of 4 done$/.test(setup.left) && setup.steps.length === 6
+    && setup.steps.filter((s) => /optional/.test(s.text)).length === 2 && setup.steps.every((s) => !/undefined/.test(s.text)), `${setup.left} | ${setup.steps.map((s) => s.key).join(", ")}`);
+  await p.click('[data-setup-go="trade"]'); await p.waitForTimeout(900);
+  await p.waitForTimeout(1500);
+  const stepLanded = await p.evaluate(() => ({ hash: location.hash, top: document.querySelector("#recordCard").getBoundingClientRect().top, h: innerHeight }));
+  expect("dashboard: a checklist step opens where it's done", stepLanded.hash === "#portfolio" && stepLanded.top >= 0 && stepLanded.top < stepLanded.h, JSON.stringify(stepLanded));
+  await p.goto(`${BASE}#dashboard`, { waitUntil: "load" }); await p.reload();
+  await p.waitForFunction(() => !document.querySelector("#setupCard").classList.contains("hidden") && document.querySelector("#setupSteps li"), null, { timeout: SLOW });
+  await p.click("#setupHide");
+  const hid = await p.waitForFunction(() => document.querySelector("#setupCard").classList.contains("hidden"), null, { timeout: SLOW }).then(() => true, () => false);
+  expect("dashboard: the checklist hides", hid, await p.evaluate(async () => JSON.stringify((await (await fetch("/api/setup")).json()).dismissed)));
+  await p.evaluate(async () => { await fetch("/api/setup/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dismissed: false }) }); });
+
   // ---- The frame: Ask ClearYieldAI with the app's mark, last and apart at the bottom, by the line; the quote as an icon; a full-width search
   const frame = await p.evaluate(() => {
     const links = [...document.querySelectorAll("nav a")], ask = document.querySelector('nav a[data-view="ask"]');
@@ -94,7 +111,7 @@ const SLOW = 150000;
         : (peers.line === "" && peers.factors.length === 0), `${peers.line} | ${peers.factors[0] || ""}`);
       // Ownership: a stock's insiders and institutions, each trade named for what it was; a fund has no such card
       if (t === "AAPL") await p.waitForFunction(() => !/Loading/.test(document.querySelector("#rOwn").innerText), null, { timeout: SLOW });
-      const own = await p.evaluate(() => ({ shown: !document.querySelector("#rOwnCard").classList.contains("hidden"), text: document.querySelector("#rOwn").innerText }));
+      const own = await p.evaluate(() => ({ shown: !document.querySelector("#rOwnCard").classList.contains("hidden"), text: document.querySelector("#rOwn").textContent }));
       expect(`research ${t}: ${t === "AAPL" ? "ownership card" : "no ownership card for a fund"}`, t === "AAPL"
         ? (own.shown && /Held by insiders/i.test(own.text) && /Largest institutions/i.test(own.text) && /(Bought|Sold|Award, exercise or gift|No insider trades)/i.test(own.text) && /past 6 months|No insider/.test(own.text) && !/undefined|NaN/.test(own.text))
         : !own.shown, own.text.slice(0, 140));
@@ -103,6 +120,11 @@ const SLOW = 150000;
       const lay = await p.evaluate(() => ({ cls: document.querySelector("#rTags").innerText, fin: !document.querySelector("#finCard").classList.contains("hidden"), dcf: !document.querySelector("#dcfCard").classList.contains("hidden"),
         statsWide: document.querySelector("#statGrid").closest(".card").getBoundingClientRect().width / document.querySelector("#statGrid").closest(".grid2").getBoundingClientRect().width }));
       const company = t === "AAPL";
+      // The advanced tools sit in a fold, closed by default, naming what this asset has
+      const fold = await p.evaluate(() => ({ open: document.querySelector("#rAdvanced").open, list: document.querySelector("#rAdvList").textContent,
+        inside: ["#dcfCard", "#rOwnCard", "#ptCard"].every((id) => document.querySelector("#rAdvanced").contains(document.querySelector(id))) }));
+      expect(`research ${t}: advanced tools folded away, naming ${company ? "DCF, ownership and the pre-trade check" : "only the pre-trade check"}`,
+        !fold.open && fold.inside && fold.list === (company ? "DCF valuation, ownership, pre-trade check" : "Pre-trade check"), JSON.stringify(fold));
       const failedWith = await p.evaluate(() => { const e = document.querySelector("#researchEmpty"); return e && !e.classList.contains("hidden") ? e.textContent : ""; });
       expect(`research ${t}: fundamentals and DCF ${company ? "shown" : "hidden"}`, lay.fin === company && lay.dcf === company && (company ? lay.statsWide < 0.6 : lay.statsWide > 0.99),
         `width ${lay.statsWide.toFixed(2)}${failedWith ? ` | the page failed: ${failedWith}` : ""}`);
@@ -206,6 +228,7 @@ const SLOW = 150000;
   await p.locator(".factor .fh").first().click(); await p.waitForTimeout(100);
   expect("research: factor drill-down shows thresholds", /0 at 40, 100 at 10/.test(await txt(".factor.open .parts")), (await txt(".factor.open .parts"))?.slice(0, 90));
   expect("research: radar drawn", await canvasDrawn("#radar"));
+  await p.evaluate(() => { document.querySelector("#rAdvanced").open = true; });
   await p.fill("#dGrowth", "8"); await p.click("#btnDcf"); await p.waitForTimeout(1200);
   expect("research: DCF recalculates", /Fair value|needs positive/.test(await txt("#dcfOut")), await txt("#dcfOut"));
   await p.click("#btnBrief"); await p.waitForFunction(() => !document.querySelector("#btnBrief").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
@@ -218,6 +241,7 @@ const SLOW = 150000;
   await p.click("#btnHold"); await p.waitForTimeout(250);
   await p.fill("#modalCard input[name='shares']", "10"); await p.fill("#modalCard input[name='cost']", "150"); await p.fill("#modalCard input[name='bought']", "2024-06-03");
   await p.click("#modalCard form button.btn:not(.ghost)"); await p.waitForTimeout(1200);
+  await p.evaluate(() => { document.querySelector("#rAdvanced").open = true; });
   await p.fill("#ptAmount", "2000"); await p.fill("#ptStop", "100"); await p.click("#btnPretrade");
   await p.waitForFunction(() => !document.querySelector("#btnPretrade").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
   expect("research: pre-trade check", /Weight of this asset/.test(await txt("#ptOut")), (await txt("#ptOut")).slice(0, 110));
@@ -346,7 +370,9 @@ const SLOW = 150000;
   await shot("portfolio");
   // A sale and a dividend through the form
   await p.selectOption("#hKind", "sell"); await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hShares", "100"); await p.fill("#hCost", "18"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
-  await p.selectOption("#hKind", "dividend"); await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hCost", "120"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
+  await p.selectOption("#hKind", "dividend");
+  expect("portfolio: a dividend asks for the tax withheld, a purchase doesn't", await p.evaluate(() => !document.querySelector("#hWithheldWrap").classList.contains("hidden") && document.querySelector("#hSharesWrap").classList.contains("hidden")));
+  await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hCost", "120"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
   await p.selectOption("#hKind", "buy");
   const led = await p.evaluate(async () => (await fetch("/api/portfolio")).json());
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
@@ -367,6 +393,24 @@ const SLOW = 150000;
     && /Net realised/i.test(taxCard.text) && taxCard.csv === "/api/tax.csv?year=2025" && !/undefined|NaN/.test(taxCard.text), taxCard.text.slice(0, 200));
   const csv = await p.evaluate(async () => (await fetch("/api/tax.csv?year=2025")).text());
   expect("portfolio: the tax CSV lists the year's lines", /^Sales,2025/.test(csv) && /2025-06-02,QNBK\.QA/.test(csv), csv.split("\n").slice(0, 3).join(" | "));
+  // Tax residence: Germany's rules on the same year, its questions, the report; then back to none
+  expect("portfolio: without a residence the card says what choosing one adds", /Choose your tax residence/.test(await txt("#taxIntro")) && await p.evaluate(() => document.querySelector("#taxReport").classList.contains("hidden")));
+  await p.selectOption("#taxRes", "DE");
+  await p.waitForFunction(() => /Germany/.test(document.querySelector("#taxWhere").textContent) && document.querySelector("#taxLines table"), null, { timeout: SLOW });
+  await p.selectOption("#taxYear", "2025");
+  await p.waitForFunction(() => /Germany, 2025/.test(document.querySelector("#taxWhere").textContent), null, { timeout: SLOW });
+  const de = await p.evaluate(() => ({ text: document.querySelector("#taxCard").innerText.replace(/\s+/g, " "), report: document.querySelector("#taxReport").getAttribute("href"),
+    opts: document.querySelectorAll("#taxOpts [data-topt]").length, sources: document.querySelectorAll("#taxSources a").length, funds: document.querySelectorAll("#taxFunds select").length }));
+  expect("portfolio: Germany's rules: the calculation, the allowance, forms, deadlines and sources", /Estimated tax/.test(de.text) && /Sparer-Pauschbetrag/i.test(de.text) && /26\.375%/.test(de.text)
+    && /Deadline: Return for 2025/.test(de.text) && /QNBK\.QA/.test(de.text) && de.report === "/api/tax/report?year=2025" && de.opts === 4 && de.sources >= 3 && !/undefined|NaN/.test(de.text),
+    de.text.slice(0, 220));
+  await p.evaluate(() => { document.querySelector("#taxSetup").open = true; });
+  await p.selectOption('[data-topt="church"]', "9"); await p.waitForTimeout(1500);
+  const church = await p.evaluate(async () => (await (await fetch("/api/meta")).json()).settings.tax_options.DE);
+  expect("portfolio: a tax question's answer is saved and used", church.church === 9 && /27\.995%/.test(await txt("#taxLines")), JSON.stringify(church));
+  const report = await p.evaluate(async () => { const r = await fetch("/api/tax/report?year=2025"); return { ok: r.ok, text: await r.text() }; });
+  expect("portfolio: the tax report is a printable page with the year's figures", report.ok && /Tax year 2025: Germany/.test(report.text) && /Print or save as PDF/.test(report.text) && /not tax advice/.test(report.text));
+  await p.selectOption("#taxRes", ""); await p.waitForFunction(() => /Choose your tax residence/.test(document.querySelector("#taxIntro").textContent), null, { timeout: SLOW });
   expect("portfolio: look-through adds up", Math.abs(Object.values(led.allocation.sectorLookThrough).reduce((a, b) => a + b, 0) - led.total) < 1e-6, Object.keys(led.allocation.sectorLookThrough).slice(0, 4).join(", "));
   await shot("ledger");
   // Orders: prepared from the targets with new money, one approved, marked done (into the ledger), the rest left
@@ -421,7 +465,7 @@ const SLOW = 150000;
   expect("orders: Discard drops the suggestion, keeping the amount", !(await p.evaluate(() => document.querySelector("#ordPlan").innerHTML.trim())) && (await p.inputValue("#ordMoney")) === "3000"
     && !(await p.evaluate(async () => (await fetch("/api/orders")).json())).open.length);
   // What you act on comes before the analysis, and the transaction form sits by the list of transactions
-  const cardOrder = await p.evaluate(() => [...document.querySelectorAll("#view-portfolio .card-h h3")].map((h) => h.textContent));
+  const cardOrder = await p.evaluate(() => [...document.querySelectorAll("#view-portfolio .card-h h3")].map((h) => h.firstChild.textContent.trim()));
   const at = (t) => cardOrder.indexOf(t);
   expect("portfolio: positions, plan, rebalancing and orders come before the analysis and the records",
     at("Positions") < at("Your plan") && at("Your plan") < at("Rebalancing") && at("Rebalancing") < at("Orders") && at("Orders") < at("Risk")
@@ -723,6 +767,7 @@ const SLOW = 150000;
   // Hovering a dot names the company; the corner's stocks are named on the map itself
   // the dot furthest from any other, since with hundreds of stocks a dot can sit under another one
   const dot = await p.evaluate(() => {
+    state.charts.dashOppChart.canvas.scrollIntoView({ block: "center" });
     const c = state.charts.dashOppChart, pts = c.getDatasetMeta(0).data, r = c.canvas.getBoundingClientRect();
     let best = 0, far = -1;
     pts.forEach((m, i) => { const d = Math.min(...pts.map((o, j) => (i === j ? Infinity : Math.hypot(o.x - m.x, o.y - m.y)))); if (d > far) { far = d; best = i; } });
@@ -762,6 +807,22 @@ const SLOW = 150000;
   await p.reload(); await p.waitForFunction(() => document.querySelector("#digestTabs .on")?.dataset.tab === "news" && document.querySelector("#digestList li:not(.loading)"), null, { timeout: SLOW });
   expect("dashboard: the digest tab is remembered", true);
   await p.click('#digestTabs [data-tab="highlights"]'); await p.waitForTimeout(200);
+  // Long-term: the day's moves, RSI and market lines leave Highlights and are counted; flipping back restores them
+  const lines = () => p.evaluate(() => [...document.querySelectorAll("#digestList li")].map((li) => li.innerText));
+  const everything = await lines();
+  await p.click("#digestLong"); await p.waitForTimeout(200);
+  const quiet = await lines();
+  const api = await p.evaluate(async () => (await (await fetch("/api/digest")).json()).items);
+  const shortN = api.filter((i) => i.short && i.kind !== "news").length;
+  expect("dashboard: the Long-term digest leaves out the short-term lines and says how many", shortN > 0
+    && !quiet.some((l) => /Your portfolio (gained|lost)|overbought|oversold| moved [+-]/.test(l))
+    && quiet.some((l) => new RegExp(`Long-term view: ${shortN} short-term line`).test(l))
+    && api.filter((i) => !i.short && i.kind !== "news").every((i) => quiet.some((l) => l.startsWith(i.text.slice(0, 30)))),
+    `${everything.length} lines, long-term ${quiet.length}, short ${shortN}`);
+  await p.reload(); await p.waitForFunction(() => document.querySelector("#digestList li:not(.loading)"), null, { timeout: SLOW });
+  expect("dashboard: the Long-term switch is remembered", await p.evaluate(() => document.querySelector("#digestLong").checked));
+  await p.click("#digestLong"); await p.waitForTimeout(200);
+  expect("dashboard: switching back shows every line again", (await lines()).length === everything.length && (await lines()).some((l) => /Your portfolio (gained|lost)/.test(l)));
   // The same height on either tab; a refresh never empties the list (watched every frame while it runs)
   const heights = [];
   for (const tab of ["news", "highlights"]) { await p.click(`#digestTabs [data-tab="${tab}"]`); await p.waitForTimeout(150); heights.push(await p.evaluate(() => document.querySelector("#digestList").getBoundingClientRect().height)); }
