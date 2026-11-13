@@ -540,3 +540,28 @@ nav a.nav-ask { margin-top: auto; } /* at the bottom of the menu, lined up with 
 .tax-setup { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
 .tax-setup summary { cursor: pointer; font-weight: 600; }
 #taxSources { margin-top: 8px; }
+
+/* The searchable picker (picker() in app.js) over a <select> kept out of sight */
+.pick-native { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; border: 0 !important; opacity: 0; pointer-events: none; }
+.pick-btn { display: inline-flex; align-items: center; gap: 10px; min-width: 240px; max-width: 100%; padding: 8px 12px; text-align: left; cursor: pointer;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--field-line, var(--line)); border-radius: 8px; font: inherit; }
+.pick-btn:hover { border-color: var(--muted); }
+.pick-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.pick-btn .pick-l { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-sub { font: 500 11px var(--mono); color: var(--muted); }
+.pick-caret { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg) translateY(-2px); flex: none; }
+.pick-panel { position: fixed; z-index: 1000; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; gap: 6px; animation: pickIn 0.12s ease-out; }
+@keyframes pickIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.pick-search { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 8px; }
+.pick-list { position: relative; list-style: none; margin: 0; padding: 2px; max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.pick-list::-webkit-scrollbar { width: 8px; }
+.pick-list::-webkit-scrollbar-track { background: transparent; }
+.pick-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; border: 2px solid var(--panel); }
+.pick-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; }
+.pick-list li .pick-l { flex: 1; }
+.pick-list li.on { background: var(--panel2); }
+.pick-list li[aria-selected="true"] .pick-l { font-weight: 600; }
+.pick-tick { color: var(--accent); font-weight: 700; }
+.pick-list .pick-empty { color: var(--muted); cursor: default; white-space: normal; }
+label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
