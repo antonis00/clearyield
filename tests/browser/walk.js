@@ -395,8 +395,17 @@ const SLOW = 150000;
   expect("portfolio: the tax CSV lists the year's lines", /^Sales,2025/.test(csv) && /2025-06-02,QNBK\.QA/.test(csv), csv.split("\n").slice(0, 3).join(" | "));
   // Tax residence: Germany's rules on the same year, its questions, the report; then back to none
   expect("portfolio: without a residence the card says what choosing one adds", /Choose your tax residence/.test(await txt("#taxIntro")) && await p.evaluate(() => document.querySelector("#taxReport").classList.contains("hidden")));
-  await p.selectOption("#taxRes", "DE");
+  // The residence picker: a button, then a panel with a search box over the countries (accents and case ignored)
+  await p.click("#taxRes + .pick-btn");
+  const picker = await p.evaluate(() => ({ items: document.querySelectorAll(".pick-panel li[data-v]").length, focus: document.activeElement?.classList.contains("pick-search"),
+    width: document.querySelector(".pick-panel").getBoundingClientRect().width }));
+  await p.keyboard.type("germ"); await p.waitForTimeout(150);
+  const found = await p.evaluate(() => [...document.querySelectorAll(".pick-panel li[data-v]")].map((li) => li.dataset.v));
+  await p.keyboard.press("Enter");
+  expect("portfolio: the tax residence picker is wide and searchable, Enter chooses", picker.items === 16 && picker.focus && picker.width >= 340 && found.join() === "DE"
+    && !(await p.evaluate(() => document.querySelector(".pick-panel"))), `${picker.items} countries, ${Math.round(picker.width)}px, found ${found.join()}`);
   await p.waitForFunction(() => /Germany/.test(document.querySelector("#taxWhere").textContent) && document.querySelector("#taxLines table"), null, { timeout: SLOW });
+  expect("portfolio: the picker shows the choice", /Germany/.test(await txt("#taxRes + .pick-btn")));
   await p.selectOption("#taxYear", "2025");
   await p.waitForFunction(() => /Germany, 2025/.test(document.querySelector("#taxWhere").textContent), null, { timeout: SLOW });
   const de = await p.evaluate(() => ({ text: document.querySelector("#taxCard").innerText.replace(/\s+/g, " "), report: document.querySelector("#taxReport").getAttribute("href"),

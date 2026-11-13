@@ -1736,8 +1736,81 @@ const TAX_DOM = { EU: "EU (UCITS)", US: "United States", other: "Elsewhere" };
 let taxYearShown = null;
 function taxResOptions(sel, chosen) {
   const list = state.meta.taxCountries || [];
-  sel.innerHTML = `<option value="">Not chosen</option>` + list.map((c) => `<option value="${esc(c.code)}">${esc(c.name)} (${esc(c.currency)})</option>`).join("") + `<option value="other">Somewhere else</option>`;
+  sel.innerHTML = `<option value="" data-sub="">Not chosen</option>` + list.map((c) => `<option value="${esc(c.code)}" data-sub="${esc(c.currency)}">${esc(c.name)}</option>`).join("")
+    + `<option value="other" data-sub="plain arithmetic">Somewhere else</option>`;
   sel.value = chosen || "";
+  picker(sel, { placeholder: "Search countries…", empty: "No country matches. Choose “Somewhere else” for the plain arithmetic." });
+}
+
+// A searchable picker over a <select>: a button showing the choice, and a panel with a search box and the options,
+// filtered as you type (ignoring accents and case), moved through with the arrow keys, chosen with Enter or a click.
+// The <select> stays the source of truth, kept in the page but out of sight: its value is what's saved, a change on it
+// fires as before, and setting it from code is shown on the button by calling picker() again.
+function picker(sel, opts = {}) {
+  const fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  let p = sel._picker;
+  if (!p) {
+    sel.classList.add("pick-native"); sel.tabIndex = -1;
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "pick-btn"; btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-label", sel.getAttribute("aria-label") || sel.closest("label")?.firstChild?.textContent?.trim() || "Choose");
+    sel.after(btn);
+    p = sel._picker = { btn };
+    sel.addEventListener("change", () => draw());
+    btn.onclick = (e) => { e.preventDefault(); open(); };
+    btn.onkeydown = (e) => { if (["ArrowDown", "ArrowUp"].includes(e.key)) { e.preventDefault(); open(); } };
+  }
+  const items = () => [...sel.options].map((o) => ({ value: o.value, label: o.textContent, sub: o.dataset.sub || "" }));
+  function draw() {
+    const cur = items().find((i) => i.value === sel.value) || items()[0];
+    p.btn.innerHTML = `<span class="pick-l">${esc(cur?.label || "")}</span>${cur?.sub ? `<span class="pick-sub">${esc(cur.sub)}</span>` : ""}<span class="pick-caret" aria-hidden="true"></span>`;
+  }
+  function open() {
+    document.querySelector(".pick-panel")?.remove();
+    const panel = document.createElement("div"), id = `pick${Math.random().toString(36).slice(2, 8)}`;
+    panel.className = "pick-panel";
+    panel.innerHTML = `<input class="pick-search" name="pick-search" type="search" role="combobox" aria-expanded="true" aria-controls="${id}" aria-label="${esc(opts.placeholder || "Search")}" placeholder="${esc(opts.placeholder || "Search…")}" autocomplete="off" spellcheck="false">
+      <ul class="pick-list" role="listbox" id="${id}"></ul>`;
+    document.body.append(panel);
+    const r = p.btn.getBoundingClientRect(), w = Math.max(r.width, 340);
+    panel.style.width = `${Math.min(w, innerWidth - 32)}px`;
+    panel.style.left = `${Math.max(16, Math.min(r.left, innerWidth - 16 - panel.offsetWidth))}px`;
+    const below = innerHeight - r.bottom;
+    if (below < 320 && r.top > below) panel.style.bottom = `${innerHeight - r.top + 6}px`; else panel.style.top = `${r.bottom + 6}px`;
+    const input = panel.querySelector("input"), ul = panel.querySelector("ul");
+    let shown = [], at = 0;
+    const opened = Date.now();
+    const reveal = (li) => { if (!li) return; if (li.offsetTop < ul.scrollTop) ul.scrollTop = li.offsetTop; else if (li.offsetTop + li.offsetHeight > ul.scrollTop + ul.clientHeight) ul.scrollTop = li.offsetTop + li.offsetHeight - ul.clientHeight; };
+    const list = () => {
+      const q = fold(input.value.trim());
+      shown = items().filter((i) => !q || fold(`${i.label} ${i.sub} ${i.value}`).includes(q));
+      at = Math.max(0, shown.findIndex((i) => i.value === sel.value));
+      if (q) at = 0;
+      ul.innerHTML = shown.length ? shown.map((i, n) => `<li role="option" data-v="${esc(i.value)}" aria-selected="${i.value === sel.value}" class="${n === at ? "on" : ""}">
+        <span class="pick-l">${esc(i.label)}</span>${i.sub ? `<span class="pick-sub">${esc(i.sub)}</span>` : ""}${i.value === sel.value ? '<span class="pick-tick" aria-hidden="true">✓</span>' : ""}</li>`).join("")
+        : `<li class="pick-empty">${esc(opts.empty || "Nothing matches.")}</li>`;
+      reveal(ul.querySelector(".on"));
+    };
+    const move = (d) => { if (!shown.length) return; at = (at + d + shown.length) % shown.length; [...ul.children].forEach((li, n) => li.classList.toggle("on", n === at)); reveal(ul.children[at]); };
+    const choose = (v) => { close(); p.btn.focus(); if (v !== sel.value) { sel.value = v; sel.dispatchEvent(new Event("change", { bubbles: true })); } draw(); };
+    const close = () => { panel.remove(); document.removeEventListener("mousedown", outside, true); removeEventListener("resize", close); document.removeEventListener("scroll", onScroll, true); };
+    const outside = (e) => { if (!panel.contains(e.target) && e.target !== p.btn && !p.btn.contains(e.target)) close(); };
+    const onScroll = (e) => { if (!panel.contains(e.target) && Date.now() - opened > 400) close(); };  // the page moving away closes it
+    input.oninput = list;
+    input.onkeydown = (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+      else if (e.key === "Enter") { e.preventDefault(); if (shown[at]) choose(shown[at].value); }
+      else if (e.key === "Escape") { e.preventDefault(); close(); p.btn.focus(); }
+      else if (e.key === "Tab") close();
+    };
+    ul.onmousedown = (e) => e.preventDefault();  // keeps the focus in the search box
+    ul.onclick = (e) => { const li = e.target.closest("li[data-v]"); if (li) choose(li.dataset.v); };
+    ul.onmousemove = (e) => { const li = e.target.closest("li[data-v]"); if (!li) return; const n = [...ul.children].indexOf(li); if (n !== at) { at = n; [...ul.children].forEach((x, k) => x.classList.toggle("on", k === at)); } };
+    document.addEventListener("mousedown", outside, true); addEventListener("resize", close); document.addEventListener("scroll", onScroll, true);
+    list(); input.focus({ preventScroll: true });
+  }
+  draw();
 }
 async function saveTaxSettings(body, msg) {
   state.meta.settings = await api("/api/settings", { method: "POST", body });
