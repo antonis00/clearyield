@@ -5654,6 +5654,31 @@ def test_first_run_checklist_ticks_from_what_is_saved():
     _reset()
 
 
+
+def test_tax_in_qatar_is_nothing_at_home_but_costs_abroad():
+    """Qatar taxes neither gains nor dividends; the US keeps 30% of a dividend (no treaty), assumed when not entered,
+    and US-listed holdings are measured against the $60,000 US estate tax threshold."""
+    from backend import data
+    _reset()
+    with TestClient(app) as c:
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        assert post(ticker="AAPL", kind="buy", date="2025-01-10", shares=10, price=100).status_code == 200
+        assert post(ticker="AAPL", kind="sell", date="2026-02-02", shares=4, price=150).status_code == 200
+        assert post(ticker="AAPL", kind="dividend", date="2026-05-04", amount=70).status_code == 200
+        assert c.post("/api/settings", json={"tax_residence": "QA"}).status_code == 200
+        r = c.get("/api/tax?year=2026").json()["residence"]
+        res = r["result"]
+        assert r["currency"] == "QAR" and res["tax"] == 0 and [x["code"] for x in c.get("/api/tax").json()["countries"]].index("QA") == 10
+        d = r["dividends"][0]
+        q = data.fx_on("USD", "QAR", "2026-05-04")
+        assert d["estimated"] and abs(d["gross"] - 100 * q) < 1e-6 and abs(d["withheldEst"] - 30 * q) < 1e-6, d
+        estate = res["usEstate"]
+        assert estate["tickers"] == ["AAPL"] and estate["threshold"] == 60000 and estate["usd"] > 0
+        assert any("30%" in n for n in res["notes"]) and any("Nothing to file" in x for x in res["deadlines"])
+        assert c.get("/api/tax/report?year=2026").status_code == 200
+    _reset()
+
+
 if __name__ == "__main__":
     import logging
     import time
