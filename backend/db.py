@@ -50,6 +50,8 @@ ADDED_COLUMNS = {
     "journal": {"score": "REAL", "stance": "TEXT", "factors": "TEXT", "benchmark": "TEXT"},
     # A fired alert stays in the digest until it's dismissed
     "alerts": {"dismissed": "INTEGER DEFAULT 0"},
+    # A dividend's tax withheld at source, in the currency paid, when you enter it: the tax year credits it
+    "transactions": {"withheld": "REAL"},
 }
 
 DEFAULT_SETTINGS = {
@@ -68,6 +70,12 @@ DEFAULT_SETTINGS = {
     # What you invest each month and the goal it's for (plan.py): the goal in today's money by a date, with the yearly
     # return and inflation the check assumes
     "plan": {"monthly": 0, "goal": 0, "by": "", "expected": 0.06, "inflation": 0.02},
+    "setup_dismissed": False,  # the dashboard's first-run checklist hidden before every step was done (firstrun.py)
+    # Where you're resident for tax ("" not chosen, "other" none of the listed), your answers to its questions, and
+    # funds' kind and domicile where the name and listing guess wrong (taxlaw.py)
+    "tax_residence": "",
+    "tax_options": {},
+    "fund_tax": {},
 }
 
 
@@ -435,6 +443,10 @@ SETTING_CHECKS = {
     "email_alerts": _switch("Email alerts"),
     "fund_costs": _fund_costs,
     "plan": lambda v: {**DEFAULT_SETTINGS["plan"], **__import__("backend.plan", fromlist=["check"]).check(v)},
+    "setup_dismissed": _switch("Hiding the checklist"),
+    "tax_residence": lambda v: __import__("backend.taxlaw", fromlist=["check_residence"]).check_residence(v),
+    "tax_options": lambda v: __import__("backend.taxlaw", fromlist=["check_options"]).check_options(v),
+    "fund_tax": lambda v: __import__("backend.taxlaw", fromlist=["check_fund_tax"]).check_fund_tax(v),
 }
 
 

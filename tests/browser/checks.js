@@ -291,6 +291,7 @@ const CHECKS = {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });
     await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
     await page.waitForTimeout(800);
+    await page.evaluate(() => { document.querySelector("#rAdvanced").open = true; });
     await page.fill("#dGrowth", "7.5"); await page.fill("#ptAmount", "1234");
     await page.click("#btnBrief"); await page.waitForFunction(() => !document.querySelector("#btnBrief").disabled, null, { timeout: 60000 });
     const brief = await page.innerText("#briefOut");

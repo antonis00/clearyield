@@ -341,6 +341,31 @@ def get_watchlist():
     return {"watchlist": out, "no_data": [r["ticker"] for r in rows if "error" in r] or None}
 
 
+def get_tax(year=None):
+    """The tax year under the investor's tax residence: each line with its rate and rule, allowances left, forms,
+    deadlines and what to know before the year ends. Figures carry their currency."""
+    from . import tax
+    s = _settings()
+    code = s.get("tax_residence")
+    if code in ("", "other", None):
+        return {"tax": "no tax residence chosen: the investor can choose one in Settings or the Tax year card on the Portfolio page",
+                "plain_figures": {k: v for k, v in tax.summary(s, year).items() if k in ("year", "gains", "losses", "net", "dividendTotal", "base")}}
+    r = tax.residence_summary(s, year)
+    cur, res = r["currency"], r["result"]
+    f = lambda v: None if v is None else f"{v:,.2f} {cur}"  # noqa: E731
+    return {"residence": r["residence"]["name"], "tax_year": r["label"], "period": f"{r['start']} to {r['end']}",
+            "estimated_tax": f(res["tax"]), "rules_checked": r["verified"],
+            "lines": [{"what": x["label"], "amount": f(x["base"]), "rate": None if x["rate"] is None else f"{x['rate']:.2%}", "tax": f(x["tax"]) if x["kind"] == "tax" else "shown only, not added",
+                       "rule": x["rule"], "form": x["form"]} for x in res["lines"]],
+            "allowances": [f"{a['name']}: {f(a['left'])} left of {f(a['amount'])}" for a in res["allowances"]] or None,
+            "sales": len({p["saleId"] for p in r["sales"]}), "net_gain_on_sales": f(sum(p["gain"] for p in r["sales"])),
+            "dividends_gross": f(sum(d["gross"] for d in r["dividends"])),
+            "forms": [f"{x['form']} {x['box']}: {x['label']}" + (f" = {f(x['amount'])}" if x["amount"] is not None else "") for x in res["forms"]] or None,
+            "deadlines": res["deadlines"] or None, "before_the_year_ends": [p["text"] for p in r["planning"]] or None,
+            "notes": res["notes"] or None, "not_settled_by_sources": res["unsure"] or None,
+            "caveat": "arithmetic on the investor's records under stated rules, not tax advice"}
+
+
 def get_plan():
     """The investor's monthly plan and goal: this month's money, what's gone in, the orders drafted for the rest, and
     the chance of reaching the goal."""
@@ -599,6 +624,8 @@ ONE = S({"ticker": {"type": "string"}}, ["ticker"])  # Yahoo symbols (AAPL, SAP.
 TOOLS = {
     "get_portfolio": (get_portfolio, "The investor's holdings, value, gains, return, core/satellite split, currency and sector exposure (funds looked through), warnings.", S({})),
     "get_watchlist": (get_watchlist, "The stocks the investor watches: latest day, past year, score.", S({})),
+    "get_tax": (get_tax, "The investor's tax year under their tax residence's rules: estimated tax line by line with each rule, allowances left, the forms and boxes, deadlines, and what to do before the year ends. Use for any question about tax, capital gains, allowances or the tax return.",
+                S({"year": {"type": "integer", "description": "Tax year (its first calendar year); this one if left out"}})),
     "get_plan": (get_plan, "The investor's monthly plan and goal: this month's amount and what's left to invest, suggested buys, the chance of reaching the goal. Use for 'what should I do this month' and 'am I on track'.", S({})),
     "get_digest": (get_digest, "Today's digest: alerts, portfolio points, moves and events of holdings and watched stocks, market moves, recent headlines.", S({})),
     "get_stock": (get_stock, "One stock, fund or coin: scores, key figures, returns, risk, signals, rank in its sector, latest day.", ONE),
@@ -702,6 +729,7 @@ def mentioned(question):
 
 
 PREFETCH_PLAN = re.compile(r"\b(this month|on track|my (goal|plan)|monthly (plan|amount)|how much (should|do) i (invest|put))\b", re.I)
+PREFETCH_TAX = re.compile(r"\b(tax|taxes|taxed|capital gains?|allowance|tax return|harvest(ing)?)\b", re.I)
 
 
 def prefetch(question):
@@ -711,6 +739,8 @@ def prefetch(question):
     plan = [("get_portfolio", {})] if PREFETCH["portfolio"].search(question) else []
     if PREFETCH_PLAN.search(question):  # "what do I do this month", "am I on track for my goal"
         plan.append(("get_plan", {}))
+    if PREFETCH_TAX.search(question):  # "how much tax do I owe this year", "should I sell before year end"
+        plan.append(("get_tax", {}))
     plan += [("get_stock", {"ticker": t}) for t in stocks]
     if len(stocks) >= 2 and PREFETCH["compare"].search(question):  # side by side, with how closely they move together
         plan.append(("compare", {"tickers": stocks}))

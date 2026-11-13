@@ -51,6 +51,10 @@
 
   <!-- DASHBOARD -->
   <section id="view-dashboard" class="view">
+    <div class="card setup hidden" id="setupCard">
+      <div class="card-h"><h3>Getting started <span class="muted sm" id="setupLeft"></span></h3><button class="btn ghost sm" id="setupHide">Hide</button></div>
+      <ol id="setupSteps" class="setup-steps"></ol>
+    </div>
     <div id="macroStrip" class="macro"></div>
     <div class="grid2">
       <div class="card">
@@ -60,7 +64,7 @@
         <div id="dashExtras"></div>
       </div>
       <div class="card">
-        <div class="card-h"><h3>Today's digest <span id="digestInfo"></span></h3><div class="form-row inline"><div class="seg" id="digestTabs"><button data-tab="highlights">Highlights</button><button data-tab="news">News</button></div><button class="btn ghost sm" id="refreshDigest">Refresh</button></div></div>
+        <div class="card-h"><h3>Today's digest <span id="digestInfo"></span></h3><div class="form-row inline"><label class="ord-opt" title="Long-term: leaves out a day's moves, RSI, stance changes and market moves; keeps alerts, orders, your plan, dividends, targets, warnings, earnings and journal reminders"><span class="switch"><input type="checkbox" id="digestLong" role="switch"><span></span></span><span>Long-term</span></label><div class="seg" id="digestTabs"><button data-tab="highlights">Highlights</button><button data-tab="news">News</button></div><button class="btn ghost sm" id="refreshDigest">Refresh</button></div></div>
         <ul id="digestList" class="digest"></ul>
       </div>
     </div>
@@ -164,7 +168,16 @@
         </div>
       </div>
 
+      <div class="card hidden" id="rFundCard"><div class="card-h"><h3>Inside this fund</h3><span class="muted sm">Yahoo lists the top 10 holdings only</span></div><div id="rFund"></div></div>
       <div class="grid2">
+        <div class="card">
+          <div class="card-h"><h3>News</h3></div>
+          <ul id="newsList" class="news"></ul>
+        </div>
+        <div class="card"><div class="card-h"><h3>About</h3></div><p id="rAbout" class="about"></p></div>
+      </div>
+      <details class="adv" id="rAdvanced">
+        <summary><span class="adv-t">Advanced tools</span><span class="muted sm" id="rAdvList">DCF valuation, ownership, pre-trade check</span></summary>
         <div class="card" id="dcfCard">
           <div class="card-h"><h3>DCF valuation</h3><span class="muted sm">Free-cash-flow model</span></div>
           <div class="form-row">
@@ -176,26 +189,20 @@
           </div>
           <div id="dcfOut"></div>
         </div>
-        <div class="card">
-          <div class="card-h"><h3>News</h3></div>
-          <ul id="newsList" class="news"></ul>
+        <div class="card hidden" id="rOwnCard"><div class="card-h"><h3>Ownership</h3><span class="muted sm">Insiders and institutions, as Yahoo reports them</span></div><div id="rOwn"></div></div>
+        <div class="card" id="ptCard">
+          <div class="card-h"><h3>Pre-trade check</h3><span class="muted sm">A what-if on your portfolio. Nothing is saved or traded.</span></div>
+          <div class="form-row">
+            <label><span id="ptAmountLabel">Amount</span><input type="number" id="ptAmount" step="any" min="0"></label>
+            <label>Entry price<input type="number" id="ptEntry" step="any" min="0"></label>
+            <label>Stop price<input type="number" id="ptStop" step="any" min="0"></label>
+            <label><span id="ptRiskLabel">Most I'd lose</span><input type="number" id="ptRisk" step="any" min="0"></label>
+            <button class="btn" id="btnPretrade">Check</button>
+          </div>
+          <p class="muted sm">Enter an amount, or a stop and the most you'd accept losing to size the position from your risk.</p>
+          <div id="ptOut"></div>
         </div>
-      </div>
-      <div class="card hidden" id="rOwnCard"><div class="card-h"><h3>Ownership</h3><span class="muted sm">Insiders and institutions, as Yahoo reports them</span></div><div id="rOwn"></div></div>
-      <div class="card hidden" id="rFundCard"><div class="card-h"><h3>Inside this fund</h3><span class="muted sm">Yahoo lists the top 10 holdings only</span></div><div id="rFund"></div></div>
-      <div class="card">
-        <div class="card-h"><h3>Pre-trade check</h3><span class="muted sm">A what-if on your portfolio. Nothing is saved or traded.</span></div>
-        <div class="form-row">
-          <label><span id="ptAmountLabel">Amount</span><input type="number" id="ptAmount" step="any" min="0"></label>
-          <label>Entry price<input type="number" id="ptEntry" step="any" min="0"></label>
-          <label>Stop price<input type="number" id="ptStop" step="any" min="0"></label>
-          <label><span id="ptRiskLabel">Most I'd lose</span><input type="number" id="ptRisk" step="any" min="0"></label>
-          <button class="btn" id="btnPretrade">Check</button>
-        </div>
-        <p class="muted sm">Enter an amount, or a stop and the most you'd accept losing to size the position from your risk.</p>
-        <div id="ptOut"></div>
-      </div>
-      <div class="card"><div class="card-h"><h3>About</h3></div><p id="rAbout" class="about"></p></div>
+      </details>
     </div>
   </section>
 
@@ -333,13 +340,14 @@
         <label>Ticker<input id="hTicker" placeholder="AAPL"></label>
         <label id="hSharesWrap">Shares<input type="number" id="hShares" step="any"></label>
         <label><span id="hCostLabel">Price / share</span><input type="number" id="hCost" step="any"></label>
+        <label id="hWithheldWrap" class="hidden" title="What the paying country kept before the broker paid you, if your statement shows it: the tax year credits it against your own tax"><span id="hWithheldLabel">Tax withheld</span><input type="number" id="hWithheld" step="any" min="0" placeholder="optional"></label>
         <label>Date<input type="date" id="hDate"></label>
         <label class="grow">Note<input id="hNote"></label>
         <button class="btn" id="btnAddHolding">Record</button>
       </div>
       <div id="hHint" class="muted sm"></div>
       <details id="pasteBox"><summary class="muted sm">Paste several at once</summary>
-        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total received in price, in the currency paid (pounds, not pence, for London stocks). If any line has a problem, nothing is added.</p>
+        <p class="muted sm">One per line: <code>ticker,shares,price,date,type,note,withheld</code>. Type is buy, sell or dividend, and buy if left out. For a dividend, leave shares empty and put the total received in price, in the currency paid (pounds, not pence, for London stocks). If any line has a problem, nothing is added.</p>
         <textarea id="hPaste" rows="5" aria-label="Transactions to paste, one per line" placeholder="AAPL,10,150,2024-06-03&#10;AAPL,4,200,2025-01-02,sell&#10;AAPL,,6.50,2025-02-03,dividend"></textarea>
         <div class="form-row"><button class="btn ghost" id="btnPaste">Add these</button></div>
       </details>
@@ -350,11 +358,22 @@
       <div id="pfClosed"></div>
     </div>
     <div class="card" id="taxCard">
-      <div class="card-h"><h3>Tax year</h3><div class="form-row inline"><select id="taxYear" aria-label="Tax year"></select><a class="btn ghost sm" id="taxCsv" href="/api/tax.csv" download>Download CSV</a></div></div>
+      <div class="card-h"><h3>Tax year <span class="muted sm" id="taxWhere"></span></h3><div class="form-row inline">
+        <select id="taxRes" aria-label="Tax residence"></select><select id="taxYear" aria-label="Tax year"></select>
+        <a class="btn ghost sm hidden" id="taxReport" href="/api/tax/report" target="_blank" rel="noopener">Report</a>
+        <a class="btn ghost sm" id="taxCsv" href="/api/tax.csv" download>Download CSV</a></div></div>
+      <div id="taxIntro" class="muted sm"></div>
       <div id="taxKpis" class="kpis"></div>
+      <div id="taxPlan"></div>
+      <div id="taxLines" class="tablewrap"></div>
       <div id="taxSales" class="tablewrap"></div>
       <div id="taxDivs" class="tablewrap"></div>
+      <div id="taxExtra" class="tablewrap"></div>
+      <div id="taxForms" class="tablewrap"></div>
+      <details id="taxSetup" class="tax-setup hidden"><summary>Your answers and your funds <span class="muted sm">(they change the figures)</span></summary>
+        <div id="taxOpts" class="form-row"></div><div id="taxFunds" class="tablewrap"></div></details>
       <ul id="taxNotes" class="signals"></ul>
+      <div id="taxSources" class="muted sm"></div>
     </div>
   </section>
 
@@ -490,6 +509,7 @@
           <label>Base currency<select id="sBase"><option>USD</option><option>EUR</option><option>QAR</option><option>GBP</option><option>SAR</option><option>AED</option><option>CHF</option></select></label>
           <label>Risk-free rate %<input type="number" id="sRf" step="0.25"></label>
           <label>Benchmark<input id="sBench"></label>
+          <label>Tax residence<select id="sTaxRes"></select></label>
         </div>
         <h4 style="margin-top: 16px">Regions you follow</h4>
         <div class="markets chips" id="sRegions"></div>
@@ -523,6 +543,7 @@
           <div class="card-h"><h3>Data</h3></div>
           <div class="form-row"><button class="btn ghost" id="btnClearCache">Refresh all data</button><a class="btn ghost" id="btnBackup" href="/api/backup" download style="margin-left: auto">Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
         <p class="muted sm" id="autoBackupNote" style="margin: 0"></p>
+        <p class="sm hidden" id="setupShow" style="margin: 8px 0 0"><button class="btn ghost sm" id="btnSetupShow">Show the Getting started checklist</button></p>
         </div>
       </div>
       <div class="card">

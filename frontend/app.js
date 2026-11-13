@@ -341,7 +341,37 @@ function snapshotExtras(p) {
   }
   return out.join("");
 }
+// The first-run checklist: each step is ticked from what's saved, so it can't disagree with the data. It goes once
+// every needed step is done, or when hidden (Settings' Data card can bring it back)
+async function loadSetup() {
+  const card = $("#setupCard");
+  try {
+    const s = await api("/api/setup");
+    state.setup = s;
+    card.classList.toggle("hidden", !s.show);
+    const back = $("#setupShow");
+    if (back) back.classList.toggle("hidden", !(s.dismissed && s.left > 0));
+    if (!s.show) return;
+    $("#setupLeft").textContent = `${s.needed - s.left} of ${s.needed} done`;
+    $("#setupSteps").innerHTML = s.steps.map((x) => `<li class="${x.done ? "done" : ""}" data-step="${esc(x.key)}">
+      <span class="tick" aria-hidden="true">${x.done ? "✓" : ""}</span>
+      <div><div class="st-t">${esc(x.title)}${x.optional ? ' <span class="muted sm">(optional)</span>' : ""}</div>
+      <div class="st-w muted sm">${esc(x.why)}</div>
+      ${x.done ? '<span class="muted sm">Done</span>' : `<a href="#${esc(x.goto)}" class="btn ghost sm" data-setup-go="${esc(x.key)}">${x.key === "ai" ? "How" : "Do it"} →</a>`}</div></li>`).join("");
+    $$("[data-setup-go]").forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      const x = s.steps.find((y) => y.key === a.dataset.setupGo);
+      show(x.goto);
+      const go = () => { const el = x.target && $(x.target); if (el) { (el.closest(".card") || el).scrollIntoView({ block: "start" }); if (el.matches("input, select")) el.focus({ preventScroll: true }); } };
+      [250, 900].forEach((ms) => setTimeout(go, ms));
+    });
+  } catch { card.classList.add("hidden"); }
+}
+$("#btnSetupShow").onclick = async () => { await api("/api/setup/dismiss", { method: "POST", body: { dismissed: false } }); location.hash = "#dashboard"; };
+$("#setupHide").onclick = async () => { await api("/api/setup/dismiss", { method: "POST", body: { dismissed: true } }); loadSetup(); toast("Hidden. Settings' Data card can show it again."); };
+
 async function loadDashboard() {
+  loadSetup();
   const strip = $("#macroStrip");
   if (!strip.children.length) loading(strip, "Loading markets…");
   api("/api/macro").then((m) => {
@@ -385,15 +415,19 @@ async function loadDashboard() {
     .afterDraw(() => $$("[data-rm]", wt).forEach((b) => b.onclick = async () => { await api(`/api/watchlist/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); loadDashboard(); }));
   } catch (e) { wt.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
 }
-const DIGEST_RULES = "Each line is a rule with its figures. In order: your alerts, journal reminders and approved orders not yet marked done; your portfolio's latest-day change, its core share against your target, any warnings, this month's planned money not yet invested and dividends Yahoo lists while you held a holding that aren't recorded; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
+const DIGEST_RULES = "Each line is a rule with its figures. The Long-term switch leaves out the short-term lines (a day's moves, RSI, stance changes, the portfolio's day and market moves) and keeps the rest. In order: your alerts, journal reminders and approved orders not yet marked done; your portfolio's latest-day change, its core share against your target, any warnings, this month's planned money not yet invested and dividends Yahoo lists while you held a holding that aren't recorded; holdings and watchlist names that moved 3% or more in a day, have an RSI over 70 or under 30, report earnings or go ex-dividend soon, score Weak or change stance; dashboard tiles that moved more than usual for their kind (indexes 2% in a day or 8% in a month, bitcoin 5% or 15%, currencies 1% or 3%, the VIX 15% or 30%, yields 0.15 or 0.40 percentage points); and headlines from the past 3 days that name a stock or coin you hold or watch (funds left out: their feed is general news). When none of yours has any, the day's market headlines take their place, marked as such.";
 $("#digestInfo").innerHTML = infoIcon(DIGEST_RULES);
 // Two tabs: Highlights (alerts, journal, portfolio, holdings and watchlist, market moves) and News (headlines naming your
 // stocks). The choice is remembered; switching only redraws, it doesn't ask the server again.
 const digestTab = () => { try { return localStorage.getItem("digestTab") === "news" ? "news" : "highlights"; } catch { return "highlights"; } };
+// Long-term: a quieter Highlights for buy-and-hold, without the lines about a day or a week (the server marks them
+// `short`). News stays as it is. Remembered; flipping only redraws.
+const digestLong = () => { try { return localStorage.getItem("digestLong") === "1"; } catch { return false; } };
 function renderDigest() {
   const ul = $("#digestList"), d = state.digest, tab = digestTab();
   if (!d) return;
-  const news = d.items.filter((i) => i.kind === "news"), mine = d.items.filter((i) => i.kind !== "news");
+  const long = digestLong(), hidden = long ? d.items.filter((i) => i.short).length : 0;
+  const news = d.items.filter((i) => i.kind === "news"), mine = d.items.filter((i) => i.kind !== "news" && !(long && i.short));
   $$("#digestTabs button").forEach((b) => {
     b.classList.toggle("on", b.dataset.tab === tab);
     b.textContent = `${b.dataset.tab === "news" ? "News" : "Highlights"} (${(b.dataset.tab === "news" ? news : mine).length})`;
@@ -405,7 +439,8 @@ function renderDigest() {
   // A headline links to its source; the link keeps its own job inside a row that opens the stock
   const text = (i) => i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.text)}</a>` : esc(i.text);
   ul.innerHTML = shown.length ? marketNote + shown.map((i) => `<li class="t${i.tone}${i.kind ? ` k-${esc(i.kind)}` : ""}" data-t="${esc(i.ticker || "")}"${i.ticker ? ` data-stock="${esc(i.ticker)}"` : i.kind === "portfolio" ? ` data-goto="portfolio"` : ""}>${text(i)}${i.alertId ? ` <button class="btn ghost sm" data-dismiss="${i.alertId}">Dismiss</button>` : ""}</li>`).join("")
-    : `<li>${tab === "news" ? "No headlines from the past 3 days name a stock you hold or watch." : "Quiet day — nothing notable on your names."}</li>`;
+    : `<li>${tab === "news" ? "No headlines from the past 3 days name a stock you hold or watch." : long ? "Nothing to act on for a long-term investor today." : "Quiet day — nothing notable on your names."}</li>`;
+  if (tab !== "news" && hidden) ul.insertAdjacentHTML("beforeend", `<li class="muted sm digest-hidden">Long-term view: ${hidden} short-term line${hidden > 1 ? "s" : ""} (a day's moves, RSI, stance changes, markets) left out.</li>`);
   $$("[data-dismiss]", ul).forEach((b) => b.onclick = async (e) => {
     e.stopPropagation(); await api(`/api/alerts/${b.dataset.dismiss}/dismiss`, { method: "POST" });
     d.items = d.items.filter((i) => String(i.alertId) !== b.dataset.dismiss); renderDigest(); checkFiredAlerts();
@@ -426,7 +461,28 @@ $$("#digestTabs button").forEach((b) => b.onclick = () => {
   if (state.digest) renderDigest(); else $$("#digestTabs button").forEach((x) => x.classList.toggle("on", x === b));
 });
 $$("#digestTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === digestTab()));
+$("#digestLong").checked = digestLong();
+$("#digestLong").onchange = (e) => {
+  try { localStorage.setItem("digestLong", e.target.checked ? "1" : "0"); } catch { /* not remembered, but still shown */ }
+  renderDigest();
+};
 $("#refreshDigest").onclick = loadDigest;
+
+// Research's advanced tools stay folded unless you opened them last time
+(() => {
+  const adv = $("#rAdvanced");
+  try { adv.open = localStorage.getItem("rAdvanced") === "1"; } catch { /* closed */ }
+  adv.addEventListener("toggle", () => { try { localStorage.setItem("rAdvanced", adv.open ? "1" : "0"); } catch { /* not remembered */ } });
+  // The fold names the tools this asset has (a fund has no DCF or ownership), kept in step as cards show or hide
+  const cards = [["#dcfCard", "DCF valuation"], ["#rOwnCard", "ownership"], ["#ptCard", "pre-trade check"]];
+  const name = () => {
+    const shown = cards.filter(([id]) => !$(id).classList.contains("hidden")).map(([, n]) => n);
+    $("#rAdvList").textContent = shown.length ? shown.join(", ").replace(/^./, (c) => c.toUpperCase()) : "";
+  };
+  const watch = new MutationObserver(name);
+  cards.forEach(([id]) => watch.observe($(id), { attributes: true, attributeFilter: ["class"] }));
+  name();
+})();
 
 /* ---------------------------------------------------------------- research */
 // The range is how far back the chart goes; bars is how much time each candle covers
@@ -1488,7 +1544,7 @@ async function loadPortfolio() {
   table($("#txTable"), [
     { k: "date", label: "Date", fmt: (v) => esc(v || "no date") }, { k: "ticker", label: "Ticker", fmt: (v, r) => symLogo(v, r.name) }, { k: "kind", label: "Type", fmt: (v) => esc(v) },
     { k: "shares", label: "Shares", num: 1, fmt: (v) => (isNum(v) ? num(v, v < 1 ? 4 : 2) : "") },
-    { k: "price", label: "Price or amount", num: 1, fmt: (v, r) => (r.kind === "dividend" ? money(r.amount, MAIN_UNIT[curOf[r.ticker]] || (curOf[r.ticker] ?? null)) : money(v, curOf[r.ticker] ?? null)) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
+    { k: "price", label: "Price or amount", num: 1, fmt: (v, r) => (r.kind === "dividend" ? money(r.amount, MAIN_UNIT[curOf[r.ticker]] || (curOf[r.ticker] ?? null)) + (r.withheld ? ` <span class="muted sm">after ${money(r.withheld, MAIN_UNIT[curOf[r.ticker]] || (curOf[r.ticker] ?? null))} withheld</span>` : "") : money(v, curOf[r.ticker] ?? null)) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
     { k: "id", label: "", fmt: (v) => `<button class="btn danger" data-tdel="${v}">Delete</button>` },
   ], tx, { empty: "Nothing recorded yet." })
   .afterDraw(() => $$("[data-tdel]", $("#txTable")).forEach((d) => d.onclick = async () => {
@@ -1611,19 +1667,21 @@ $("#btnPaste").onclick = async () => {
 $("#hKind").onchange = () => {
   const dividend = $("#hKind").value === "dividend";
   $("#hSharesWrap").classList.toggle("hidden", dividend);
-  const pay = formQuote && MAIN_UNIT[formQuote.currency];
+  $("#hWithheldWrap").classList.toggle("hidden", !dividend);
+  const pay = formQuote && (MAIN_UNIT[formQuote.currency] || formQuote.currency);
   $("#hCostLabel").textContent = dividend ? `Total received${pay ? ` (${pay})` : ""}` : "Price / share";
+  $("#hWithheldLabel").textContent = `Tax withheld${pay ? ` (${pay})` : ""}`;
 };
 $("#btnAddHolding").onclick = async () => {
   const kind = $("#hKind").value, value = $("#hCost").value;
-  const figures = kind === "dividend" ? { amount: value } : { shares: $("#hShares").value, price: value };
+  const figures = kind === "dividend" ? { amount: value, withheld: $("#hWithheld").value } : { shares: $("#hShares").value, price: value };
   // A price far from the market is often the wrong unit, such as pounds for a stock quoted in pence
   if (kind !== "dividend" && formQuote && value && (Number(value) > formQuote.price * 5 || Number(value) < formQuote.price / 5)
       && !confirm(`${value} is far from the latest price of ${num(formQuote.price)} ${formQuote.currency}. Save it anyway?`)) return;
   try {
     const saved = await api("/api/transactions", { method: "POST", body: { ticker: $("#hTicker").value, kind, date: $("#hDate").value, note: $("#hNote").value, ...figures } });
     if (saved?.warning) setTimeout(() => toast(saved.warning, 9000), 600);  // after the "added" message, and long enough to read
-    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote"].forEach((id) => $(id).value = ""); $("#hHint").textContent = ""; formQuote = null; toast("Transaction recorded"); loadPortfolio();
+    ["#hTicker", "#hShares", "#hCost", "#hDate", "#hNote", "#hWithheld"].forEach((id) => $(id).value = ""); $("#hHint").textContent = ""; formQuote = null; toast("Transaction recorded"); loadPortfolio();
   } catch (e) { toast(e.message); }
 };
 
@@ -1670,9 +1728,108 @@ function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) =
 
 /* ---------------------------------------------------------------- tax year */
 // A calendar year's sales (gains and losses, first in, first out) and dividends, in the base currency (tax.py)
+// Tax year: with no residence chosen, the plain arithmetic (first in, first out, in the base currency); with one, its
+// rules from taxlaw.py: each line with its rate and rule, the forms and boxes, allowances, deadlines, what the sources
+// didn't settle, and for the year under way what's worth knowing before it ends. Report opens a printable page.
+const TAX_KIND = { equity: "Equity fund", mixed: "Mixed fund", bond: "Bond fund", other: "Other (gold, commodities)" };
+const TAX_DOM = { EU: "EU (UCITS)", US: "United States", other: "Elsewhere" };
+let taxYearShown = null;
+function taxResOptions(sel, chosen) {
+  const list = state.meta.taxCountries || [];
+  sel.innerHTML = `<option value="">Not chosen</option>` + list.map((c) => `<option value="${esc(c.code)}">${esc(c.name)} (${esc(c.currency)})</option>`).join("") + `<option value="other">Somewhere else</option>`;
+  sel.value = chosen || "";
+}
+async function saveTaxSettings(body, msg) {
+  state.meta.settings = await api("/api/settings", { method: "POST", body });
+  if (msg) toast(msg);
+  loadTax(taxYearShown); loadSetup();
+}
 async function loadTax(year) {
   let t;
   try { t = await api(`/api/tax${year ? `?year=${year}` : ""}`); } catch (e) { $("#taxKpis").innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
+  const r = t.residence;
+  taxResOptions($("#taxRes"), t.residenceCode);
+  $("#taxRes").onchange = () => saveTaxSettings({ tax_residence: $("#taxRes").value }, "Tax residence saved");
+  ["#taxLines", "#taxExtra", "#taxForms", "#taxPlan", "#taxSources", "#taxIntro"].forEach((id) => { $(id).innerHTML = ""; });
+  $("#taxReport").classList.toggle("hidden", !r);
+  $("#taxSetup").classList.toggle("hidden", !r);
+  if (!r) {
+    $("#taxWhere").textContent = "";
+    $("#taxIntro").innerHTML = t.residenceCode === "other" ? "Your country's rules aren't in the app: below is the plain arithmetic, first in, first out, in your base currency."
+      : "Choose your tax residence to apply its rules: how sales are matched, rates, allowances, losses carried forward, funds' special rules and where each figure goes on the return.";
+    return loadTaxPlain(t, year);
+  }
+  const cur = r.currency, res = r.result, c = r.residence;
+  taxYearShown = r.year;
+  $("#taxWhere").textContent = `${c.name}, ${r.label}`;
+  $("#taxYear").innerHTML = r.years.map((y) => `<option value="${y}" ${y === r.year ? "selected" : ""}>${esc(c.year === "uk" ? `${y}/${String(y + 1).slice(2)}` : String(y))}</option>`).join("");
+  $("#taxYear").onchange = () => loadTax($("#taxYear").value);
+  $("#taxCsv").href = `/api/tax.csv?year=${r.year}`;
+  $("#taxReport").href = `/api/tax/report?year=${r.year}`;
+  const net = r.sales.reduce((a, p) => a + p.gain, 0), gross = r.dividends.reduce((a, d) => a + d.gross, 0);
+  const left = res.allowances.filter((x) => !/Box 3/.test(x.name)).map((x) => `${money(x.left, cur, 0)} of ${esc(x.name.toLowerCase())}`).join("; ");
+  $("#taxKpis").innerHTML = [["Estimated tax", money(res.tax, cur, 0), r.end >= localDay(Date.now() / 1000) ? "so far this year" : ""],
+    ["Net gains on sales", `<span class="${cls(net)}">${money(net, cur, 0)}</span>`, `${new Set(r.sales.map((p) => p.saleId)).size} sale(s)`],
+    ["Dividends (gross)", money(gross, cur, 0), r.dividends.some((d) => d.estimated) ? "some withholding assumed" : ""],
+    ["Allowance left", left ? left.split(";")[0] : "—", left.includes(";") ? left.split(";").slice(1).join(";") : ""]]
+    .map(([l, v, s]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
+  $("#taxPlan").innerHTML = r.planning.length ? `<div class="tax-plan"><h4>Before the year ends</h4><ul class="signals">${r.planning.map((p) => `<li>${esc(p.text)}</li>`).join("")}</ul></div>` : "";
+  const rate = (v) => (v === null || v === undefined ? "" : `${(v * 100).toFixed(v * 100 % 1 ? 2 : 0)}%`);
+  $("#taxLines").innerHTML = `<h4>The calculation</h4><table><tr><th>Line</th><th class="num">Amount</th><th class="num">Rate</th><th class="num">Tax</th><th>Rule</th></tr>
+    ${res.lines.map((x) => `<tr class="${x.kind === "info" ? "muted" : ""}"><td>${esc(x.label)}${x.form ? `<div class="muted sm">${esc(x.form)}</div>` : ""}</td><td class="num">${x.base === null ? "" : money(x.base, cur, 0)}</td>
+      <td class="num">${rate(x.rate)}</td><td class="num">${x.kind === "info" ? '<span class="muted sm">shown only</span>' : x.tax === null ? "" : money(x.tax, cur, 0)}</td><td class="sm">${esc(x.rule)}</td></tr>`).join("")}
+    <tr class="tax-total"><td>Estimated tax</td><td></td><td></td><td class="num">${money(res.tax, cur, 0)}</td><td></td></tr></table>`;
+  table($("#taxSales"), [
+    { k: "date", label: "Sold" }, { k: "ticker", label: "Ticker", fmt: symCell }, { k: "shares", label: "Shares", num: 1, fmt: (v) => num(v, v < 1 ? 4 : 2) },
+    { k: "bought", label: "Bought", fmt: (v) => v ? esc(v) : `<span class="muted">pool</span>` },
+    { k: "cost", label: `Cost (${esc(cur)})`, num: 1, fmt: (v) => money(v, cur, 0) }, { k: "proceeds", label: `Proceeds (${esc(cur)})`, num: 1, fmt: (v) => money(v, cur, 0) },
+    { k: "gain", label: "Gain", num: 1, fmt: (v, p) => `<span class="${cls(v)}">${money(v, cur, 0)}</span>${p.exact && p.exactCost !== false ? "" : ' <span class="pill warn" title="A date\'s rate was missing: today\'s rate was used">approx.</span>'}` },
+    { k: "rule", label: "Matched", fmt: (v) => `<span class="muted sm">${esc(v)}</span>` },
+  ], r.sales, { stock: (p) => p.ticker, empty: `No sales in ${esc(r.label)}.` });
+  $("#taxDivs").innerHTML = r.dividends.length ? `<h4>Dividends</h4><table><tr><th>Paid</th><th>Ticker</th><th>From</th><th class="num">Received</th><th class="num">Withheld abroad</th><th class="num">Gross</th></tr>
+    ${r.dividends.map((d) => `<tr><td>${esc(d.date)}</td><td>${esc(d.ticker)}</td><td>${esc(d.country || "")}</td><td class="num">${money(d.net, cur, 2)}</td>
+      <td class="num">${money(d.withheldEst, cur, 2)}${d.withheldKnown ? "" : ' <span class="pill warn" title="Not entered: the source country\'s usual treaty rate was assumed. Record the dividend with what your statement shows.">assumed</span>'}</td>
+      <td class="num">${money(d.gross, cur, 2)}</td></tr>`).join("")}</table>` : "";
+  const extra = [["vorabpauschale", "Vorabpauschale (deemed income of funds)"], ["deemedIncome", "Deemed income of non-reporting funds"], ["deemedDisposals", "Deemed disposals: 8 years after each purchase"], ["cryptoSales", "Crypto sales (global portfolio formula)"]];
+  $("#taxExtra").innerHTML = extra.filter(([k]) => (res[k] || []).length).map(([k, title]) => {
+    const rows = res[k], cols = Object.keys(rows[0]).filter((x) => !["kind", "year"].includes(x));
+    return `<h4>${esc(title)}</h4><table><tr>${cols.map((x) => `<th>${esc(x)}</th>`).join("")}</tr>${rows.map((row) => `<tr>${cols.map((x) => `<td class="${typeof row[x] === "number" ? "num" : ""}">${typeof row[x] === "number" ? num(row[x], 2) : esc(String(row[x] ?? ""))}</td>`).join("")}</tr>`).join("")}</table>`;
+  }).join("");
+  $("#taxForms").innerHTML = res.forms.length ? `<h4>Where the figures go</h4><table><tr><th>Form</th><th>Box</th><th>What</th><th class="num">Amount</th></tr>
+    ${res.forms.map((f) => `<tr><td>${esc(f.form)}</td><td>${esc(f.box)}</td><td>${esc(f.label)}${f.note ? `<div class="muted sm">${esc(f.note)}</div>` : ""}</td><td class="num">${f.amount === null ? "" : money(f.amount, cur, 2)}</td></tr>`).join("")}</table>` : "";
+  // The country's questions, saved as you change them
+  const saved = (state.meta.settings.tax_options || {})[c.code] || {};
+  $("#taxOpts").innerHTML = c.options.map((o) => {
+    const v = saved[o.key] ?? o.default;
+    if (o.type === "bool") return `<label class="ord-opt"><span class="switch"><input type="checkbox" data-topt="${esc(o.key)}" role="switch" ${v ? "checked" : ""}><span></span></span><span>${esc(o.label)}</span></label>`;
+    if (o.type === "select") return `<label>${esc(o.label)}<select data-topt="${esc(o.key)}">${o.choices.map(([k, l]) => `<option value="${esc(String(k))}" ${String(k) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
+    return `<label>${esc(o.label)}<input type="number" step="any" data-topt="${esc(o.key)}" value="${esc(String(v))}" ${o.min !== undefined ? `min="${o.min}"` : ""} ${o.max !== undefined ? `max="${o.max}"` : ""}></label>`;
+  }).join("") || '<span class="muted sm">No questions for this country.</span>';
+  $$("[data-topt]").forEach((el) => el.onchange = () => {
+    const o = c.options.find((x) => x.key === el.dataset.topt);
+    const val = o.type === "bool" ? el.checked : o.type === "number" ? Number(el.value) : (typeof o.default === "number" ? Number(el.value) : el.value);
+    const all = { ...(state.meta.settings.tax_options || {}) };
+    all[c.code] = { ...(all[c.code] || {}), [o.key]: val };
+    saveTaxSettings({ tax_options: all }, "Saved").catch((e) => toast(e.message));
+  });
+  $("#taxFunds").innerHTML = r.funds.length ? `<table><tr><th>Fund</th><th>Kind</th><th>Domicile</th><th></th></tr>${r.funds.map((f) => `<tr><td>${symCell(f.ticker, f)}</td>
+    <td><select data-fkind="${esc(f.ticker)}">${Object.entries(TAX_KIND).map(([k, l]) => `<option value="${k}" ${k === f.kind ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+    <td><select data-fdom="${esc(f.ticker)}">${Object.entries(TAX_DOM).map(([k, l]) => `<option value="${k}" ${k === f.domicile ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+    <td class="muted sm">${f.assumed ? "guessed from its name and listing: check the factsheet" : "as you set it"}</td></tr>`).join("")}</table>` : "";
+  $$("[data-fkind], [data-fdom]").forEach((el) => el.onchange = () => {
+    const tk = el.dataset.fkind || el.dataset.fdom, all = { ...(state.meta.settings.fund_tax || {}) };
+    all[tk] = { kind: $(`[data-fkind="${tk}"]`).value, domicile: $(`[data-fdom="${tk}"]`).value };
+    saveTaxSettings({ fund_tax: all }, `${tk} saved`).catch((e) => toast(e.message));
+  });
+  const methods = [...new Set(Object.values(c.methods))].map((m) => r.methodNames[m]).join("; ");
+  $("#taxNotes").innerHTML = [`Sales matched by: ${methods}. Amounts in ${cur}, each at its own date's rate.`,
+    ...res.deadlines.map((d) => `Deadline: ${d}`), ...res.notes,
+    ...(r.leftOut.length ? [`Left out: ${r.leftOut.join(", ")}, for want of an exchange rate to ${cur}.`] : []),
+    ...(r.approximate.length ? [`Approximate for ${r.approximate.join(", ")}: a date's rate was missing, so today's was used.`] : []),
+    ...res.unsure.map((u) => `Not settled by the sources: ${u}`), ...r.caveats].map((x) => `<li>${esc(x)}</li>`).join("");
+  $("#taxSources").innerHTML = `Rules checked ${esc(r.verified)} from: ${c.sources.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(new URL(u).hostname.replace(/^www\./, ""))}</a>`).join(", ")}.`;
+}
+function loadTaxPlain(t, year) {
   const b = t.base, years = t.years.length ? t.years : [t.year];
   $("#taxYear").innerHTML = years.map((y) => `<option ${y === t.year ? "selected" : ""}>${esc(y)}</option>`).join("");
   $("#taxYear").onchange = () => loadTax($("#taxYear").value);
@@ -2129,7 +2286,9 @@ $("#btnNotify").onclick = async () => {
 
 /* ---------------------------------------------------------------- settings */
 function loadSettings() {
+  loadSetup();  // whether to offer the hidden checklist back
   const s = state.meta.settings;
+  taxResOptions($("#sTaxRes"), s.tax_residence);
   $("#weightSliders").innerHTML = Object.entries(s.weights).map(([k, v]) => `<div class="wrow"><label>${esc(k)} ${factorInfo(k)}</label><input type="range" name="weight-${esc(k)}" min="0" max="100" value="${Math.round(v * 100)}" data-w="${esc(k)}"><span>${Math.round(v * 100)}%</span></div>`).join("");
   $$("[data-w]").forEach((r) => r.oninput = () => r.nextElementSibling.textContent = r.value + "%");
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
@@ -2163,14 +2322,14 @@ function settingsShown() {
     w: $$("[data-w]").map((r) => Number(r.value)), tg: $$("[data-tgt]").map((i) => num(i.value)), core: num($("#sCore").value),
     regions: set($$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region)),
     tiles: set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile)),
-    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked };
+    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value };
 }
 function settingsSaved() {
   const s = state.meta.settings, num = (v) => Math.round(Number(v) * 1e6) / 1e6;
   return { base: s.base_currency, rf: num((s.risk_free_rate * 100).toFixed(2)), bench: s.benchmark,
     w: Object.values(s.weights).map((v) => Math.round(v * 100)), tg: Object.values(s.targets).map(num), core: num(s.core_target),
     regions: [...(s.regions || state.meta.regions)].sort(), tiles: [...s.dashboard_tiles].sort(),
-    email: s.alert_email || "", emailOn: !!s.email_alerts };
+    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "" };
 }
 function markUnsaved() {
   const dirty = JSON.stringify(settingsShown()) !== JSON.stringify(settingsSaved()), msg = $("#settingsMsg");
@@ -2358,6 +2517,8 @@ $("#btnSaveSettings").onclick = async () => {
     core_target: Number($("#sCore").value), regions: $$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region) };
   if (!body.regions.length) return toast("Follow at least one region.");
   Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked });
+  // Saved only once chosen, so "not chosen" stays visible to the first-run checklist
+  if ($("#sTaxRes").value || state.meta.settings.tax_residence) body.tax_residence = $("#sTaxRes").value;
   if (body.email_alerts && !body.alert_email) return toast("Enter the email address to send alerts to.");
   if (body.alert_email && !$("#sEmail").checkValidity()) return toast("The alert email must be an address such as name@example.com.");
   const regionsBefore = (state.meta.settings.regions || []).join();

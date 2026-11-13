@@ -97,7 +97,9 @@ def replay(rows, splits_of=None):
             p["lots"].append({"id": t.get("id"), "ticker": t["ticker"], "shares": _positive(t, "shares"), "cost": _positive(t, "price", True),
                               "bought": date, "note": t.get("note") or "", "split": t.get("split", 1.0)})
         elif kind == "dividend":
-            p["dividends"].append({"id": t.get("id"), "date": date, "amount": _positive(t, "amount")})
+            if t.get("withheld") is not None:
+                _positive(t, "withheld", True)
+            p["dividends"].append({"id": t.get("id"), "date": date, "amount": _positive(t, "amount"), "withheld": t.get("withheld")})
         else:
             left, price = _positive(t, "shares"), _positive(t, "price", True)
             if sum(lot["shares"] for lot in p["lots"]) < left - TINY:
@@ -145,8 +147,9 @@ def held_tickers():
 
 
 @_serial
-def add(ticker, kind, date="", shares=None, price=None, amount=None, note=""):
-    """Record a transaction if the ledger still adds up with it. Returns its id."""
+def add(ticker, kind, date="", shares=None, price=None, amount=None, note="", withheld=None):
+    """Record a transaction if the ledger still adds up with it. Returns its id. `withheld` is a dividend's tax
+    withheld at source, in the currency paid (the amount is what arrived, after it)."""
     if kind not in KINDS:
         raise LedgerError(f"Unknown transaction type '{kind}'.")
     date = _valid_date({"ticker": ticker, "date": date}, required=kind != "buy")
@@ -155,15 +158,18 @@ def add(ticker, kind, date="", shares=None, price=None, amount=None, note=""):
     rows = db.q("SELECT * FROM transactions")
     if kind != "buy" and not any(r["ticker"] == ticker and r["kind"] == "buy" for r in rows):
         raise LedgerError(f"There's no purchase of {ticker} to go with this.")
-    row = {"ticker": ticker, "kind": kind, "date": date, "shares": shares, "price": price, "amount": amount, "note": note, "id": 1 << 60}
+    if kind != "dividend":
+        withheld = None
+    row = {"ticker": ticker, "kind": kind, "date": date, "shares": shares, "price": price, "amount": amount, "note": note, "withheld": withheld, "id": 1 << 60}
     replay(rows + [row])
-    return db.x("INSERT INTO transactions (ticker, kind, date, shares, price, amount, note) VALUES (?,?,?,?,?,?,?)",
-                (ticker, kind, date, shares, price, amount, note))
+    return db.x("INSERT INTO transactions (ticker, kind, date, shares, price, amount, note, withheld) VALUES (?,?,?,?,?,?,?,?)",
+                (ticker, kind, date, shares, price, amount, note, withheld))
 
 
 def parse_csv(text):
-    """Turn pasted lines of ticker,shares,price,date,type,note into transaction rows. Type defaults to buy, and for a
-    dividend the price column holds the total received. Raises LedgerError naming the line."""
+    """Turn pasted lines of ticker,shares,price,date,type,note,withheld into transaction rows. Type defaults to buy,
+    and for a dividend the price column holds the total received and `withheld` (optional) the tax withheld at source.
+    Raises LedgerError naming the line."""
     rows = []
     for number, cells in enumerate(csv.reader(io.StringIO(text.strip())), 1):
         cells = [c.strip() for c in cells]
@@ -172,8 +178,8 @@ def parse_csv(text):
         try:
             if len(cells) < 3:
                 raise LedgerError("expected at least ticker, shares and price.")
-            cells += [""] * (6 - len(cells))
-            ticker, shares, price, date, kind, note = cells[:6]
+            cells += [""] * (7 - len(cells))
+            ticker, shares, price, date, kind, note, withheld = cells[:7]
             kind = (kind or "buy").lower()
             if not ticker:
                 raise LedgerError("the ticker is missing.")
@@ -183,9 +189,12 @@ def parse_csv(text):
             if date and dt.date.fromisoformat(date) > dt.date.today():
                 raise LedgerError("the date is in the future.")
             amount_or_price = float(price.replace(",", ""))
-            row = {"ticker": ticker.upper(), "kind": kind, "date": date, "note": note, "shares": None, "price": None, "amount": None}
+            row = {"ticker": ticker.upper(), "kind": kind, "date": date, "note": note, "shares": None, "price": None, "amount": None, "withheld": None}
             if kind == "dividend":
                 row["amount"] = amount_or_price
+                if withheld:
+                    row["withheld"] = float(withheld.replace(",", ""))
+                    _positive(row, "withheld", True)
             else:
                 row["shares"], row["price"] = float(shares.replace(",", "")), amount_or_price
             _positive(row, "amount") if kind == "dividend" else (_positive(row, "shares"), _positive(row, "price", True))
@@ -205,8 +214,8 @@ def add_many(rows):
         if r["kind"] != "buy" and not any(x["ticker"] == r["ticker"] and (x.get("kind") or "buy") == "buy" for x in existing + rows):
             raise LedgerError(f"There's no purchase of {r['ticker']} to go with its {r['kind']}.")
     replay(existing + rows)
-    db.x_many("INSERT INTO transactions (ticker, kind, date, shares, price, amount, note) VALUES (?,?,?,?,?,?,?)",
-              [(r["ticker"], r["kind"], r["date"], r["shares"], r["price"], r["amount"], r["note"]) for r in rows])
+    db.x_many("INSERT INTO transactions (ticker, kind, date, shares, price, amount, note, withheld) VALUES (?,?,?,?,?,?,?,?)",
+              [(r["ticker"], r["kind"], r["date"], r["shares"], r["price"], r["amount"], r["note"], r.get("withheld")) for r in rows])
     return len(rows)
 
 
