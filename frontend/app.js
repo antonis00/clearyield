@@ -1746,6 +1746,57 @@ function taxResOptions(sel, chosen) {
 // filtered as you type (ignoring accents and case), moved through with the arrow keys, chosen with Enter or a click.
 // The <select> stays the source of truth, kept in the page but out of sight: its value is what's saved, a change on it
 // fires as before, and setting it from code is shown on the button by calling picker() again.
+// A suggestion list under a text box, in the picker's style: it opens on focus, narrows as you type (code or name,
+// accents and case ignored), arrow keys move, Enter or a click puts the choice in the box and calls `done`; Enter with
+// nothing listed calls `done` too, so the caller can say what's wrong.
+function suggest(input, items, done) {
+  const fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  let panel = null, ul = null, shown = [], at = 0;
+  const close = () => { panel?.remove(); panel = null; input.setAttribute("aria-expanded", "false"); };
+  const mark = () => { [...ul.children].forEach((li, n) => li.classList.toggle("on", n === at)); const li = ul.children[at];
+    if (li) { if (li.offsetTop < ul.scrollTop) ul.scrollTop = li.offsetTop; else if (li.offsetTop + li.offsetHeight > ul.scrollTop + ul.clientHeight) ul.scrollTop = li.offsetTop + li.offsetHeight - ul.clientHeight; } };
+  const place = () => {
+    const r = input.getBoundingClientRect();
+    panel.style.width = `${Math.min(Math.max(r.width, 320), innerWidth - 32)}px`;
+    panel.style.left = `${Math.max(16, Math.min(r.left, innerWidth - 16 - panel.offsetWidth))}px`;
+    const below = innerHeight - r.bottom;
+    panel.style.top = panel.style.bottom = "";
+    if (below < 300 && r.top > below) panel.style.bottom = `${innerHeight - r.top + 6}px`; else panel.style.top = `${r.bottom + 6}px`;
+  };
+  const draw = () => {
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "pick-panel pick-suggest";
+      panel.innerHTML = `<ul class="pick-list" role="listbox"></ul>`;
+      document.body.append(panel);
+      ul = panel.querySelector("ul");
+      ul.onmousedown = (e) => e.preventDefault();  // the box keeps the focus
+      ul.onclick = (e) => { const li = e.target.closest("li[data-n]"); if (li) choose(shown[Number(li.dataset.n)]); };
+      ul.onmousemove = (e) => { const li = e.target.closest("li[data-n]"); if (li && Number(li.dataset.n) !== at) { at = Number(li.dataset.n); mark(); } };
+      input.setAttribute("aria-expanded", "true");
+    }
+    const q = fold(input.value.trim());
+    shown = items.filter((i) => !q || fold(`${i.code} ${i.label}`).includes(q));
+    // an exact code first: "eur" is the euro before every name with "eur" in it
+    shown.sort((a, b) => (fold(b.code) === q) - (fold(a.code) === q));
+    at = 0;
+    ul.innerHTML = shown.length ? shown.map((i, n) => `<li role="option" data-n="${n}"><span class="pick-code">${esc(i.code)}</span><span class="pick-l">${esc(i.label)}</span></li>`).join("")
+      : `<li class="pick-empty">No currency matches. Try its code or part of its name.</li>`;
+    ul.scrollTop = 0; mark(); place();
+  };
+  const choose = (i) => { input.value = i.value; close(); done(); };
+  input.setAttribute("autocomplete", "off");
+  input.addEventListener("focus", () => setTimeout(draw, 0));  // after the box clears itself for typing
+  input.addEventListener("input", draw);
+  input.addEventListener("blur", () => setTimeout(close, 0));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (!panel) draw(); else if (shown.length) { at = (at + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length; mark(); } }
+    else if (e.key === "Enter") { e.preventDefault(); if (panel && shown[at] && input.value.trim()) choose(shown[at]); else { close(); done(); } }
+    else if (e.key === "Escape" && panel) { e.preventDefault(); e.stopPropagation(); close(); }
+  });
+  addEventListener("resize", () => panel && place());
+}
+
 function picker(sel, opts = {}) {
   const fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   let p = sel._picker;
@@ -2542,12 +2593,11 @@ function openConverter() {
   let pair; try { pair = JSON.parse(localStorage.getItem("fxPair")); } catch { pair = null; }
   const [from0, to0] = Array.isArray(pair) && pair.every((c) => currencies()[c]) ? pair : [base, base === "USD" ? "EUR" : "USD"];
   modal(`<h3>Currency converter</h3>
-    <datalist id="cvList">${Object.keys(currencies()).map((c) => `<option value="${esc(currencyLabel(c))}"></option>`).join("")}</datalist>
     <div class="form-row conv">
       <label>Amount<input type="number" id="cvAmount" value="1000" min="0" step="any"></label>
-      <label>From<input id="cvFrom" class="cv-cur" list="cvList" value="${esc(currencyLabel(from0))}" autocomplete="off" spellcheck="false" placeholder="Type to search"></label>
+      <label>From<input id="cvFrom" class="cv-cur" role="combobox" aria-autocomplete="list" value="${esc(currencyLabel(from0))}" autocomplete="off" spellcheck="false" placeholder="Type to search"></label>
       <button type="button" class="btn ghost sm" id="cvSwap" title="Swap">⇄</button>
-      <label>To<input id="cvTo" class="cv-cur" list="cvList" value="${esc(currencyLabel(to0))}" autocomplete="off" spellcheck="false" placeholder="Type to search"></label>
+      <label>To<input id="cvTo" class="cv-cur" role="combobox" aria-autocomplete="list" value="${esc(currencyLabel(to0))}" autocomplete="off" spellcheck="false" placeholder="Type to search"></label>
       <button type="button" class="btn" id="cvGo">Convert</button>
     </div>
     <div id="cvOut" class="conv-out"></div>
@@ -2568,7 +2618,9 @@ function openConverter() {
   };
   // Converts on the button or Enter; swapping converts straight away
   $("#cvGo").onclick = run;
-  $$("#cvAmount, .cv-cur").forEach((i) => { i.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } }; });
+  $("#cvAmount").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } };
+  const options = Object.entries(currencies()).map(([c, n]) => ({ value: currencyLabel(c), code: c, label: n }));
+  $$(".cv-cur").forEach((i) => suggest(i, options, run));
   // Clicking a currency box clears it, so the whole list shows and typing searches it; leaving it empty puts it back
   $$(".cv-cur").forEach((i) => {
     i.onfocus = () => { i.dataset.was = i.value; i.value = ""; };

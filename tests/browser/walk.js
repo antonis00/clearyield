@@ -974,7 +974,13 @@ const SLOW = 150000;
   const conv2 = await p.evaluate(() => ({ from: document.querySelector("#cvFrom").value, to: document.querySelector("#cvTo").value, text: document.querySelector("#cvOut").innerText }));
   expect("converter: opens from the currency icon, converts and swaps", /250/.test(conv1.text) && conv1.from !== conv1.to && conv2.from === conv1.to && conv2.to === conv1.from && /250/.test(conv2.text), conv1.text.split("\n")[0]);
   // Every currency in use, and each box searches as you type: "yen" finds the Japanese yen
-  expect("converter: every currency is offered", (await p.locator("#cvList option").count()) >= 150, await p.locator("#cvList option").count());
+  // The list is the app's own (themed, scrolling inside a fixed height), not the browser's: every currency in use
+  await p.click("#cvFrom"); await p.waitForSelector(".pick-suggest li[data-n]");
+  const list = await p.evaluate(() => { const ul = document.querySelector(".pick-suggest .pick-list"); return { n: ul.querySelectorAll("li[data-n]").length, h: ul.clientHeight, scrolls: ul.scrollHeight > ul.clientHeight,
+    bg: getComputedStyle(document.querySelector(".pick-suggest")).backgroundColor, panel: getComputedStyle(document.querySelector(".modal-box, #modal > div") || document.body).backgroundColor }; });
+  expect("converter: every currency is offered in a themed list that scrolls", list.n >= 150 && list.h <= 290 && list.scrolls && !/255, 255, 255/.test(list.bg), JSON.stringify(list));
+  await p.keyboard.press("Escape"); await p.click("#cvAmount");
+  expect("converter: the list closes when you leave the box", !(await p.evaluate(() => document.querySelector(".pick-suggest"))));
   await p.click("#cvTo"); await p.locator("#cvTo").pressSequentially("yen"); await p.press("#cvTo", "Enter");
   await p.waitForFunction(() => /JPY/.test(document.querySelector("#cvTo").value) && /=/.test(document.querySelector("#cvOut").innerText), null, { timeout: SLOW }).catch(() => {});
   expect("converter: typing a name finds the currency", (await p.inputValue("#cvTo")) === "JPY — Japanese yen" && /=/.test(await txt("#cvOut")), await p.inputValue("#cvTo"));
