@@ -125,6 +125,9 @@ const SLOW = 150000;
         inside: ["#dcfCard", "#rOwnCard", "#ptCard"].every((id) => document.querySelector("#rAdvanced").contains(document.querySelector(id))) }));
       expect(`research ${t}: advanced tools folded away, naming ${company ? "DCF, ownership and the pre-trade check" : "only the pre-trade check"}`,
         !fold.open && fold.inside && fold.list === (company ? "DCF valuation, ownership, pre-trade check" : "Pre-trade check"), JSON.stringify(fold));
+      // The score's ring shows its colour: nothing laid over the band (an inset shadow once painted it out)
+      const ring = await p.evaluate(() => { const c = getComputedStyle(document.querySelector("#rScore")); return { bg: c.backgroundImage, shadow: c.boxShadow }; });
+      expect(`research ${t}: the score ring shows its colour`, /conic-gradient/.test(ring.bg) && ring.shadow === "none", JSON.stringify(ring));
       const failedWith = await p.evaluate(() => { const e = document.querySelector("#researchEmpty"); return e && !e.classList.contains("hidden") ? e.textContent : ""; });
       expect(`research ${t}: fundamentals and DCF ${company ? "shown" : "hidden"}`, lay.fin === company && lay.dcf === company && (company ? lay.statsWide < 0.6 : lay.statsWide > 0.99),
         `width ${lay.statsWide.toFixed(2)}${failedWith ? ` | the page failed: ${failedWith}` : ""}`);

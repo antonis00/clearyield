@@ -532,7 +532,6 @@ function renderHeader(s) {
   const sc = s.scores.composite;
   $("#rScore").textContent = num(sc, 0);
   $("#rScore").style.background = `conic-gradient(${scoreColor(sc)} ${(sc || 0) * 3.6}deg, ${C("--line")} 0)`;
-  $("#rScore").style.boxShadow = `inset 0 0 0 7px ${C("--panel")}`;
   const w = state.meta.settings.weights;
   const [kind, why] = compositeBasis(i, s.scores);
   const basis = kind || (Object.values(w).every((v) => Math.abs(v - 0.2) < 0.005) ? "balanced"
