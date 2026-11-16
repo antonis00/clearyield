@@ -598,9 +598,28 @@ const SLOW = 150000;
   await p.waitForFunction(() => /stocks scored/.test(document.querySelector("#oppStatus").innerText), null, { timeout: SLOW });
   await p.waitForTimeout(500);
   const drawn = [];
-  for (const id of ["#oppMap", "#oppTop", "#oppFit", "#oppSale"]) drawn.push((await p.evaluate((x) => document.querySelector(x).classList.contains("hidden"), id)) || (await canvasDrawn(id)));
-  const opp = await p.evaluate(() => ({ status: document.querySelector("#oppStatus").innerText, fit: document.querySelector("#oppFitHelp").innerText, top: state.charts.oppTop?.data.labels }));
-  expect("opportunities: four charts drawn from today's scores", drawn.every(Boolean) && /stocks scored/.test(opp.status) && opp.top?.length === 10 && /what you hold now/.test(opp.fit), `${opp.status} | top: ${opp.top?.slice(0, 3).join(", ")}`);
+  drawn.push(await canvasDrawn("#oppMap"));
+  // The table under the map: best overall score first, 25 rows then Show all, views as tabs
+  const tbl = await p.evaluate(() => ({ status: document.querySelector("#oppStatus").innerText, tabs: [...document.querySelectorAll("#oppTabs button")].map((b) => b.dataset.view),
+    on: document.querySelector("#oppTabs .on")?.dataset.view, heads: [...document.querySelectorAll("#oppTable th")].map((th) => th.textContent.replace(/[▲▼]/g, "").trim()),
+    scores: [...document.querySelectorAll("#oppTable tbody tr")].map((tr) => Number(tr.children[3].querySelector("b").textContent)), more: document.querySelector("#oppMore").textContent }));
+  expect("opportunities: the map, and a table of the best opportunities sorted by overall score", drawn.every(Boolean) && /stocks scored/.test(tbl.status)
+    && tbl.tabs.join() === "best,corner,fit,sale" && tbl.on === "best" && tbl.scores.length === 25 && tbl.scores.every((v, i) => i === 0 || v <= tbl.scores[i - 1])
+    && ["#", "Stock", "Sector", "Score", "V", "Q", "G", "M", "R", "P/E", "1Y", "From high", "With you", "Why"].every((h) => tbl.heads.includes(h)) && /^Show all \d+/.test(tbl.more),
+    `${tbl.status} | ${tbl.heads.join(",")} | ${tbl.scores.slice(0, 5).join(",")} | ${tbl.more}`);
+  await p.click("#oppMore"); await p.waitForTimeout(200);
+  const oppRowsAll = await p.locator("#oppTable tbody tr").count();
+  expect("opportunities: Show all lists every stock scored", oppRowsAll > 25 && oppRowsAll === Number(tbl.more.match(/\d+/)[0]), `${oppRowsAll} rows`);
+  await p.click("#oppMore");
+  await p.locator("#oppTable tbody tr").nth(1).hover(); await p.waitForTimeout(200);
+  const spot = await p.evaluate(() => ({ active: state.charts.oppMap.getActiveElements().map((e) => state.charts.oppMap.data.datasets[0].data[e.index].row.ticker), row: document.querySelectorAll("#oppTable tbody tr")[1].dataset.stock }));
+  expect("opportunities: hovering a row lights up its dot on the map", spot.active.length === 1 && spot.active[0] === spot.row, JSON.stringify(spot));
+  await p.click('#oppTabs [data-view="sale"]'); await p.waitForTimeout(200);
+  const sale = await p.evaluate(() => ({ on: document.querySelector("#oppTabs .on")?.dataset.view, help: document.querySelector("#oppTableHelp").textContent, rows: document.querySelectorAll("#oppTable tbody tr").length, n: Number(document.querySelector('#oppTabs [data-view="sale"] .muted').textContent) }));
+  expect("opportunities: a view tab shows its own list with its rule", sale.on === "sale" && /below the past year's high/.test(sale.help) && sale.rows === Math.min(sale.n, 25), JSON.stringify(sale));
+  await p.click('#oppTabs [data-view="fit"]'); await p.waitForTimeout(200);
+  expect("opportunities: the fit view adds its Fit column", (await p.evaluate(() => [...document.querySelectorAll("#oppTable th")].some((th) => /^Fit/.test(th.textContent)) || /holdings|history/.test(document.querySelector("#oppTable").textContent))));
+  await p.click('#oppTabs [data-view="best"]'); await p.waitForTimeout(200);
   // The map zooms with Ctrl + wheel around the pointer (a plain wheel scrolls the page), names every stock in view,
   // moves with a drag (which doesn't open a stock), and resets
   await p.locator("#oppMap").scrollIntoViewIfNeeded();
@@ -627,10 +646,10 @@ const SLOW = 150000;
   expect("opportunities: a drag moves the zoomed map and opens nothing", dragged[0] < zoomedTo[0] && dragged[2] > zoomedTo[2] && (await p.evaluate(() => location.hash)) === "#opportunities", JSON.stringify(dragged));
   await p.click("#oppMapReset"); await p.waitForTimeout(200);
   expect("opportunities: Reset zoom shows the whole map again", (await mapRange()).join() === "-6,106,-6,106" && !(await p.isVisible("#oppMapReset")), JSON.stringify(await mapRange()));
-  const bar = await p.evaluate(() => { const c = state.charts.oppTop, m = c.getDatasetMeta(0).data[0], r = c.canvas.getBoundingClientRect(); return { x: r.left + m.x - 10, y: r.top + m.y, t: c.data.labels[0] }; });
-  await p.mouse.click(bar.x, bar.y);
-  await p.waitForFunction((t) => document.querySelector("#rSym")?.textContent === t, bar.t, { timeout: SLOW });
-  expect("opportunities: clicking a bar opens that stock", true, bar.t);
+  const first = await p.evaluate(() => document.querySelector("#oppTable tbody tr").dataset.stock);
+  await p.locator("#oppTable tbody tr").first().click();
+  await p.waitForFunction((t) => document.querySelector("#rSym")?.textContent === t, first, { timeout: SLOW });
+  expect("opportunities: clicking a row opens that stock", true, first);
 
   // ---- Ask: the AI icon in the sidebar opens it; with AI off (as in every test run), the page says how to set it up
   await p.click("#modeBadge .st.ai"); await p.waitForTimeout(300);

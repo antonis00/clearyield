@@ -575,3 +575,14 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 .pick-suggest { z-index: 1100; padding: 6px; }
 .pick-suggest .pick-list { max-height: 280px; }
 .pick-code { font: 600 12px var(--mono); color: var(--accent); min-width: 34px; }
+
+/* Opportunities: the table under the map */
+#oppTabs { flex-wrap: wrap; }
+.opp-table td { white-space: nowrap; }
+.opp-table .fchip { display: inline-block; min-width: 26px; text-align: center; padding: 1px 5px; border-radius: 5px; font: 600 12px var(--mono); }
+.opp-table td:last-child { white-space: normal; min-width: 190px; }
+.opp-table .opp-why { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; line-height: 1.35; }
+.opp-more { display: flex; justify-content: center; margin-top: 10px; }
+.opp-table .symwrap .sub { display: block; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opp-table td:nth-child(3) { white-space: normal; max-width: 130px; }
+.opp-table td:last-child { min-width: 170px; max-width: 240px; }
