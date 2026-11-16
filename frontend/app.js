@@ -647,7 +647,17 @@ $$("#kindSeg button").forEach((b) => b.onclick = () => {
   try { localStorage.setItem("chartKind", state.kind); } catch { /* private window: just not remembered */ }
   if (state.stock) renderPrice(state.stock);
 });
-["#tSma", "#tBb", "#tVol"].forEach((id) => $(id).onchange = () => state.stock && renderPrice(state.stock));
+// The chart's layers start on and keep your choice, like the range and candle style
+(() => {
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem("chartLayers") || "{}") || {}; } catch { /* all on */ }
+  ["#tSma", "#tBb", "#tVol"].forEach((id) => {
+    if (typeof saved[id] === "boolean") $(id).checked = saved[id];
+    $(id).onchange = () => {
+      try { localStorage.setItem("chartLayers", JSON.stringify(Object.fromEntries(["#tSma", "#tBb", "#tVol"].map((x) => [x, $(x).checked])))); } catch { /* this visit only */ }
+      if (state.stock) renderPrice(state.stock);
+    };
+  });
+})();
 
 function fmtBound(v, fmt) {
   if (fmt === "pct") return `${+(v * 100).toFixed(1)}%`;

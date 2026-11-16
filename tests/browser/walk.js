@@ -217,7 +217,14 @@ const SLOW = 150000;
   const intra = await p.evaluate(() => ({ n: state.stock.candles.time.length, note: state.stock.candles.note, panes: document.querySelector("#indPanes").classList.contains("hidden") }));
   expect("research: 1D shows candles within the day, without the daily indicators", intra.n > 0 && intra.panes && (await p.locator("#priceChart canvas").count()) > 0, JSON.stringify(intra));
   await p.locator("#periodSeg button[data-p='1y']").click(); await p.waitForFunction(() => document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
-  for (const id of ["#tSma", "#tBb", "#tVol"]) { await p.click(id); await p.waitForTimeout(120); }
+  // The chart's layers (moving averages, Bollinger bands, volume) start on, and keep what you choose
+  const layers = () => p.evaluate(() => ["#tSma", "#tBb", "#tVol"].map((id) => document.querySelector(id).checked));
+  const layersAtStart = await layers();
+  await p.click("#tBb"); await p.waitForTimeout(150);
+  await p.reload(); await p.waitForFunction(() => state.stock && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
+  const layersKept = await layers();
+  await p.click("#tBb"); await p.waitForTimeout(150);
+  expect("research: the chart's layers start on and a change is remembered", layersAtStart.every(Boolean) && layersKept.join() === "true,false,true" && (await layers()).every(Boolean), `${layersAtStart} / ${layersKept}`);
   // The overall score opens its make-up: the Factor scores card, scrolled to just below the search bar and lit up
   await p.evaluate(() => window.scrollTo(0, 0));
   await p.click("#rScore"); await p.waitForTimeout(900);
