@@ -1295,13 +1295,13 @@ const oppTip = (r, extra = []) => [oppName(r), `Score ${num(r.composite, 0)} · 
 // The map's full extent: a little room past 0 and 100, so a stock at the edge isn't cut in half
 const MAP_LO = -6, MAP_HI = 106, MAP_MIN_SPAN = 6;
 function oppMapChart(id, rows, zone, small) {
-  // The dashboard's small map shows only the shaded corner (cheap and rising), a little past its edge so a dot on it isn't cut
-  if (small) rows = rows.filter((r) => r.f_value >= zone && r.f_momentum >= zone);
-  const from = small ? zone - 3 : MAP_LO;
+  // Both maps show only the corner (cheap and rising: value and momentum both at `zone` or more), all of it shaded,
+  // from just under its edge so a dot on the edge isn't cut; the table under the big one lists every stock
+  rows = rows.filter((r) => r.f_value >= zone && r.f_momentum >= zone);
+  const from = zone - 2;
   const shade = { id: "zone", beforeDatasetsDraw(c) {
-    const { ctx, chartArea: a, scales: { x, y } } = c;
-    const x0 = Math.max(a.left, Math.min(a.right, x.getPixelForValue(zone))), y0 = Math.max(a.top, Math.min(a.bottom, y.getPixelForValue(zone)));  // zoomed, the corner may be partly out of view
-    ctx.save(); ctx.fillStyle = tint("--up", "1c"); ctx.fillRect(x0, a.top, a.right - x0, y0 - a.top);
+    const { ctx, chartArea: a } = c;
+    ctx.save(); ctx.fillStyle = tint("--up", "1c"); ctx.fillRect(a.left, a.top, a.right - a.left, a.bottom - a.top);
     ctx.restore();
   } };
   // The stocks in the corner are named on the map (zoomed in, every stock in view), best score first, each to the right
@@ -1311,9 +1311,9 @@ function oppMapChart(id, rows, zone, small) {
     const { ctx, chartArea: a, scales: { x, y } } = c, pts = c.getDatasetMeta(0).data, h = small ? 11 : 13, placed = [];
     const zoomedIn = x.max - x.min < 100 || y.max - y.min < 100;
     ctx.save(); ctx.textBaseline = "middle";
-    if (!small && x.getPixelForValue(zone) < a.right - 100 && y.getPixelForValue(zone) > a.top + 14) {
+    if (!small) {
       ctx.font = "600 11px IBM Plex Sans"; ctx.fillStyle = C("--up"); ctx.textAlign = "left";
-      const tx = Math.max(a.left, x.getPixelForValue(zone)) + 6, ty = a.top + 10, tw = ctx.measureText("Cheap and rising").width;
+      const tx = a.left + 6, ty = a.top + 10, tw = ctx.measureText("Cheap and rising").width;
       ctx.fillText("Cheap and rising", tx, ty); placed.push({ l: tx, r: tx + tw, t: ty - h / 2, b: ty + h / 2 });
     }
     ctx.font = `600 ${small ? 10 : 11}px IBM Plex Sans`; ctx.fillStyle = C("--text");
@@ -1353,6 +1353,7 @@ function oppMapChart(id, rows, zone, small) {
       onClick: small ? undefined : (e, els, c) => { if (c.$dragged) { c.$dragged = false; return; } if (els[0]) openStock(c.data.datasets[0].data[els[0].index].row.ticker); },
       onHover: (e, els, c) => { if (!c.$drag) e.native.target.style.cursor = els.length || small ? "pointer" : c.$zoomed?.() ? "grab" : "default"; } },
   });
+  chart.$lo = from;
   if (!small) oppZoom(chart, $("#oppMapReset"));
   return chart;
 }
@@ -1361,14 +1362,15 @@ function oppMapChart(id, rows, zone, small) {
 function oppZoom(chart, reset) {
   // Chart.js builds its options afresh on each update, so they're looked up every time rather than kept
   const cv = chart.canvas, ax = (k) => chart.options.scales[k];
-  const zoomed = chart.$zoomed = () => ax("x").min > MAP_LO || ax("x").max < MAP_HI || ax("y").min > MAP_LO || ax("y").max < MAP_HI;
+  const LO = chart.$lo ?? MAP_LO;  // where the map starts: just under the corner's edge
+  const zoomed = chart.$zoomed = () => ax("x").min > LO || ax("x").max < MAP_HI || ax("y").min > LO || ax("y").max < MAP_HI;
   const place = (k, lo, hi) => {  // keep the window inside the map, at the same size
-    const span = Math.min(MAP_HI - MAP_LO, Math.max(MAP_MIN_SPAN, hi - lo));
-    lo = Math.min(Math.max(lo, MAP_LO), MAP_HI - span);
+    const span = Math.min(MAP_HI - LO, Math.max(MAP_MIN_SPAN, hi - lo));
+    lo = Math.min(Math.max(lo, LO), MAP_HI - span);
     ax(k).min = lo; ax(k).max = lo + span;
   };
   const redraw = () => { chart.update("none"); reset.classList.toggle("hidden", !zoomed()); };
-  const all = () => { place("x", MAP_LO, MAP_HI); place("y", MAP_LO, MAP_HI); redraw(); };
+  const all = () => { place("x", LO, MAP_HI); place("y", LO, MAP_HI); redraw(); };
   reset.onclick = all;
   cv.ondblclick = all;
   cv.onwheel = (e) => {
@@ -1377,7 +1379,7 @@ function oppZoom(chart, reset) {
     const f = e.deltaY < 0 ? 0.8 : 1.25, { x, y } = chart.scales;
     const at = { x: x.getValueForPixel(e.offsetX), y: y.getValueForPixel(e.offsetY) };
     for (const [k, sc, v] of [["x", x, at.x], ["y", y, at.y]]) {
-      const lo = sc.min, hi = sc.max, span = Math.min(MAP_HI - MAP_LO, Math.max(MAP_MIN_SPAN, (hi - lo) * f));
+      const lo = sc.min, hi = sc.max, span = Math.min(MAP_HI - LO, Math.max(MAP_MIN_SPAN, (hi - lo) * f));
       const share = (v - lo) / (hi - lo);  // the point under the pointer stays under it
       place(k, v - share * span, v + (1 - share) * span);
     }
@@ -1421,8 +1423,8 @@ async function loadOpportunities(force) {
   status.textContent = `${d.map.length} stocks scored in ${d.markets.join(", ")}${d.failed.length ? `; no data for ${d.failed.join(", ")}` : ""}.`;
   const inZone = d.map.filter((r) => r.f_value >= R.zone && r.f_momentum >= R.zone);
   oppMapChart("oppMap", d.map, R.zone, false);
-  $("#oppMapNote").textContent = `${inZone.length} in the shaded corner`;
-  $("#oppMapHelp").textContent = `Each dot is a stock. Further right is cheaper (value score), higher has a stronger price trend (momentum score), a bigger dot is better quality, and the colour is its overall score. The shaded corner is ${R.zone} or more on both: cheap and rising. Ctrl + scroll zooms in, and every stock in view gets its name; drag to move around, double-click to see it all.`;
+  $("#oppMapNote").textContent = `${inZone.length} of ${d.map.length} stocks are cheap and rising`;
+  $("#oppMapHelp").textContent = `Only the stocks with a value and a momentum score both ${R.zone} or more: cheap and with a rising price. Further right is cheaper, higher has a stronger trend, a bigger dot is better quality, and the colour is the overall score. The table below lists every stock. Ctrl + scroll zooms in; drag to move around, double-click to see it all.`;
   oppTable(d);
 }
 // The table under the map: every scored stock in one place, best overall score first, in views that match the rules
@@ -1450,25 +1452,30 @@ function oppTable(d) {
   if (!views[view]) view = "best";
   $("#oppTabs").innerHTML = Object.entries(views).map(([k, v]) => `<button data-view="${k}" class="${k === view ? "on" : ""}">${esc(v.label)} <span class="muted">${v.rows.length}</span></button>`).join("");
   $$("#oppTabs button").forEach((b) => b.onclick = () => { try { localStorage.setItem("oppView", b.dataset.view); } catch { /* this visit only */ } oppAllRows = false; oppTable(d); });
-  $("#oppTableInfo").innerHTML = infoIcon(`Scores run from 0 to 100; 70+ is Strong, 58+ Favorable, 45+ Neutral, 35+ Caution. V, Q, G, M and R are the value, quality, growth, momentum and risk scores (a high risk score means LOW risk). "With you" is how closely its weekly moves followed your portfolio's over the past year (lower diversifies more). The reasons name the factors at ${R.reasonAt} or more with their figures. Scores rate today's figures, not future prices.`);
+  $("#oppTableInfo").innerHTML = infoIcon(`Every stock scored, in views by the same rules as the map. Each column's "i" says what it means; click a column to sort by it, a row to open the stock. Scores rate today's figures, not future prices.`);
   const v = views[view];
   $("#oppTableHelp").textContent = v.help;
   const rows = [...v.rows].sort((a, b) => b.composite - a.composite).map((r) => ({ ...r, rank: rank.get(r.ticker), fit: fitOf.get(r.ticker)?.fit ?? r.fit ?? null }));
   const shown = oppAllRows ? rows : rows.slice(0, OPP_PAGE);
   const chip = (x) => (isNum(x) ? `<span class="fchip" style="color:${scoreColor(x)};background:${scoreColor(x)}24">${num(x, 0)}</span>` : `<span class="muted">—</span>`);
+  const head = (label, tip) => `${label} ${infoIcon(tip)}`;
   const cols = [
-    { k: "rank", label: "#", num: 1, fmt: (x) => `<span class="muted">${x}</span>` },
+    { k: "rank", label: head("Rank", "Its place among every stock scored, by overall score (1 is the best)."), num: 1, fmt: (x) => `<span class="muted">${x}</span>` },
     { k: "ticker", label: "Stock", fmt: symCell },
     { k: "sector", label: "Sector", fmt: (x) => `<span class="sm">${esc(x || "—")}</span>` },
-    { k: "composite", label: "Score", num: 1, fmt: (x, r) => `<b style="color:${scoreColor(x)}">${num(x, 0)}</b> ${badge(r.stance)}` },
-    ...(view === "fit" ? [{ k: "fit", label: "Fit", num: 1, fmt: (x) => chip(x) }] : []),
-    { k: "f_value", label: "V", num: 1, fmt: chip }, { k: "f_quality", label: "Q", num: 1, fmt: chip }, { k: "f_growth", label: "G", num: 1, fmt: chip },
-    { k: "f_momentum", label: "M", num: 1, fmt: chip }, { k: "f_risk", label: "R", num: 1, fmt: chip },
-    { k: "pe", label: "P/E", num: 1, fmt: (x) => (isNum(x) && x > 0 ? `${num(x, 1)}x` : "—") },
-    { k: "ret1y", label: "1Y", num: 1, fmt: (x) => (isNum(x) ? cpct(x) : "—") },
-    { k: "fromHigh", label: "From high", num: 1, fmt: (x) => (!isNum(x) ? "—" : Math.abs(x) < 0.005 ? "0%" : pct(x, 0)) },  // never "-0%"
-    { k: "corr", label: "With you", num: 1, fmt: (x) => (isNum(x) ? pct(x, 0, false) : "—") },
-    { k: "reasons", label: "Why", fmt: (x) => { const l = x || []; return l.length ? `<span class="opp-why" title="${esc(l.join(" · "))}">${esc(l[0])}${l.length > 1 ? ` <span class="muted">+${l.length - 1}</span>` : ""}</span>` : `<span class="muted">—</span>`; } },
+    { k: "composite", label: head("Overall score", "The five factor scores combined with your weights from Settings, 0 to 100. 70+ is Strong, 58+ Favorable, 45+ Neutral, 35+ Caution, below that Weak. It rates today's figures, not future prices."), num: 1,
+      fmt: (x, r) => `<b style="color:${scoreColor(x)}">${num(x, 0)}</b> ${badge(r.stance)}` },
+    ...(view === "fit" ? [{ k: "fit", label: head("Fit", "The average of the overall score and how little it moved with what you hold (100 = independently of it)."), num: 1, fmt: (x) => chip(x) }] : []),
+    { k: "f_value", label: head("Value", FACTOR_INFO.value), num: 1, fmt: chip },
+    { k: "f_quality", label: head("Quality", FACTOR_INFO.quality), num: 1, fmt: chip },
+    { k: "f_growth", label: head("Growth", FACTOR_INFO.growth), num: 1, fmt: chip },
+    { k: "f_momentum", label: head("Trend", FACTOR_INFO.momentum), num: 1, fmt: chip },
+    { k: "f_risk", label: head("Calm", `${FACTOR_INFO.risk} A high score means LOW risk.`), num: 1, fmt: chip },
+    { k: "pe", label: head("P/E", "Price to earnings: what you pay for each unit of yearly profit. Lower is cheaper; none when the company made a loss."), num: 1, fmt: (x) => (isNum(x) && x > 0 ? `${num(x, 1)}x` : "—") },
+    { k: "ret1y", label: head("1-year return", "The price change over the past year, in the stock's own currency."), num: 1, fmt: (x) => (isNum(x) ? cpct(x) : "—") },
+    { k: "fromHigh", label: head("Below high", "How far the price is under its highest point of the past year (0% = at the high)."), num: 1, fmt: (x) => (!isNum(x) ? "—" : Math.abs(x) < 0.005 ? "0%" : pct(x, 0)) },  // never "-0%"
+    { k: "corr", label: head("Moves with you", "How closely its weekly moves followed your portfolio's over the past year, in your base currency. 100% = in step; lower spreads your risk more."), num: 1, fmt: (x) => (isNum(x) ? pct(x, 0, false) : "—") },
+    { k: "reasons", label: head("Why", `Its strongest factors (${R.reasonAt} or more), with their figures. Hover for all of them.`), fmt: (x) => { const l = x || []; return l.length ? `<span class="opp-why" title="${esc(l.join(" · "))}">${esc(l[0])}${l.length > 1 ? ` <span class="muted">+${l.length - 1}</span>` : ""}</span>` : `<span class="muted">—</span>`; } },
   ];
   table($("#oppTable"), cols, shown, { stock: (r) => r.ticker, empty: esc(v.empty || "No stock here today."), sort: { k: "composite", dir: -1 } })
     .afterDraw(() => $$("#oppTable tbody tr").forEach((tr) => {

@@ -586,3 +586,9 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 .opp-table .symwrap .sub { display: block; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opp-table td:nth-child(3) { white-space: normal; max-width: 130px; }
 .opp-table td:last-child { min-width: 170px; max-width: 240px; }
+
+/* Headers in words, each with its "i", kept on one line */
+.opp-table th { white-space: normal; text-transform: none; letter-spacing: 0; vertical-align: bottom; line-height: 1.3; }
+.opp-table th.num { max-width: 84px; }
+.opp-table th .info { white-space: nowrap; }
+.opp-table td, .opp-table th { padding-left: 7px; padding-right: 7px; }
