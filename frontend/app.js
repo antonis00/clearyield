@@ -1319,17 +1319,33 @@ function oppMapChart(id, rows, zone, small) {
     ctx.font = `600 ${small ? 10 : 11}px IBM Plex Sans`; ctx.fillStyle = C("--text");
     const corner = c.data.datasets[0].data.map((d, i) => ({ d, pt: pts[i] })).filter(({ d }) => (zoomedIn ? d.x >= x.min && d.x <= x.max && d.y >= y.min && d.y <= y.max : d.x >= zone && d.y >= zone)).sort((p, q) => q.d.row.composite - p.d.row.composite);
     // The dots themselves are obstacles too, so a name doesn't sit on another stock
-    corner.forEach(({ d, pt }) => placed.push({ l: pt.x - d.r, r: pt.x + d.r, t: pt.y - d.r, b: pt.y + d.r, dot: true }));
+    corner.forEach(({ d, pt }) => placed.push({ l: pt.x - d.r, r: pt.x + d.r, t: pt.y - d.r, b: pt.y + d.r, dot: d.row.ticker }));
+    const short = (t) => (/^\d/.test(t) ? t : t.replace(/\.[A-Z]+$/, ""));
+    // Each stock keeps its own name, as close to its dot as there's room: right, left, above, below, then the
+    // diagonals, a little further out each round; one set apart from its dot gets a faint line to it
+    c.$named = [];
     corner.forEach(({ d, pt }) => {
-      const t = d.row.ticker, label = /^\d/.test(t) ? t : t.replace(/\.[A-Z]+$/, ""), w = ctx.measureText(label).width;
-      const own = placed.findIndex((p) => p.dot && p.l === pt.x - d.r && p.t === pt.y - d.r);
-      const others = placed.filter((_, i) => i !== own);
+      const t = d.row.ticker, label = short(t), w = ctx.measureText(label).width;
+      const others = placed.filter((p) => p.dot !== t);
       const fits = (b) => b.l >= a.left && b.r <= a.right && b.t >= a.top && b.b <= a.bottom && !others.some((p) => b.l < p.r && b.r > p.l && b.t < p.b && b.b > p.t);
-      const right = { l: pt.x + d.r + 3, r: pt.x + d.r + 3 + w, t: pt.y - h / 2, b: pt.y + h / 2 };
-      const left = { l: pt.x - d.r - 3 - w, r: pt.x - d.r - 3, t: pt.y - h / 2, b: pt.y + h / 2 };
-      const box = fits(right) ? right : fits(left) ? left : null;
-      if (!box) return;
-      ctx.textAlign = "left"; ctx.fillText(label, box.l, pt.y); placed.push(box);
+      const at = (cx, cy) => ({ l: cx - w / 2, r: cx + w / 2, t: cy - h / 2, b: cy + h / 2 });
+      let box = null, gap = 3;
+      for (const g of [3, 8, 14, 22]) {
+        const e = d.r + g;
+        const tries = [at(pt.x + e + w / 2, pt.y), at(pt.x - e - w / 2, pt.y), at(pt.x, pt.y - e - h / 2), at(pt.x, pt.y + e + h / 2),
+          at(pt.x + e * 0.7 + w / 2, pt.y - e * 0.7 - h / 2), at(pt.x + e * 0.7 + w / 2, pt.y + e * 0.7 + h / 2),
+          at(pt.x - e * 0.7 - w / 2, pt.y - e * 0.7 - h / 2), at(pt.x - e * 0.7 - w / 2, pt.y + e * 0.7 + h / 2)];
+        box = tries.find(fits);
+        if (box) { gap = g; break; }
+      }
+      if (!box) return;  // no room anywhere near: the hover still names it
+      if (gap > 3) {  // a short line from the dot's edge to the name, so it's clear whose it is
+        const nx = Math.max(box.l, Math.min(pt.x, box.r)), ny = Math.max(box.t, Math.min(pt.y, box.b)), dist = Math.hypot(nx - pt.x, ny - pt.y) || 1;
+        ctx.save(); ctx.strokeStyle = C("--muted"); ctx.globalAlpha = 0.6; ctx.lineWidth = 1; ctx.beginPath();
+        ctx.moveTo(pt.x + (nx - pt.x) / dist * d.r, pt.y + (ny - pt.y) / dist * d.r); ctx.lineTo(nx, ny); ctx.stroke(); ctx.restore();
+      }
+      ctx.textAlign = "left"; ctx.fillText(label, box.l, (box.t + box.b) / 2); placed.push(box);
+      c.$named.push(t);  // which dots have their name on the map (the walk checks it)
     });
     ctx.restore();
   } };
@@ -1345,10 +1361,12 @@ function oppMapChart(id, rows, zone, small) {
       backgroundColor: rows.map((r) => scoreColor(r.composite) + "cc"), borderColor: rows.map((r) => scoreColor(r.composite)), borderWidth: 1, clip: 0 }] },
     options: { maintainAspectRatio: false, animation: false, plugins: { legend: { display: false },
       tooltip: { callbacks: { label: (c) => (small ? oppTip(c.raw.row).slice(0, 3) : oppTip(c.raw.row)) } } },
+      // every dot under the pointer, so one hidden under another still shows on hover
+      interaction: { mode: "point", intersect: true },
       // A little room past 0 and 100, so a stock at the edge isn't cut in half
       scales: { x: { min: from, max: MAP_HI, title: { display: true, text: small ? "cheaper →" : "Value score — cheaper →", font: { size: small ? 10 : 12 } },
                      ticks: { display: !small }, afterBuildTicks: marks },
-                y: { min: from, max: MAP_HI, title: { display: true, text: small ? "stronger trend ↑" : "Momentum score — stronger trend ↑", font: { size: small ? 10 : 12 } },
+                y: { min: from, max: MAP_HI, title: { display: true, text: small ? "stronger trend →" : "Momentum score — stronger trend →", font: { size: small ? 10 : 12 } },
                      ticks: { display: !small }, afterBuildTicks: marks } },
       onClick: small ? undefined : (e, els, c) => { if (c.$dragged) { c.$dragged = false; return; } if (els[0]) openStock(c.data.datasets[0].data[els[0].index].row.ticker); },
       onHover: (e, els, c) => { if (!c.$drag) e.native.target.style.cursor = els.length || small ? "pointer" : c.$zoomed?.() ? "grab" : "default"; } },

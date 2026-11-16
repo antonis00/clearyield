@@ -608,6 +608,12 @@ const SLOW = 150000;
   const mapPts = await p.evaluate(() => { const z = state.opp.data.rules.zone; return { z, bad: state.charts.oppMap.data.datasets[0].data.filter((d) => d.x < z || d.y < z).length, n: state.charts.oppMap.data.datasets[0].data.length,
     dash: state.charts.dashOppChart ? state.charts.dashOppChart.data.datasets[0].data.filter((d) => d.x < z || d.y < z).length : 0 }; });
   expect("opportunities: the maps show only the cheap-and-rising corner", mapPts.bad === 0 && mapPts.dash === 0 && mapPts.n > 0, JSON.stringify(mapPts));
+  // Every dot in the corner keeps its own name, next to it (no shared names); the y axis's arrow points up once
+  // rotated; the region filters are the same chips as in Settings
+  const mapLook = await p.evaluate(() => { const c = state.charts.oppMap; return { n: c.data.datasets[0].data.length, named: (c.$named || []).length, shared: (c.$named || []).filter((x) => typeof x !== "string").length,
+    y: c.options.scales.y.title.text, chips: document.querySelector("#oppMarkets").classList.contains("chips") && document.querySelector("#scrMarkets").classList.contains("chips") }; });
+  expect("opportunities: each dot named on its own, nearly all of them; the y axis points up; the filters are chips",
+    mapLook.shared === 0 && mapLook.named >= mapLook.n * 0.85 && /→$/.test(mapLook.y) && mapLook.chips, JSON.stringify(mapLook));
   expect("opportunities: the map, and a table of the best opportunities sorted by overall score", drawn.every(Boolean) && /stocks scored/.test(tbl.status)
     && tbl.tabs.join() === "best,corner,fit,sale" && tbl.on === "best" && tbl.scores.length === 25 && tbl.scores.every((v, i) => i === 0 || v <= tbl.scores[i - 1])
     && ["Rank", "Stock", "Sector", "Overall score", "Value", "Quality", "Growth", "Trend", "Calm", "P/E", "1-year return", "Below high", "Moves with you", "Why"].every((h) => tbl.heads.includes(h)) && /^Show all \d+/.test(tbl.more)
