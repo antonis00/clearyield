@@ -601,11 +601,17 @@ const SLOW = 150000;
   drawn.push(await canvasDrawn("#oppMap"));
   // The table under the map: best overall score first, 25 rows then Show all, views as tabs
   const tbl = await p.evaluate(() => ({ status: document.querySelector("#oppStatus").innerText, tabs: [...document.querySelectorAll("#oppTabs button")].map((b) => b.dataset.view),
-    on: document.querySelector("#oppTabs .on")?.dataset.view, heads: [...document.querySelectorAll("#oppTable th")].map((th) => th.textContent.replace(/[▲▼]/g, "").trim()),
-    scores: [...document.querySelectorAll("#oppTable tbody tr")].map((tr) => Number(tr.children[3].querySelector("b").textContent)), more: document.querySelector("#oppMore").textContent }));
+    on: document.querySelector("#oppTabs .on")?.dataset.view, heads: [...document.querySelectorAll("#oppTable th")].map((th) => th.childNodes[0].textContent.trim()),
+    scores: [...document.querySelectorAll("#oppTable tbody tr")].map((tr) => Number(tr.children[3].querySelector("b").textContent)), more: document.querySelector("#oppMore").textContent,
+    infos: document.querySelectorAll("#oppTable th .info").length }));
+  // The map shows only the cheap-and-rising corner
+  const mapPts = await p.evaluate(() => { const z = state.opp.data.rules.zone; return { z, bad: state.charts.oppMap.data.datasets[0].data.filter((d) => d.x < z || d.y < z).length, n: state.charts.oppMap.data.datasets[0].data.length,
+    dash: state.charts.dashOppChart ? state.charts.dashOppChart.data.datasets[0].data.filter((d) => d.x < z || d.y < z).length : 0 }; });
+  expect("opportunities: the maps show only the cheap-and-rising corner", mapPts.bad === 0 && mapPts.dash === 0 && mapPts.n > 0, JSON.stringify(mapPts));
   expect("opportunities: the map, and a table of the best opportunities sorted by overall score", drawn.every(Boolean) && /stocks scored/.test(tbl.status)
     && tbl.tabs.join() === "best,corner,fit,sale" && tbl.on === "best" && tbl.scores.length === 25 && tbl.scores.every((v, i) => i === 0 || v <= tbl.scores[i - 1])
-    && ["#", "Stock", "Sector", "Score", "V", "Q", "G", "M", "R", "P/E", "1Y", "From high", "With you", "Why"].every((h) => tbl.heads.includes(h)) && /^Show all \d+/.test(tbl.more),
+    && ["Rank", "Stock", "Sector", "Overall score", "Value", "Quality", "Growth", "Trend", "Calm", "P/E", "1-year return", "Below high", "Moves with you", "Why"].every((h) => tbl.heads.includes(h)) && /^Show all \d+/.test(tbl.more)
+    && tbl.infos === 12,
     `${tbl.status} | ${tbl.heads.join(",")} | ${tbl.scores.slice(0, 5).join(",")} | ${tbl.more}`);
   await p.click("#oppMore"); await p.waitForTimeout(200);
   const oppRowsAll = await p.locator("#oppTable tbody tr").count();
@@ -635,8 +641,8 @@ const SLOW = 150000;
   await p.keyboard.down("Control"); for (let i = 0; i < 4; i++) { await p.mouse.wheel(0, -100); await p.waitForTimeout(60); } await p.keyboard.up("Control");
   const zoomedTo = await mapRange(), stillAt = await mapAt(70);
   expect("opportunities: Ctrl + wheel zooms the map around the pointer; a plain wheel scrolls the page",
-    plainWheel.range.join() === "-6,106,-6,106" && plainWheel.scrolled && zoomedTo[1] - zoomedTo[0] < 50 && zoomedTo[0] < 70 && zoomedTo[1] > 70
-    && Math.abs(stillAt.x - pt.x) < 8 && Math.abs(stillAt.y - pt.y) < 8 && await p.isVisible("#oppMapReset"), JSON.stringify({ plainWheel, zoomedTo, moved: [Math.round(stillAt.x - pt.x), Math.round(stillAt.y - pt.y)] }));  // the axis labels change width, so the plot shifts a few pixels
+    plainWheel.range.join() === `${mapPts.z - 2},106,${mapPts.z - 2},106` && plainWheel.scrolled && zoomedTo[1] - zoomedTo[0] < 30 && zoomedTo[0] < 70 && zoomedTo[1] > 70
+    && Math.abs(stillAt.x - pt.x) < 14 && Math.abs(stillAt.y - pt.y) < 14 && await p.isVisible("#oppMapReset"), JSON.stringify({ plainWheel, zoomedTo, moved: [Math.round(stillAt.x - pt.x), Math.round(stillAt.y - pt.y)] }));  // the axis labels change width, so the plot shifts a few pixels
   const ticks = await p.evaluate(() => state.charts.oppMap.scales.x.ticks.map((t) => t.value));
   expect("opportunities: zoomed in, the marks are finer", ticks.length >= 3 && ticks[1] - ticks[0] <= 10, ticks.join(","));
   const mapBox = await p.locator("#oppMap").boundingBox();
@@ -645,7 +651,7 @@ const SLOW = 150000;
   const dragged = await mapRange();
   expect("opportunities: a drag moves the zoomed map and opens nothing", dragged[0] < zoomedTo[0] && dragged[2] > zoomedTo[2] && (await p.evaluate(() => location.hash)) === "#opportunities", JSON.stringify(dragged));
   await p.click("#oppMapReset"); await p.waitForTimeout(200);
-  expect("opportunities: Reset zoom shows the whole map again", (await mapRange()).join() === "-6,106,-6,106" && !(await p.isVisible("#oppMapReset")), JSON.stringify(await mapRange()));
+  expect("opportunities: Reset zoom shows the whole map again", (await mapRange()).join() === `${mapPts.z - 2},106,${mapPts.z - 2},106` && !(await p.isVisible("#oppMapReset")), JSON.stringify(await mapRange()));
   const first = await p.evaluate(() => document.querySelector("#oppTable tbody tr").dataset.stock);
   await p.locator("#oppTable tbody tr").first().click();
   await p.waitForFunction((t) => document.querySelector("#rSym")?.textContent === t, first, { timeout: SLOW });
@@ -798,7 +804,7 @@ const SLOW = 150000;
   expect("dashboard: opportunity map card drawn", await canvasDrawn("#dashOppChart"), await txt("#dashOppList"));
   const corner = await p.evaluate(() => { const c = state.charts.dashOppChart, z = state.opp.data.rules.zone, pts = c.data.datasets[0].data;
     return { z, x: c.scales.x.min, y: c.scales.y.min, n: pts.length, all: pts.every((d) => d.x >= z && d.y >= z), inZone: state.opp.data.map.filter((r) => r.f_value >= z && r.f_momentum >= z).length }; });
-  expect("dashboard: the small map shows only the shaded corner", corner.all && corner.n === corner.inZone && corner.x === corner.z - 3 && corner.y === corner.z - 3, JSON.stringify(corner));
+  expect("dashboard: the small map shows only the shaded corner", corner.all && corner.n === corner.inZone && corner.x === corner.z - 2 && corner.y === corner.z - 2, JSON.stringify(corner));
   // Hovering a dot names the company; the corner's stocks are named on the map itself
   // the dot furthest from any other, since with hundreds of stocks a dot can sit under another one
   const dot = await p.evaluate(() => {
