@@ -246,13 +246,11 @@
     </div>
     <div class="card opp-map-card"><div class="card-h"><h3>Opportunity map</h3><span class="opp-map-tools"><button class="btn ghost sm hidden" id="oppMapReset">Reset zoom</button><span id="oppMapNote" class="muted sm"></span></span></div>
         <div class="opp-chart"><canvas id="oppMap"></canvas></div><p class="muted sm" id="oppMapHelp"></p></div>
-    <div class="grid3">
-      <div class="card"><div class="card-h card-h-sub"><h3>Top ranked</h3><span id="oppTopNote" class="muted sm">The highest overall scores</span></div>
-        <div class="opp-chart"><canvas id="oppTop"></canvas></div><p class="muted sm" id="oppTopHelp"></p></div>
-      <div class="card"><div class="card-h card-h-sub"><h3>Fits your portfolio</h3><span id="oppFitNote" class="muted sm"></span></div>
-        <div class="opp-chart" id="oppFitWrap"><canvas id="oppFit"></canvas></div><p class="muted sm" id="oppFitHelp"></p></div>
-      <div class="card"><div class="card-h card-h-sub"><h3>Quality on sale</h3><span class="muted sm">Good companies below their 52-week high</span></div>
-        <div class="opp-chart" id="oppSaleWrap"><canvas id="oppSale"></canvas></div><p class="muted sm" id="oppSaleHelp"></p></div>
+    <div class="card" id="oppTableCard">
+      <div class="card-h"><h3>Best opportunities <span id="oppTableInfo"></span></h3><div class="seg" id="oppTabs"></div></div>
+      <p class="muted sm" id="oppTableHelp"></p>
+      <div id="oppTable" class="tablewrap opp-table"></div>
+      <div class="opp-more"><button class="btn ghost sm hidden" id="oppMore"></button></div>
     </div>
   </section>
 

@@ -94,9 +94,9 @@ function mkChart(id, cfg) {
 }
 
 /* Generic sortable table. cols: {k,label,fmt(v,row),num,sort} */
-function table(el, cols, rows, { stock, empty = "Nothing here yet." } = {}) {
+function table(el, cols, rows, { stock, empty = "Nothing here yet.", sort } = {}) {
   if (!rows.length) { el.innerHTML = `<div class="muted">${empty}</div>`; return { afterDraw() {} }; }
-  let sortK = null, dir = -1, after = () => {};
+  let sortK = sort?.k ?? null, dir = sort?.dir ?? -1, after = () => {};
   const draw = () => {
     const data = [...rows];
     if (sortK) data.sort((a, b) => { const x = a[sortK], y = b[sortK]; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * dir; });
@@ -1404,23 +1404,6 @@ function oppZoom(chart, reset) {
   reset.classList.add("hidden");
 }
 
-// A ranked list as horizontal bars, each opening its stock
-function oppBars(id, rows, value, { label, tip, color, max, fmt }) {
-  return mkChart(id, {
-    type: "bar",
-    data: { labels: rows.map(label), datasets: [{ data: rows.map(value), backgroundColor: rows.map(color), borderRadius: 4, row: rows }] },
-    options: { indexAxis: "y", maintainAspectRatio: false, animation: false, plugins: { legend: { display: false },
-      tooltip: { callbacks: { title: (c) => oppName(rows[c[0].dataIndex]), label: (c) => tip(rows[c.dataIndex]) } } },
-      scales: { x: { min: 0, max, ticks: { callback: fmt } }, y: { ticks: { autoSkip: false } } },
-      onClick: (e, els) => { if (els[0]) openStock(rows[els[0].index].ticker); },
-      onHover: (e, els) => { e.native.target.style.cursor = els.length ? "pointer" : "default"; } },
-  });
-}
-// An empty list gets a sentence in place of a blank chart
-function oppEmpty(wrap, canvasId, message) {
-  const w = $(wrap); w.querySelector(".opp-empty")?.remove(); $(`#${canvasId}`).classList.toggle("hidden", !!message);
-  if (message) w.insertAdjacentHTML("beforeend", `<div class="opp-empty muted">${esc(message)}</div>`);
-}
 async function loadOpportunities(force) {
   const status = $("#oppStatus");
   $("#oppMarkets").innerHTML = oppAll().map((m) => `<label><input type="checkbox" name="oppMarket" value="${m}" ${oppMarkets().includes(m) ? "checked" : ""}> ${m}</label>`).join("");
@@ -1440,17 +1423,72 @@ async function loadOpportunities(force) {
   oppMapChart("oppMap", d.map, R.zone, false);
   $("#oppMapNote").textContent = `${inZone.length} in the shaded corner`;
   $("#oppMapHelp").textContent = `Each dot is a stock. Further right is cheaper (value score), higher has a stronger price trend (momentum score), a bigger dot is better quality, and the colour is its overall score. The shaded corner is ${R.zone} or more on both: cheap and rising. Ctrl + scroll zooms in, and every stock in view gets its name; drag to move around, double-click to see it all.`;
-  $("#oppTopNote").textContent = `The ${R.top} highest overall scores, at most ${R.sectorCap} from one sector`;
-  oppBars("oppTop", d.top, (r) => r.composite, { label: (r) => r.ticker, tip: (r) => oppTip(r).slice(1), color: (r) => scoreColor(r.composite), max: 100 });
-  $("#oppTopHelp").textContent = `The ${R.top} highest overall scores (the five factors, weighted as in Settings), with at most ${R.sectorCap} from one sector so the list isn't one sector's bet. Hover a bar for the strongest reasons (factors at ${R.reasonAt} or more).`;
-  const sat = d.satellite;
-  $("#oppFitNote").textContent = sat && isNum(sat.core) ? `Satellite is ${pct(1 - sat.core, 0, false)} of your portfolio (your limit: ${pct(1 - sat.target, 0, false)})` : "";
-  oppEmpty("#oppFitWrap", "oppFit", !d.holdings.length ? "Add your holdings on the Portfolio page to see which stocks would fit them." : !d.fit.length ? "Not enough shared price history with your portfolio yet: it needs about two months." : "");
-  if (d.fit.length) oppBars("oppFit", d.fit, (r) => r.fit, { label: (r) => r.ticker, tip: (r) => [`Fit ${num(r.fit, 0)}: score ${num(r.composite, 0)}, diversifies ${num(r.diversifies, 0)}`, `Moves ${pct(r.corr, 0, false)} in step with your portfolio`, ...(r.reasons || [])], color: () => C("--accent2"), max: 100 });
-  $("#oppFitHelp").textContent = d.holdings.length ? `Ranked by the average of a stock's overall score and how little it has moved with what you hold now (100 = independently or against it, 0 = in step), with both in your base currency, over the past ${d.fitWeeks} weeks.${d.fitWeeks < 26 ? " That's a short period, so treat the diversification part as a rough guide." : ""} Stocks you already hold are left out.` : "";
-  oppEmpty("#oppSaleWrap", "oppSale", d.onSale.length ? "" : `No stock with a quality score of ${R.saleQuality}+ is ${Math.abs(R.saleDrop * 100)}% or more below its 52-week high with its fall paused right now.`);
-  if (d.onSale.length) oppBars("oppSale", d.onSale, (r) => -r.fromHigh * 100, { label: (r) => r.ticker, tip: (r) => [`${pct(r.fromHigh, 0)} from its 52-week high`, `Quality score ${num(r.f_quality, 0)}`, ...(r.reasons || [])], color: () => C("--accent"), fmt: (v) => (v ? `-${v}%` : "0%") });
-  $("#oppSaleHelp").textContent = `Quality score ${R.saleQuality} or more, at least ${Math.abs(R.saleDrop * 100)}% below the highest price of the past year, and back above its 50-day average, so the fall has paused (a stock still falling tends to keep falling for a while). Best quality first; the bar is how far it fell. A fall can be a bargain or a warning, so check why it fell.`;
+  oppTable(d);
+}
+// The table under the map: every scored stock in one place, best overall score first, in views that match the rules
+// (cheap and rising, fits your portfolio, quality on sale); a column header sorts, a row opens the stock, hovering a
+// row lights up its dot on the map. 25 rows, then Show all. The view is remembered.
+const OPP_PAGE = 25;
+let oppAllRows = false;
+function oppTable(d) {
+  const R = d.rules, sat = d.satellite;
+  const rank = new Map([...d.map].sort((a, b) => b.composite - a.composite).map((r, i) => [r.ticker, i + 1]));
+  const fitOf = new Map(d.fit.map((r) => [r.ticker, r]));
+  const views = {
+    best: { label: "Best overall", rows: d.map, help: `Every stock scored, highest overall score first (the five factors, weighted as in Settings).` },
+    corner: { label: "Cheap & rising", rows: d.map.filter((r) => r.f_value >= R.zone && r.f_momentum >= R.zone),
+      help: `The map's shaded corner: value and momentum scores both ${R.zone} or more.` },
+    fit: { label: "Fits your portfolio", rows: d.fit,
+      help: d.holdings.length ? `The ${d.fit.length} best by the average of the overall score and how little each moved with what you hold now (100 = independently, 0 = in step), in your base currency over the past ${d.fitWeeks} weeks${d.fitWeeks < 26 ? ", a short period, so a rough guide" : ""}. Stocks you hold are left out.${sat && isNum(sat.core) ? ` Satellite is ${pct(1 - sat.core, 0, false)} of your portfolio (your limit ${pct(1 - sat.target, 0, false)}).` : ""}`
+        : "Add your holdings on the Portfolio page to see which stocks would fit them.",
+      empty: d.holdings.length ? "Not enough shared price history with your portfolio yet: it needs about two months." : "Add your holdings on the Portfolio page to see which stocks would fit them." },
+    sale: { label: "Quality on sale", rows: d.onSale,
+      help: `Quality score ${R.saleQuality}+, at least ${Math.abs(R.saleDrop * 100)}% below the past year's high, and back above its 50-day average so the fall has paused. A fall can be a bargain or a warning: check why it fell.`,
+      empty: `No stock with a quality score of ${R.saleQuality}+ is ${Math.abs(R.saleDrop * 100)}% or more below its 52-week high with its fall paused right now.` },
+  };
+  let view; try { view = localStorage.getItem("oppView"); } catch { view = null; }
+  if (!views[view]) view = "best";
+  $("#oppTabs").innerHTML = Object.entries(views).map(([k, v]) => `<button data-view="${k}" class="${k === view ? "on" : ""}">${esc(v.label)} <span class="muted">${v.rows.length}</span></button>`).join("");
+  $$("#oppTabs button").forEach((b) => b.onclick = () => { try { localStorage.setItem("oppView", b.dataset.view); } catch { /* this visit only */ } oppAllRows = false; oppTable(d); });
+  $("#oppTableInfo").innerHTML = infoIcon(`Scores run from 0 to 100; 70+ is Strong, 58+ Favorable, 45+ Neutral, 35+ Caution. V, Q, G, M and R are the value, quality, growth, momentum and risk scores (a high risk score means LOW risk). "With you" is how closely its weekly moves followed your portfolio's over the past year (lower diversifies more). The reasons name the factors at ${R.reasonAt} or more with their figures. Scores rate today's figures, not future prices.`);
+  const v = views[view];
+  $("#oppTableHelp").textContent = v.help;
+  const rows = [...v.rows].sort((a, b) => b.composite - a.composite).map((r) => ({ ...r, rank: rank.get(r.ticker), fit: fitOf.get(r.ticker)?.fit ?? r.fit ?? null }));
+  const shown = oppAllRows ? rows : rows.slice(0, OPP_PAGE);
+  const chip = (x) => (isNum(x) ? `<span class="fchip" style="color:${scoreColor(x)};background:${scoreColor(x)}24">${num(x, 0)}</span>` : `<span class="muted">—</span>`);
+  const cols = [
+    { k: "rank", label: "#", num: 1, fmt: (x) => `<span class="muted">${x}</span>` },
+    { k: "ticker", label: "Stock", fmt: symCell },
+    { k: "sector", label: "Sector", fmt: (x) => `<span class="sm">${esc(x || "—")}</span>` },
+    { k: "composite", label: "Score", num: 1, fmt: (x, r) => `<b style="color:${scoreColor(x)}">${num(x, 0)}</b> ${badge(r.stance)}` },
+    ...(view === "fit" ? [{ k: "fit", label: "Fit", num: 1, fmt: (x) => chip(x) }] : []),
+    { k: "f_value", label: "V", num: 1, fmt: chip }, { k: "f_quality", label: "Q", num: 1, fmt: chip }, { k: "f_growth", label: "G", num: 1, fmt: chip },
+    { k: "f_momentum", label: "M", num: 1, fmt: chip }, { k: "f_risk", label: "R", num: 1, fmt: chip },
+    { k: "pe", label: "P/E", num: 1, fmt: (x) => (isNum(x) && x > 0 ? `${num(x, 1)}x` : "—") },
+    { k: "ret1y", label: "1Y", num: 1, fmt: (x) => (isNum(x) ? cpct(x) : "—") },
+    { k: "fromHigh", label: "From high", num: 1, fmt: (x) => (!isNum(x) ? "—" : Math.abs(x) < 0.005 ? "0%" : pct(x, 0)) },  // never "-0%"
+    { k: "corr", label: "With you", num: 1, fmt: (x) => (isNum(x) ? pct(x, 0, false) : "—") },
+    { k: "reasons", label: "Why", fmt: (x) => { const l = x || []; return l.length ? `<span class="opp-why" title="${esc(l.join(" · "))}">${esc(l[0])}${l.length > 1 ? ` <span class="muted">+${l.length - 1}</span>` : ""}</span>` : `<span class="muted">—</span>`; } },
+  ];
+  table($("#oppTable"), cols, shown, { stock: (r) => r.ticker, empty: esc(v.empty || "No stock here today."), sort: { k: "composite", dir: -1 } })
+    .afterDraw(() => $$("#oppTable tbody tr").forEach((tr) => {
+      tr.onmouseenter = () => oppSpot(tr.dataset.stock);
+      tr.onmouseleave = () => oppSpot(null);
+    }));
+  const more = $("#oppMore");
+  more.classList.toggle("hidden", rows.length <= OPP_PAGE);
+  more.textContent = oppAllRows ? `Show the first ${OPP_PAGE}` : `Show all ${rows.length}`;
+  more.onclick = () => { oppAllRows = !oppAllRows; oppTable(d); };
+}
+// Lights up a stock's dot on the map (or none), with its tooltip, from the table
+function oppSpot(ticker) {
+  const c = state.charts.oppMap;
+  if (!c) return;
+  const i = ticker ? c.data.datasets[0].data.findIndex((p) => p.row?.ticker === ticker) : -1;
+  const active = i >= 0 ? [{ datasetIndex: 0, index: i }] : [];
+  c.setActiveElements(active);
+  c.tooltip.setActiveElements(active, active.length ? { x: c.getDatasetMeta(0).data[i].x, y: c.getDatasetMeta(0).data[i].y } : { x: 0, y: 0 });
+  c.update("none");
 }
 $("#oppRefresh").onclick = () => loadOpportunities(true);
 // The dashboard's card: the map in small, and the top of the "cheap and rising" corner. Loaded after the rest.
