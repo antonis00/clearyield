@@ -568,3 +568,8 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 
 /* A short list (tax years) needs a narrower button than a country */
 #taxYear + .pick-btn { min-width: 110px; }
+
+/* The converter's suggestion list: the picker's panel without its own search box (the text box is the search) */
+.pick-suggest { z-index: 1100; padding: 6px; }
+.pick-suggest .pick-list { max-height: 280px; }
+.pick-code { font: 600 12px var(--mono); color: var(--accent); min-width: 34px; }
