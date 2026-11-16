@@ -368,6 +368,8 @@ main:has(#view-ask:not(.hidden)) { padding-bottom: 0; }
 #view-ask:not(.ask-empty) .ask-composer::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 18px; background: linear-gradient(transparent, var(--bg)); pointer-events: none; }
 .ask-box { display: flex; align-items: flex-end; gap: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 8px 8px 14px; }
 .ask-box:focus-within { border-color: var(--accent); }
+/* the box's gold edge already shows the focus: no second outline on the text inside it */
+.ask-box textarea:focus, .ask-box textarea:focus-visible { outline: none; border: 0; }
 .ask-box textarea { flex: 1; resize: none; border: 0; background: transparent; padding: 6px 0; max-height: 200px; overflow-y: auto; line-height: 1.5; }
 .ask-under { display: flex; align-items: center; gap: 10px; min-height: 26px; margin-top: 6px; padding: 0 4px; }
 .ask-under .ask-keys { margin-left: auto; }
