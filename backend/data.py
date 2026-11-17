@@ -303,6 +303,7 @@ INFO_KEYS = [
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
     "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "financialCurrency",
     "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate", "netExpenseRatio",
+    "currentPrice", "regularMarketPrice", "netIncomeToCommon",
     "website",  # for the company's site icon (logos.py)
 ]
 
@@ -332,7 +333,7 @@ def info(ticker):
 
 
 def _info(ticker):
-    key = f"info:v11:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v12:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -380,12 +381,84 @@ def _normalize_info(ticker, d):
     if d["statementFx"] != 1.0:
         d["enterpriseToEbitda"] = _ev_to_ebitda(d)
         d["priceToBook"] = _price_to_book(ticker, d)
+    check_earnings(ticker, d)
     qt = d.get("quoteType") or ("CRYPTOCURRENCY" if ticker.endswith("-USD") else "EQUITY")
     d["quoteType"] = qt
     d["assetClass"] = asset_class(qt)
     d["region"] = region_of(ticker, qt)
     d["country"] = country_of(ticker) if d["assetClass"] == "Stocks" else None  # where it's listed; funds and coins have none here
     d["ticker"] = ticker
+    return d
+
+
+FORWARD_FIT = 3.0       # forward EPS within this many times the trailing EPS (either way) counts as the same basis
+FORWARD_PE_RANGE = (3.0, 300.0)  # outside it, a forward P/E that can't be checked against the earnings is left out
+SPLIT_LOOKBACK_DAYS = 730  # Yahoo has kept analysts' forward EPS on the old share count for over a year after a split
+TRAILING_FIT = 1.33     # after a recent split, trailing EPS more than a third away from net income / shares is restated
+
+
+def check_earnings(ticker, d, splits_of=None):
+    """Yahoo's forward EPS (and so its forward P/E) is sometimes on another basis than the price: still on the share
+    count before a recent split (Tokio Marine after its 15-for-1 split of September 2026 read 1.2x instead of about
+    18x; Tokyo Electron, Nippon Steel), or in the statements' currency while the price is in the listing's (Elbit's
+    dollars against shekels, 263x instead of about 81x). Each reading is tried against the company's trailing EPS,
+    and the one that fits is used, with `forwardNote` saying how; when none fits and the forward P/E is outside
+    FORWARD_PE_RANGE, it's left out rather than shown wrong (KDDI's 1,270x, Samsung's 2.5x with no EPS to check).
+    After a recent split, the trailing EPS gets the same check against net income / shares. Changes `d` in place."""
+    import datetime as _dt
+    divisor = MINOR_UNITS.get(d.get("currency"), (None, 1.0))[1]
+    price = d.get("currentPrice") or d.get("regularMarketPrice")
+    price = price / divisor if price else None  # in the main unit (pounds, shekels), as EPS is
+    fe, te, fpe = d.get("forwardEps"), d.get("trailingEps"), d.get("forwardPE")
+    fx = d.get("statementFx") or 1.0
+    try:
+        recent = [(when, r) for when, r in (splits_of or splits)(ticker)
+                  if r and r > 1 and (_dt.date.today() - _dt.date.fromisoformat(when[:10])).days <= SPLIT_LOOKBACK_DAYS]
+    except Exception:
+        recent = []
+    notes = []
+    # Trailing EPS after a recent split: net income over today's shares is on today's basis
+    ni, sh = d.get("netIncomeToCommon"), d.get("sharesOutstanding")
+    if recent and price and ni and sh and ni > 0 and te and te > 0:
+        actual = ni / sh * fx
+        if not 1 / TRAILING_FIT <= te / actual <= TRAILING_FIT:
+            d["trailingEps"], d["trailingPE"] = actual, price / actual
+            notes.append(f"Yahoo's trailing EPS ({te:,.2f}) didn't fit the latest net income over today's shares after the "
+                         f"{recent[-1][1]:g}-for-1 split of {recent[-1][0][:10]}, so {actual:,.2f} is used")
+            te = actual
+    if fe is None or not price:
+        if fpe is not None and not FORWARD_PE_RANGE[0] <= fpe <= FORWARD_PE_RANGE[1]:
+            d["forwardPE"] = None
+            notes.append(f"Yahoo's forward P/E ({fpe:,.1f}x) came without the earnings to check it and is outside "
+                         f"{FORWARD_PE_RANGE[0]:g}x-{FORWARD_PE_RANGE[1]:g}x, so it's left out")
+        d["forwardNote"] = "; ".join(notes) or None
+        return d
+    readings = [(1.0, None)]
+    total = 1.0
+    for when, r in reversed(recent):  # the latest split, then it with the one before, ...
+        total *= r
+        readings.append((1 / total, f"restated for the {total:g}-for-1 split{'s' if total != r else ''} since {when[:10]}"))
+    if fx != 1.0:
+        readings.append((fx, f"converted from {d.get('financialCurrency')}, the statements' currency, to the price's"))
+    chosen = None
+    if te and te > 0 and fe > 0:
+        for factor, why in readings:
+            if 1 / FORWARD_FIT <= fe * factor / te <= FORWARD_FIT:
+                chosen = (factor, why)
+                break
+    if chosen and chosen[1]:
+        new = fe * chosen[0]
+        d["forwardEps"], d["forwardPE"] = new, price / new
+        notes.append(f"Yahoo's forward EPS ({fe:,.2f}) was on another basis: {chosen[1]}, it is {new:,.2f}, a forward P/E of {price / new:,.1f}x")
+    elif not chosen:
+        implied = price / fe if fe > 0 else None
+        shown = fpe if fpe is not None else implied
+        if shown is not None and not FORWARD_PE_RANGE[0] <= shown <= FORWARD_PE_RANGE[1]:
+            d["forwardPE"], d["forwardEps"] = None, None
+            notes.append(f"Yahoo's forward P/E ({shown:,.1f}x) doesn't fit the company's own earnings (forward EPS {fe:,.2f} against "
+                         f"trailing {te:,.2f}), so it's left out" if te else f"Yahoo's forward P/E ({shown:,.1f}x) is outside "
+                         f"{FORWARD_PE_RANGE[0]:g}x-{FORWARD_PE_RANGE[1]:g}x and can't be checked, so it's left out")
+    d["forwardNote"] = "; ".join(notes) or None
     return d
 
 

@@ -720,7 +720,7 @@ function renderStats(s) {
     ["Market cap", big(i.marketCap)], ["52w high", priceOf(st.high52, i)], ["52w low", priceOf(st.low52, i)], ["RSI (14)", num(st.rsi, 0)],
     ["1M", cpct(st.ret1m)], ["3M", cpct(st.ret3m)], ["YTD", cpct(st.ytd)], ["1Y", cpct(st.ret1y)], ["5Y CAGR", cpct(st.ret5yCagr)],
     ["Volatility 1Y", pct(st.vol1y, 1, false)], ["Max DD 1Y", cpct(st.maxDD1y)], ["Sharpe 1Y", num(st.sharpe1y)],
-    ["Beta (2Y vs bench)", num(st.betaCalc)], ["P/E", num(i.trailingPE, 1)], ["Fwd P/E", num(i.forwardPE, 1)], ["P/B", num(i.priceToBook, 1)],
+    ["Beta (2Y vs bench)", num(st.betaCalc)], ["P/E", num(i.trailingPE, 1)], ["Fwd P/E", num(i.forwardPE, 1) + (i.forwardNote ? ` ${infoIcon(i.forwardNote)}` : "")], ["P/B", num(i.priceToBook, 1)],
     ["EV/EBITDA", num(i.enterpriseToEbitda, 1)], ["PEG", num(i.pegRatio)], ["ROE", pct(i.returnOnEquity, 1, false)],
     ["Op. margin", pct(i.operatingMargins, 1, false)], ["Net margin", pct(i.profitMargins, 1, false)], ["Debt/Equity", isNum(i.debtToEquity) ? num(i.debtToEquity) + "x" : "—"],
     ["Rev. growth", cpct(i.revenueGrowth)], ["EPS growth", cpct(i.earningsGrowth)], ["Div. yield", pct(i.dividendYield, 2, false)],
