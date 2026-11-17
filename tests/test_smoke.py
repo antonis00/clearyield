@@ -149,9 +149,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v11:EMPTY.X") is None
-        db.cache_set("info:v11:OLD.X", {"trailingPE": 12.0})
-        db.cache_expire("info:v11:OLD.X")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v12:EMPTY.X") is None
+        db.cache_set("info:v12:OLD.X", {"trailingPE": 12.0})
+        db.cache_expire("info:v12:OLD.X")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -5677,6 +5677,42 @@ def test_tax_in_qatar_is_nothing_at_home_but_costs_abroad():
         assert any("30%" in n for n in res["notes"]) and any("Nothing to file" in x for x in res["deadlines"])
         assert c.get("/api/tax/report?year=2026").status_code == 200
     _reset()
+
+
+
+def test_forward_pe_on_the_price_s_basis():
+    """Yahoo's forward EPS left on the share count before a split, or in the statements' currency, gave absurd forward
+    P/Es (Tokio Marine 1.2x after its 15-for-1 split; Elbit 263x mixing dollars and shekels). Each case below is
+    Yahoo's own figures from November 2026; the app restates what fits the company's earnings and leaves out the rest."""
+    import datetime as dt
+
+    from backend import ai, data
+    days_ago = lambda n: (dt.date.today() - dt.timedelta(days=n)).isoformat()  # noqa: E731
+    split15 = lambda t: [(days_ago(48), 15.0)]  # noqa: E731
+    base = {"currency": "JPY", "financialCurrency": "JPY", "statementFx": 1.0}
+    # Tokio Marine: forward 493.02 / 15 = 32.87, so 597.4 / 32.87 = 18.2x; trailing restated from net income / shares
+    tm = data.check_earnings("8766.T", {**base, "currentPrice": 597.4, "forwardEps": 493.02, "forwardPE": 1.2117, "trailingEps": 11.59,
+                                         "trailingPE": 51.54, "netIncomeToCommon": 539_595_997_184, "sharesOutstanding": 28_056_997_870}, split15)
+    assert abs(tm["forwardEps"] - 493.02 / 15) < 1e-9 and abs(tm["forwardPE"] - 597.4 / (493.02 / 15)) < 1e-9, tm
+    assert abs(tm["trailingEps"] - 539_595_997_184 / 28_056_997_870) < 1e-9 and "15-for-1 split" in tm["forwardNote"]
+    # Elbit: the price in agorot, EPS in dollars; at 3.2412 shekels a dollar, 8.5 USD is 27.55 ILS: 2233.7 / 27.55 = 81x
+    el = data.check_earnings("ESLT.TA", {"currency": "ILA", "financialCurrency": "USD", "statementFx": 3.2412, "currentPrice": 223370.0,
+                                          "forwardEps": 8.5, "forwardPE": 262.6, "trailingEps": 42.32, "trailingPE": 52.75}, lambda t: [])
+    assert abs(el["forwardPE"] - 2233.7 / (8.5 * 3.2412)) < 1e-9 and "USD" in el["forwardNote"], el
+    # KDDI: forward EPS 2.33 against 188.66 fits no reading: left out. Samsung: 2.5x with nothing to check: left out
+    kd = data.check_earnings("9433.T", {**base, "currentPrice": 2850.0, "forwardEps": 2.33, "forwardPE": 1269.7, "trailingEps": 188.66}, lambda t: [(days_ago(600), 2.0)])
+    assert kd["forwardPE"] is None and kd["forwardEps"] is None and "left out" in kd["forwardNote"]
+    sm = data.check_earnings("005930.KS", {"currency": "KRW", "financialCurrency": "KRW", "statementFx": 1.0, "currentPrice": 206000.0, "forwardPE": 2.545}, lambda t: [])
+    assert sm["forwardPE"] is None and "left out" in sm["forwardNote"]
+    # What fits is left alone, even a big real gap (Merck's forward 16.6x after a year of one-off charges), and an old split doesn't count
+    for d in ({**base, "currency": "USD", "currentPrice": 148.88, "forwardEps": 8.98, "forwardPE": 16.58, "trailingEps": 1.0},
+              {**base, "currency": "USD", "currentPrice": 300.0, "forwardEps": 10.6, "forwardPE": 28.3, "trailingEps": 9.0}):
+        before = dict(d)
+        out = data.check_earnings("X", d, lambda t: [(days_ago(1500), 4.0)])
+        assert out["forwardPE"] == before["forwardPE"] and out["forwardEps"] == before["forwardEps"] and out["forwardNote"] is None, out
+    # The brief and Ask's stock look-up say what was done
+    d = ai.brief_data({"ticker": "8766.T", "info": {**tm, "name": "Tokio Marine", "assetClass": "Stocks"}, "scores": {"composite": 75, "stance": "Strong", "factors": {}}, "stats": {}})
+    assert "15-for-1" in str(d), d
 
 
 if __name__ == "__main__":
