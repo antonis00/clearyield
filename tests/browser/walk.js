@@ -248,6 +248,12 @@ const SLOW = 150000;
   expect("research: DCF recalculates", /Fair value|needs positive/.test(await txt("#dcfOut")), await txt("#dcfOut"));
   await p.click("#btnBrief"); await p.waitForFunction(() => !document.querySelector("#btnBrief").disabled, null, { timeout: SLOW }); await p.waitForTimeout(300);
   expect("research: brief renders", (await txt("#briefOut")).length > 80, (await txt("#briefOut")).slice(0, 80));
+  // The button says what writes the brief (the tests run with no AI: the app's own rules) and carries the AI mark;
+  // the description grows with its card instead of scrolling in a small box
+  const briefBtn = await p.evaluate(() => ({ label: document.querySelector("#btnBrief").innerText.trim(), mark: !!document.querySelector("#btnBrief .brief-mark"), tip: document.querySelector("#btnBrief").title,
+    about: (() => { const a = document.querySelector("#rAbout"); return { scrolls: a.scrollHeight > a.clientHeight + 1, max: getComputedStyle(a).maxHeight, len: a.textContent.length }; })() }));
+  expect("research: the brief button stands out and says what writes it; About isn't squeezed", /^◆\s*Generate brief$/.test(briefBtn.label) && briefBtn.mark && /No AI is set up/.test(briefBtn.tip)
+    && parseFloat(briefBtn.about.max) > 300 && (!briefBtn.about.scrolls || briefBtn.about.len > 2500), JSON.stringify(briefBtn));
   expect("research: news listed", (await p.locator("#newsList li").count()) > 0);
   await p.click("#btnWatch"); await p.waitForTimeout(1200);
   expect("research: add to watchlist", /Watching/.test(await txt("#btnWatch")));

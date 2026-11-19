@@ -503,6 +503,11 @@ async function openStock(t, period) {
     loadPeers(state.ticker, request);
     $("#briefOut").innerHTML = "Combines scores, price action, fundamentals and headlines into a bull/bear summary.";
     $("#briefOut").classList.add("muted");
+    // Said as it is: written by the AI when one is set up, from the app's own rules otherwise
+    const ai = !!state.meta?.ai;
+    $("#btnBriefLabel").textContent = ai ? "Generate AI brief" : "Generate brief";
+    $("#btnBrief").title = ai ? `Written by ${state.meta.aiInfo?.model || "the AI"}, with every figure checked against the data`
+      : "No AI is set up, so the brief is written from the app's own rules. Set an AI model in .env for a written one.";
     $("#rAbout").textContent = s.info.longBusinessSummary || "No description available.";
     $("#ptOut").innerHTML = ""; ["#ptAmount", "#ptStop", "#ptRisk"].forEach((id) => $(id).value = "");
     $("#ptEntry").value = s.stats.price.toFixed(2);
@@ -847,7 +852,7 @@ async function loadNews() {
 }
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
-  const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, "Writing brief…");
+  const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, state.meta?.ai ? "The AI is writing the brief…" : "Writing brief…");
   try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(safeHtml(r.text), r.check) + briefFooter(r); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };

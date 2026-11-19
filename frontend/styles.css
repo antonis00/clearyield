@@ -302,7 +302,7 @@ li.t1::before { color: var(--up) !important; } li.t-1::before { color: var(--dow
 .statgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 16px; }
 .statgrid div { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--rowline); font-size: 13px; }
 .statgrid div span:first-child { color: var(--muted); } .statgrid div span:last-child { font-family: var(--mono); }
-.about { color: var(--muted); max-height: 140px; overflow: auto; margin: 0; }
+.about { color: var(--muted); max-height: 32em; overflow: auto; margin: 0; }
 .dcf-big { display: flex; gap: 24px; margin: 10px 0; flex-wrap: wrap; }
 .dcf-big div { font: 600 20px var(--mono); } .dcf-big small { display: block; font: 11px var(--sans); color: var(--muted); }
 
@@ -592,3 +592,8 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 .opp-table th.num { max-width: 84px; }
 .opp-table th .info { white-space: nowrap; }
 .opp-table td, .opp-table th { padding-left: 7px; padding-right: 7px; }
+
+/* The research brief's button stands out: the app's AI mark, a little larger than the small buttons */
+.btn-brief { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.btn-brief .brief-mark { font-size: 12px; line-height: 1; }
+.btn-brief:hover:not(:disabled) { filter: brightness(1.08); }
