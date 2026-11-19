@@ -630,3 +630,9 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 .cs-ring .cs-ring-v { font: 600 15px var(--mono); fill: var(--text); }
 .cs-ring .cs-ring-s { font: 8.5px var(--sans, inherit); fill: var(--muted); }
 .cs-ring .split-legend { width: 100%; max-width: 230px; margin-top: 8px; gap: 12px; }
+/* The left side fills the card's height beside the chart: rings at the top, the lines set apart below them, ending level with the chart */
+#csSplit { display: flex; flex-direction: column; }
+#csSplit .cs-rings { margin-bottom: 26px; }
+#csSplit .cs-ring svg { max-width: 210px; }
+#csSplit .cs-lines { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); }
+#csSplit .cs-lines p:first-child { margin-top: 0; }
