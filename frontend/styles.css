@@ -78,11 +78,6 @@ label.block { margin: 8px 0; }
 #themeSeg button:hover:not(.on) { color: var(--text); }
 #themeSeg button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
 .cs-body { margin-bottom: 0; align-items: start; }
-.split { position: relative; display: flex; height: 14px; border-radius: 7px; overflow: visible; background: var(--panel2); margin: 26px 0 8px; }
-.split i { display: block; height: 100%; }
-.split i:first-child { background: var(--accent2); border-radius: 7px 0 0 7px; } .split i:last-child { background: var(--accent); border-radius: 0 7px 7px 0; }
-.split b { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--text); }
-.split b::after { content: attr(data-label); position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
 .cs-core { color: var(--accent2); } .cs-sat { color: var(--accent); }
 .split-legend { display: flex; justify-content: space-between; font: 12px var(--mono); }
 .cs-lines p { margin: 10px 0 0; font-size: 13px; }
@@ -624,3 +619,14 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 #briefOut p.brief-check { margin: 24px 0 0; }
 /* Key statistics: the earnings table set apart from the figures above it */
 #rEarnings h4 { margin: 24px 0 8px; }
+
+/* Core & satellite: two rings side by side (money against the target, share of the swings) */
+.cs-rings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 4px 0 14px; }
+.cs-ring { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.cs-ring.empty { justify-content: center; text-align: center; padding: 20px; }
+.cs-ring-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.cs-ring-h h4 { margin: 0; }
+.cs-ring svg { width: 100%; max-width: 190px; height: auto; display: block; }
+.cs-ring .cs-ring-v { font: 600 15px var(--mono); fill: var(--text); }
+.cs-ring .cs-ring-s { font: 8.5px var(--sans, inherit); fill: var(--muted); }
+.cs-ring .split-legend { width: 100%; max-width: 230px; margin-top: 8px; gap: 12px; }
