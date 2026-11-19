@@ -597,3 +597,11 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 .btn-brief { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .btn-brief .brief-mark { font-size: 12px; line-height: 1; }
 .btn-brief:hover:not(:disabled) { filter: brightness(1.08); }
+/* The brief has its own card across the page; on a wide screen its sections (a heading with what follows it, kept
+   together) flow in two columns so lines stay readable, and a section with a table runs across both */
+@media (min-width: 1100px) {
+  #briefOut .brief-cols { columns: 2; column-gap: 36px; }
+  #briefOut .brief-cols > section { break-inside: avoid; }
+  #briefOut .brief-cols > section.wide { column-span: all; }
+  #briefOut .brief-cols > section > :first-child { margin-top: 0; }
+}

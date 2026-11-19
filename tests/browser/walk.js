@@ -254,6 +254,22 @@ const SLOW = 150000;
     about: (() => { const a = document.querySelector("#rAbout"); return { scrolls: a.scrollHeight > a.clientHeight + 1, max: getComputedStyle(a).maxHeight, len: a.textContent.length }; })() }));
   expect("research: the brief button stands out and says what writes it; About isn't squeezed", /^◆\s*Generate brief$/.test(briefBtn.label) && briefBtn.mark && /No AI is set up/.test(briefBtn.tip)
     && parseFloat(briefBtn.about.max) > 300 && (!briefBtn.about.scrolls || briefBtn.about.len > 2500), JSON.stringify(briefBtn));
+  // The brief has its own card across the page (it used to grow the Signals card, leaving the factor card half empty)
+  const briefLay = await p.evaluate(() => { const c = document.querySelector("#rBriefCard"), f = document.querySelector("#rFactorsCard");
+    const lay = { own: !c.closest(".grid2") && c.contains(document.querySelector("#briefOut")), wide: c.getBoundingClientRect().width > f.getBoundingClientRect().width * 1.6,
+             below: c.getBoundingClientRect().top >= f.getBoundingClientRect().bottom - 1 };
+    // A model's brief (the demo's rule brief has no headings): each heading kept with its text, a table across both columns
+    const out = document.querySelector("#briefOut"), was = out.innerHTML;
+    out.innerHTML = "<h3>Snapshot</h3><p>a</p><h3>Bull case</h3><ul><li>b</li></ul><h3>The numbers</h3><table><tr><td>1</td></tr></table><h3>Bear case</h3><p>c</p><p class='brief-check ok'>ok</p>";
+    briefSections(out);
+    const cols = out.querySelector(".brief-cols"), secs = cols ? [...cols.children] : [];
+    const r = { ...lay, cols: cols && getComputedStyle(cols).columnCount, heads: secs.map((s) => s.firstElementChild.textContent).join("|"),
+                wideOnly: secs.filter((s) => s.classList.contains("wide")).map((s) => s.firstElementChild.textContent).join("|"),
+                span: secs[2] && getComputedStyle(secs[2]).columnSpan, footLast: out.lastElementChild.classList.contains("brief-check") };
+    out.innerHTML = was; return r; });
+  expect("research: the brief has its own full-width card below the scores, its sections in two columns on a wide screen",
+    briefLay.own && briefLay.wide && briefLay.below && briefLay.cols === "2" && briefLay.heads === "Snapshot|Bull case|The numbers|Bear case"
+    && briefLay.wideOnly === "The numbers" && briefLay.span === "all" && briefLay.footLast, JSON.stringify(briefLay));
   expect("research: news listed", (await p.locator("#newsList li").count()) > 0);
   await p.click("#btnWatch"); await p.waitForTimeout(1200);
   expect("research: add to watchlist", /Watching/.test(await txt("#btnWatch")));
