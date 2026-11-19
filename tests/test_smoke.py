@@ -5715,6 +5715,54 @@ def test_forward_pe_on_the_price_s_basis():
     assert "15-for-1" in str(d), d
 
 
+def test_cache_in_its_own_file_and_wal():
+    """The market data cache lives in its own file beside the database (your records stay small, the cache can be
+    deleted), both files in WAL mode; a database from before the split has its cache moved out once, records kept."""
+    import json
+    import sqlite3
+    import time
+    from backend import db
+    folder = Path(tempfile.mkdtemp())
+    old = folder / "before.db"
+    with sqlite3.connect(old) as con:  # the old layout: the cache in the main file, beside a transaction
+        con.execute("CREATE TABLE cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL)")
+        con.executemany("INSERT INTO cache VALUES (?,?,?)", [(f"k{i}", json.dumps("x" * 2000), time.time()) for i in range(500)])
+        con.execute("CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'buy', "
+                    "date TEXT DEFAULT '', shares REAL, price REAL, amount REAL, note TEXT DEFAULT '')")
+        con.execute("INSERT INTO transactions (ticker, kind, date, shares, price) VALUES ('SPY', 'buy', '2024-01-02', 3, 470)")
+    con.close()
+    big = old.stat().st_size
+    real = db.DB_PATH
+    db.DB_PATH = old
+    try:
+        db.init()
+        assert db.cache_path() == folder / "before-cache.db" and db.cache_path().exists()
+        assert db.cache_get_stale("k7") == "x" * 2000, "the cached items moved across"
+        assert db.q("SELECT count(*) AS n FROM cache")[0]["n"] == 500
+        assert db.q("SELECT ticker, shares FROM transactions") == [{"ticker": "SPY", "shares": 3.0}]
+        with sqlite3.connect(old) as con:
+            assert not con.execute("SELECT 1 FROM sqlite_master WHERE name = 'cache'").fetchone(), "no cache left in the main file"
+            assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        con.close()
+        with sqlite3.connect(db.cache_path()) as con:
+            assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        con.close()
+        assert old.stat().st_size < big / 5, (old.stat().st_size, big)
+        # New writes go to the cache file; starting again moves nothing twice
+        db.cache_set("fresh", 1)
+        db.init()
+        assert db.cache_get_stale("fresh") == 1 and db.q("SELECT count(*) AS n FROM cache")[0]["n"] == 501
+        # The cache file deleted: the app starts with an empty cache and your records intact
+        db._mem.clear()
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{db.cache_path()}{suffix}").unlink(missing_ok=True)
+        db.init()
+        assert db.cache_get_stale("fresh") is None and db.q("SELECT ticker FROM transactions") == [{"ticker": "SPY"}]
+    finally:
+        db.DB_PATH = real
+        db._mem.clear()
+
+
 if __name__ == "__main__":
     import logging
     import time

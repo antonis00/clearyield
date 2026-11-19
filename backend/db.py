@@ -1,4 +1,8 @@
-"""SQLite storage: cache, watchlist, transactions, journal, alerts, settings."""
+"""SQLite storage: your records (watchlist, transactions, journal, alerts, settings...) in the main file, and the
+market data cache in a file of its own beside it (`<name>-cache.db`), attached to every connection as `cachedb`, so
+every query still says just `cache`. Your records stay a few hundred KB, quick to copy, and the cache file can be
+deleted at any time: the app downloads it again. Both files are in WAL mode, so a page reading isn't held up while the
+background writes."""
 import json
 import logging
 import math
@@ -19,11 +23,19 @@ if DB_PATH == _DEFAULT_DB and not DB_PATH.exists() and _OLD_DB.exists():
     for _suffix in ("", "-wal", "-shm"):
         if Path(f"{_OLD_DB}{_suffix}").exists():
             os.replace(f"{_OLD_DB}{_suffix}", f"{DB_PATH}{_suffix}")
+
+
+def cache_path(path=None):
+    """The market data cache's file, beside the database: clearyield.db -> clearyield-cache.db."""
+    path = Path(path or DB_PATH)
+    return path.with_name(f"{path.stem}-cache{path.suffix or '.db'}")
+
+
 _lock = threading.Lock()
 log = logging.getLogger("clearyield.db")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS cachedb.cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS watchlist (ticker TEXT PRIMARY KEY, tags TEXT DEFAULT '', note TEXT DEFAULT '', added REAL);
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'buy', date TEXT DEFAULT '',
@@ -83,13 +95,34 @@ def _connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(DB_PATH, check_same_thread=False)
     c.row_factory = sqlite3.Row
+    c.execute("ATTACH DATABASE ? AS cachedb", (str(cache_path()),))
+    # With WAL, NORMAL is still safe against corruption; at most the last moment's writes are lost in a power cut
+    c.execute("PRAGMA main.synchronous = NORMAL")
+    c.execute("PRAGMA cachedb.synchronous = NORMAL")
     return c
+
+
+def _move_cache_out(c):
+    """Databases from before the split kept the cache in the main file: it moves to its own file once, and the main
+    file is compacted to what you entered."""
+    if not c.execute("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = 'cache'").fetchone():
+        return
+    c.execute("CREATE TABLE IF NOT EXISTS cachedb.cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL)")
+    moved = c.execute("INSERT OR IGNORE INTO cachedb.cache SELECT key, value, ts FROM main.cache").rowcount
+    c.execute("DROP TABLE main.cache")
+    c.commit()
+    c.execute("VACUUM main")
+    log.info("Moved %s cached items to %s", moved, cache_path().name)
 
 
 def init():
     with _lock:
         c = _connect()
         try:
+            # WAL is kept in the file once set: readers and the writer no longer block each other
+            c.execute("PRAGMA main.journal_mode = WAL")
+            c.execute("PRAGMA cachedb.journal_mode = WAL")
+            _move_cache_out(c)
             c.executescript(SCHEMA)
             # Columns added after the first release: databases created earlier gain them here
             # Before the ledger there was only a table of current lots: each one becomes a buy
@@ -223,7 +256,7 @@ def cache_prune(days=CACHE_KEEP_DAYS):
             gone = c.execute("DELETE FROM cache WHERE abs(ts) < ?", (cutoff,)).rowcount
             c.commit()
             if gone >= 500:
-                c.execute("VACUUM")  # give the space back to the disk (only worth rewriting the whole file for a real clear-out)
+                c.execute("VACUUM cachedb")  # give the space back to the disk (only worth rewriting the whole file for a real clear-out)
         finally:
             c.close()
     if gone:
