@@ -853,9 +853,23 @@ async function loadNews() {
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, state.meta?.ai ? "The AI is writing the brief…" : "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(safeHtml(r.text), r.check) + briefFooter(r); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(safeHtml(r.text), r.check) + briefFooter(r); briefSections(out); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
+// The brief's sections, each a heading with what follows it, so the two columns never part a heading from its text;
+// a section holding a table is marked wide (it runs across both). The footer stays below, across the card.
+function briefSections(out) {
+  const kids = [...out.children], head = (n) => /^H[1-6]$/.test(n.tagName);
+  if (kids.filter(head).length < 2) return;
+  const cols = document.createElement("div"), foot = []; cols.className = "brief-cols"; let sec = null;
+  for (const n of kids) {
+    if (n.matches(".brief-check, p.muted")) { foot.push(n); continue; }
+    if (head(n) || !sec) { sec = document.createElement("section"); cols.appendChild(sec); }
+    sec.appendChild(n);
+    if (n.matches("table") || n.querySelector("table")) sec.classList.add("wide");
+  }
+  out.replaceChildren(cols, ...foot);
+}
 // Who wrote the brief, and whether every figure in it could be found in the data it was given (or worked out from
 // figures that were)
 function briefFooter(r) {
