@@ -1724,11 +1724,26 @@ function showTargetClash() {
   el.innerHTML = `${esc(c.text)} <button type="button" class="btn ghost sm" id="tgtMatch">Match them: ${esc(Object.entries(c.match).map(([k, v]) => `${k} ${v}%`).join(", "))}</button>`;
   $("#tgtMatch").onclick = () => { $$("[data-tgt]").forEach((i) => { if (i.dataset.tgt in c.match) { i.value = c.match[i.dataset.tgt]; i.dispatchEvent(new Event("input", { bubbles: true })); } }); showTargetClash(); };
 }
+// A ring split into core (from the top, clockwise) and satellite, with an optional tick at the core target and two
+// lines in the middle. Drawn in SVG so it is sharp at any size and takes the theme's colours.
+function csRing({ core, target, label, tip, center, sub, legend }) {
+  const R = 46, W = 14, L = 2 * Math.PI * R, c = Math.min(Math.max(core ?? 0, 0), 1), gap = c > 0 && c < 1 ? 1.2 : 0;
+  const arc = (from, len, color, cls) => len <= 0 ? "" : `<circle class="${cls}" cx="60" cy="60" r="${R}" fill="none" stroke="${color}" stroke-width="${W}" stroke-dasharray="${Math.max(len * L - gap, 0.01)} ${L}" stroke-dashoffset="${-from * L}" transform="rotate(-90 60 60)"/>`;
+  let tick = "";
+  if (isNum(target)) {
+    const ang = target * 2 * Math.PI - Math.PI / 2, p = (rad) => `${(60 + rad * Math.cos(ang)).toFixed(2)} ${(60 + rad * Math.sin(ang)).toFixed(2)}`;
+    tick = `<path d="M ${p(R - W / 2 - 1)} L ${p(R + W / 2 + 4)}" stroke="${C("--text")}" stroke-width="2.5" stroke-linecap="round"/>`;
+  }
+  return `<div class="cs-ring"><div class="cs-ring-h"><h4>${esc(label)}</h4>${infoIcon(tip)}</div>
+    <svg viewBox="0 0 120 120" role="img" aria-label="${esc(label)}: core ${Math.round(c * 100)}%, satellite ${Math.round((1 - c) * 100)}%">
+      <circle cx="60" cy="60" r="${R}" fill="none" stroke="${C("--panel2")}" stroke-width="${W}"/>${arc(0, c, C("--accent2"), "arc-core")}${arc(c, 1 - c, C("--accent"), "arc-sat")}${tick}
+      <text x="60" y="60" text-anchor="middle" class="cs-ring-v">${esc(center)}</text><text x="60" y="76" text-anchor="middle" class="cs-ring-s">${esc(sub)}</text>
+    </svg><div class="split-legend">${legend}</div></div>`;
+}
 function renderCoreSatellite(p) {
   const cs = p.coreSatellite, b = p.base;
   $("#csCard").classList.toggle("hidden", !cs);
   if (!cs) return;
-  const at = (v) => Math.min(Math.max(v * 100, 0), 100);
   const target = `${Math.round(cs.target * 100)}/${Math.round((1 - cs.target) * 100)}`;
   const advice = cs.action === undefined ? "No suggestion until every holding has data."
     : cs.action === "Hold" ? `Within 2 points of your ${target} target.`
@@ -1742,9 +1757,16 @@ function renderCoreSatellite(p) {
     : `${pf.pastYearOnly ? `Over the past year (your purchases have no dates), from ${esc(pf.start)}` : `Since ${esc(pf.start)}, while you held both`}: core ${cpct(pf.core)}, satellite ${cpct(pf.satellite)}. `
       + `Your satellites ${pf.edge >= 0 ? "are ahead of" : "trail"} the core by ${num(Math.abs(pf.edge) * 100, 1)} points`
       + (pf.days < 60 ? `, but ${pf.days} trading days is too short to judge.` : ".");
-  $("#csSplit").innerHTML = `
-    <div class="split"><i style="width:${at(cs.core)}%"></i><i style="width:${100 - at(cs.core)}%"></i><b style="left:calc(${at(cs.target)}% - 1px)" data-label="target ${target}"></b></div>
-    <div class="split-legend"><span class="cs-core">Core ${pct(cs.core, 1, false)}</span><span class="cs-sat">Satellite ${pct(cs.satellite, 1, false)}</span></div>
+  // Two rings side by side: the money split against the target, and each bucket's share of the day-to-day swings,
+  // so a satellite that is a fifth of the money and a third of the risk shows at a glance
+  const money_ = csRing({ core: cs.core, target: cs.target, label: "Money", tip: `Core and satellite as shares of what the portfolio is worth today. The tick is your ${target} target.`,
+    center: pct(cs.core, 1, false), sub: `core · target ${Math.round(cs.target * 100)}%`,
+    legend: `<span class="cs-core">Core ${pct(cs.core, 1, false)}</span><span class="cs-sat">Satellite ${pct(cs.satellite, 1, false)}</span>` });
+  const rc = r ? Math.min(Math.max(r.core ?? 0, 0), 1) : null;
+  const risk_ = r ? csRing({ core: rc, label: "Day-to-day swings", tip: "Each bucket's share of how much the portfolio's value moves from day to day (its share of the variance), over the past year with today's holdings. The two add up to 100%.",
+    center: share(r.satellite), sub: "from satellite", legend: `<span class="cs-core">Core ${share(r.core)}</span><span class="cs-sat">Satellite ${share(r.satellite)}</span>` })
+    : `<div class="cs-ring empty"><div class="muted sm">Risk shares need two or more holdings with a few weeks of prices.</div></div>`;
+  $("#csSplit").innerHTML = `<div class="cs-rings">${money_}${risk_}</div>
     <div class="cs-lines"><p>${advice}</p><p>${risk}</p><p>${judge}</p></div>`;
   $("#csPerfNote").textContent = pf ? "Each bucket's time-weighted return from the first day both were held, at 100. Lots without a date count from your first dated trade; closed positions count in the bucket they're in now." : "";
   if (!pf) { state.charts.csPerf?.destroy(); delete state.charts.csPerf; $("#csPerf").classList.add("hidden"); return; }

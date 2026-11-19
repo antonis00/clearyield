@@ -401,6 +401,14 @@ const SLOW = 150000;
   expect("portfolio: core is the index fund", spy.bucket === "core" && Math.abs(cs.core - spy.value / pf.total) < 1e-9 && cs.action, `core ${(cs.core * 100).toFixed(1)}%, ${cs.action}`);
   expect("portfolio: risk shares add up", Math.abs(cs.riskShare.core + cs.riskShare.satellite - 1) < 1e-9, JSON.stringify(cs.riskShare));
   expect("portfolio: core vs satellite compared", cs.performance && (await canvasDrawn("#csPerf")) && /Since \d{4}-\d\d-\d\d/.test(await txt("#csSplit")), (await txt("#csSplit"))?.slice(-120));
+  // Two rings: the money against the target (a tick at it) and the share of the swings, each arc the size of its share
+  const rings = await p.evaluate(() => [...document.querySelectorAll("#csSplit .cs-ring svg")].map((s) => {
+    const L = 2 * Math.PI * 46, len = (cls) => { const c = s.querySelector(`circle.${cls}`); return c ? +((parseFloat(c.getAttribute("stroke-dasharray")) + 1.2) / L).toFixed(2) : 0; };
+    return { label: s.getAttribute("aria-label"), arcs: [len("arc-core"), len("arc-sat")], tick: !!s.querySelector("path"), center: s.querySelector(".cs-ring-v").textContent, w: Math.round(s.getBoundingClientRect().width) }; }));
+  const pct1 = (v) => Math.round(v * 100) / 100;
+  expect("portfolio: core & satellite as two rings, money with its target tick and the swings",
+    rings.length === 2 && /^Money/.test(rings[0].label) && rings[0].tick && !rings[1].tick && /^Day-to-day swings/.test(rings[1].label)
+    && Math.abs(rings[0].arcs[0] - pct1(cs.core)) <= 0.02 && Math.abs(rings[1].arcs[0] - pct1(cs.riskShare.core)) <= 0.02 && rings.every((r) => r.w >= 120), JSON.stringify(rings));
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Satellite", null, { timeout: SLOW });
   expect("portfolio: switching a holding's bucket", /Core 0\.0%/.test(await txt("#csSplit")) && (await p.evaluate(() => location.hash)) === "#portfolio", (await txt("#csSplit"))?.slice(0, 60));
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Core", null, { timeout: SLOW }); await p.waitForTimeout(400);
