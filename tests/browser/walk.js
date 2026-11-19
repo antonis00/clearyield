@@ -271,13 +271,20 @@ const SLOW = 150000;
     briefLay.own && briefLay.wide && briefLay.below && briefLay.cols === "2" && briefLay.heads === "Snapshot|Bull case|The numbers|Bear case"
     && briefLay.wideOnly === "The numbers" && briefLay.span === "all" && briefLay.footLast, JSON.stringify(briefLay));
   // The score history: first and latest values with the change, on a scale of at least 10 points (a 1.7-point move
-  // filled the whole card height before), the check line set apart from the brief
+  // filled the whole card height before) and filling the rest of the Signals card (a small one left it half empty);
+  // the brief's figure check set apart from its text, a model's rules hidden; room above the earnings table
   const hist = await p.evaluate(() => { const s = { ...state.stock, scoreHistory: [{ date: "2026-11-12", composite: 70.8 }, { date: "2026-11-13", composite: 72.9 }, { date: "2026-11-14", composite: 72.5 }] };
-    renderHistory(s); const el = document.querySelector("#rHistory"), svg = el.querySelector("svg"), pts = [...svg.querySelectorAll("circle")].map((c) => +c.getAttribute("cy"));
-    const r = { text: el.innerText.replace(/\s+/g, " "), h: svg.getBoundingClientRect().height, spread: Math.max(...pts) - Math.min(...pts), dots: pts.length };
+    renderHistory(s); const el = document.querySelector("#rHistory"), ch = state.charts.rHist, card = document.querySelector("#rSignalsCard").getBoundingClientRect();
+    const box = el.querySelector(".hist-box").getBoundingClientRect(), fac = document.querySelector("#rFactorsCard").getBoundingClientRect();
+    const out = document.querySelector("#briefOut"), was = out.innerHTML; out.innerHTML = "<h3>A</h3><p>a</p><hr><h3>B</h3><p>b</p><p class='brief-check ok'>ok</p>"; briefSections(out);
+    const gap = out.querySelector(".brief-check").getBoundingClientRect().top - out.querySelector(".brief-cols").getBoundingClientRect().bottom, hr = getComputedStyle(out.querySelector("hr")).display; out.innerHTML = was;
+    const e = document.querySelector("#rEarnings"), ew = e.innerHTML; e.innerHTML = "<h4>Earnings against expectations</h4>"; const eTop = parseFloat(getComputedStyle(e.querySelector("h4")).marginTop); e.innerHTML = ew;
+    const r = { text: el.innerText.replace(/\s+/g, " "), range: ch && ch.scales.y.max - ch.scales.y.min, pts: ch?.data.datasets[0].data.length,
+                fills: Math.round(card.bottom - box.bottom), boxH: Math.round(box.height), level: Math.abs(card.height - fac.height) < 2, gap: Math.round(gap), hr, eTop };
     renderHistory(state.stock); return r; });
-  expect("research: score history shows its values and change, small and on a sensible scale", /Overall score since 2026-11-12/.test(hist.text) && /70\.8/.test(hist.text) && /72\.5 \(\+1\.7\)/.test(hist.text)
-    && hist.dots === 3 && hist.h <= 50 && hist.spread < 20, JSON.stringify(hist));
+  expect("research: score history shows its values and change on a sensible scale, filling the Signals card; brief check and earnings table given room",
+    /Overall score since 2026-11-12/i.test(hist.text) && /70\.8 → 72\.5 \(\+1\.7\)/.test(hist.text) && hist.pts === 3 && hist.range >= 10
+    && hist.fills < 40 && hist.boxH >= 150 && hist.level && hist.gap >= 20 && hist.hr === "none" && hist.eTop >= 20, JSON.stringify(hist));
   expect("research: news listed", (await p.locator("#newsList li").count()) > 0);
   await p.click("#btnWatch"); await p.waitForTimeout(1200);
   expect("research: add to watchlist", /Watching/.test(await txt("#btnWatch")));

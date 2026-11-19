@@ -838,23 +838,26 @@ async function loadFund(s) {
     ${sectors.length ? `<h4>Sectors</h4><div class="statgrid">${sectors.map(([k, v]) => `<div><span>${esc(k)}</span><span>${pct(v, 1, false)}</span></div>`).join("")}</div>` : `<p class="muted sm">Yahoo has no sector data for this fund.</p>`}
     ${f.holdings.length ? `<h4>Top holdings</h4><div class="statgrid">${f.holdings.map((h) => `<div><span>${esc(h.ticker)}</span><span>${pct(h.weight, 1, false)}</span></div>`).join("")}</div>` : ""}`;
 }
-// The overall score day by day since the stock was first held or watched: the first and latest values with the change,
-// and a small chart on a scale of at least 10 points, so a move of a point or two doesn't look like a cliff
+// The overall score day by day since the stock was first held or watched, as a chart filling the rest of the Signals
+// card: a scale of at least 10 points (a 1.7-point move mustn't look like a cliff), the first and latest values with
+// the change above it, each day's score on hover
 function renderHistory(s) {
   const h = (s.scoreHistory || []).filter((x) => isNum(x.composite)), el = $("#rHistory");
-  if (!h.length) { el.innerHTML = s.watched ? "" : "Score history builds up daily for what you hold or watch."; return; }
+  state.charts.rHist?.destroy(); delete state.charts.rHist;
+  if (!h.length) { el.innerHTML = s.watched ? "" : '<span class="muted sm">Score history builds up daily for what you hold or watch.</span>'; return; }
   const first = h[0], last = h[h.length - 1], d = last.composite - first.composite;
-  const head = `<div class="hist-h"><span>Overall score since ${esc(first.date)}</span>${infoIcon("The overall score worked out each day for what you hold or watch, so you can see whether its case is getting better or worse. It moves with prices (momentum, risk, valuation) and with new statements.")}</div>`;
-  if (h.length < 2) { el.innerHTML = `${head}<div class="sm">${num(last.composite, 1)} so far: one day recorded.</div>`; return; }
-  const vals = h.map((x) => x.composite), mid = (Math.min(...vals) + Math.max(...vals)) / 2, half = Math.max((Math.max(...vals) - Math.min(...vals)) / 2, 5);
-  const lo = mid - half, hi = mid + half, W = 300, H = 44, x = (i) => 4 + (i / (h.length - 1)) * (W - 8), y = (v) => H - 4 - ((v - lo) / (hi - lo)) * (H - 8);
+  const tip = infoIcon("The overall score worked out each day for what you hold or watch, so you can see whether its case is getting better or worse. It moves with prices (momentum, risk, valuation) and with new statements.");
+  const change = h.length > 1 ? `${num(first.composite, 1)} → <b>${num(last.composite, 1)}</b> <span class="${d > 0.05 ? "up" : d < -0.05 ? "down" : "muted"}">(${d >= 0 ? "+" : ""}${num(d, 1)})</span>` : `<b>${num(last.composite, 1)}</b> <span class="muted">one day so far</span>`;
+  el.innerHTML = `<div class="hist-h"><h4>Overall score since ${esc(first.date)}</h4>${tip}<span class="hist-v">${change}</span></div>${h.length > 1 ? '<div class="hist-box"><canvas id="rHist"></canvas></div>' : ""}`;
+  if (h.length < 2) return;
+  const vals = h.map((x) => x.composite), mn = Math.min(...vals), mx = Math.max(...vals), mid = (mn + mx) / 2, half = Math.max((mx - mn) / 2 + 1, 5);
   const col = d > 0.05 ? C("--up") : d < -0.05 ? C("--down") : C("--muted");
-  const pts = h.map((p, i) => `${x(i).toFixed(1)},${y(p.composite).toFixed(1)}`).join(" ");
-  const dots = h.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.composite).toFixed(1)}" r="2.5" fill="${col}"><title>${esc(p.date)}: ${num(p.composite, 1)}</title></circle>`).join("");
-  el.innerHTML = `${head}<div class="hist-row"><span class="hist-v">${num(first.composite, 1)}</span>
-    <svg class="hist-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Overall score from ${num(first.composite, 1)} to ${num(last.composite, 1)}"><polyline fill="none" stroke="${col}" stroke-width="2" points="${pts}"/>${dots}</svg>
-    <span class="hist-v"><b>${num(last.composite, 1)}</b> <span class="${d > 0.05 ? "up" : d < -0.05 ? "down" : "muted"}">(${d >= 0 ? "+" : ""}${num(d, 1)})</span></span></div>
-    <div class="muted sm">${h.length} days recorded · latest ${esc(last.date)} · hover a point for its day</div>`;
+  mkChart("rHist", { type: "line",
+    data: { labels: h.map((x) => x.date), datasets: [{ label: "Overall score", data: vals, borderColor: col, borderWidth: 2, pointRadius: h.length > 40 ? 0 : 3, pointHoverRadius: 5, tension: 0.25, fill: false }] },
+    options: { maintainAspectRatio: false, animation: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `Overall score ${num(c.parsed.y, 1)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0, callback(v) { return this.getLabelForValue(v).slice(5); } } },
+                y: { min: Math.max(0, Math.floor((mid - half) / 5) * 5), max: Math.min(100, Math.ceil((mid + half) / 5) * 5), ticks: { stepSize: 5, precision: 0 }, grid: { color: C("--line") } } } } });
 }
 async function loadNews() {
   const ticker = state.ticker;

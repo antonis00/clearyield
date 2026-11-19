@@ -606,9 +606,21 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
   #briefOut .brief-cols > section > :first-child { margin-top: 0; }
 }
 
-/* Signals' score history: first value, a small chart, latest value with the change */
-#rHistory { margin-top: 12px; }
-#rHistory .hist-h { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-#rHistory .hist-row { display: flex; align-items: center; gap: 10px; color: var(--text); }
-#rHistory .hist-chart { flex: 1; min-width: 0; max-width: 300px; height: auto; overflow: visible; }
-#rHistory .hist-v { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Signals' score history fills the rest of the card (the factor card beside it sets the height); the canvas sits
+   absolutely inside its box so Chart.js never grows the card */
+#rSignalsCard { display: flex; flex-direction: column; }
+#rHistory { flex: 1; display: flex; flex-direction: column; margin-top: 14px; min-height: 0; }
+#rHistory .hist-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#rHistory .hist-h h4 { margin: 0; }
+#rHistory .hist-v { margin-left: auto; font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text); }
+#rHistory .hist-box { position: relative; flex: 1; min-height: 150px; }
+#rHistory .hist-box canvas { position: absolute; inset: 0; }
+/* The brief's sections: room between them, and no rules a model writes between them (the sections already part it);
+   the figure check set apart from the text ('.brief p' would otherwise take its margin away) */
+#briefOut hr { display: none; }
+#briefOut .brief-cols > section { padding-bottom: 6px; }
+#briefOut .brief-cols > section.wide { margin: 8px 0; }
+#briefOut .brief-cols > section > :is(h1, h2, h3, h4):first-child { margin-top: 4px; }
+#briefOut p.brief-check { margin: 24px 0 0; }
+/* Key statistics: the earnings table set apart from the figures above it */
+#rEarnings h4 { margin: 24px 0 8px; }
