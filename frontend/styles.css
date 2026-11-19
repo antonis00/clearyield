@@ -139,7 +139,7 @@ label.block { margin: 8px 0; }
 #cvSwap { margin-bottom: 2px; }
 .conv-out { margin: 14px 0 4px; min-height: 52px; }
 .conv-big { font: 600 20px var(--mono); margin-bottom: 4px; }
-.brief-check { font-size: 12px; margin-top: 12px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); }
+.brief-check { font-size: 12px; margin-top: 22px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); }
 .brief-check.ok { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); }
 .brief-check.warn { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
 .web-links { margin: 4px 0 2px; padding-left: 16px; font-size: 12px; } .web-links li { margin: 1px 0; }
@@ -605,3 +605,10 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
   #briefOut .brief-cols > section.wide { column-span: all; }
   #briefOut .brief-cols > section > :first-child { margin-top: 0; }
 }
+
+/* Signals' score history: first value, a small chart, latest value with the change */
+#rHistory { margin-top: 12px; }
+#rHistory .hist-h { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+#rHistory .hist-row { display: flex; align-items: center; gap: 10px; color: var(--text); }
+#rHistory .hist-chart { flex: 1; min-width: 0; max-width: 300px; height: auto; overflow: visible; }
+#rHistory .hist-v { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }

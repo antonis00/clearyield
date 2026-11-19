@@ -270,6 +270,14 @@ const SLOW = 150000;
   expect("research: the brief has its own full-width card below the scores, its sections in two columns on a wide screen",
     briefLay.own && briefLay.wide && briefLay.below && briefLay.cols === "2" && briefLay.heads === "Snapshot|Bull case|The numbers|Bear case"
     && briefLay.wideOnly === "The numbers" && briefLay.span === "all" && briefLay.footLast, JSON.stringify(briefLay));
+  // The score history: first and latest values with the change, on a scale of at least 10 points (a 1.7-point move
+  // filled the whole card height before), the check line set apart from the brief
+  const hist = await p.evaluate(() => { const s = { ...state.stock, scoreHistory: [{ date: "2026-11-12", composite: 70.8 }, { date: "2026-11-13", composite: 72.9 }, { date: "2026-11-14", composite: 72.5 }] };
+    renderHistory(s); const el = document.querySelector("#rHistory"), svg = el.querySelector("svg"), pts = [...svg.querySelectorAll("circle")].map((c) => +c.getAttribute("cy"));
+    const r = { text: el.innerText.replace(/\s+/g, " "), h: svg.getBoundingClientRect().height, spread: Math.max(...pts) - Math.min(...pts), dots: pts.length };
+    renderHistory(state.stock); return r; });
+  expect("research: score history shows its values and change, small and on a sensible scale", /Overall score since 2026-11-12/.test(hist.text) && /70\.8/.test(hist.text) && /72\.5 \(\+1\.7\)/.test(hist.text)
+    && hist.dots === 3 && hist.h <= 50 && hist.spread < 20, JSON.stringify(hist));
   expect("research: news listed", (await p.locator("#newsList li").count()) > 0);
   await p.click("#btnWatch"); await p.waitForTimeout(1200);
   expect("research: add to watchlist", /Watching/.test(await txt("#btnWatch")));
