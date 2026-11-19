@@ -400,7 +400,7 @@ const CHECKS = {
     await page.evaluate(() => { location.hash = "#research/AAPL"; });
     await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL" && document.querySelector("#researchBody").style.opacity === "1", null, { timeout: 60000 });
     await page.waitForTimeout(400);
-    expect("score history is explained from day one", /Score history/.test(await page.innerText("#rHistory")), await page.innerText("#rHistory"));
+    expect("score history is explained from day one", /Overall score since \d{4}-\d\d-\d\d/i.test(await page.innerText("#rHistory")), await page.innerText("#rHistory"));
   },
 
   // Text from Yahoo can't run as a script in the brief
