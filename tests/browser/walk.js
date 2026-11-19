@@ -214,9 +214,14 @@ const SLOW = 150000;
     expect(`research: ${k} chart drawn`, await p.evaluate((x) => document.querySelector(`#kindSeg [data-k="${x}"]`).classList.contains("on"), k) && await canvasDrawn("#priceChart canvas"));
   }
   await p.locator("#periodSeg button[data-p='1d']").click(); await p.waitForFunction(() => state.stock.candles.intraday, null, { timeout: SLOW }); await p.waitForTimeout(300);
+  const dailyBoxes = () => p.evaluate(() => ["#tSma", "#tBb"].map((id) => ({ shown: !document.querySelector(id).closest("label").classList.contains("hidden"), off: document.querySelector(id).disabled })));
   const intra = await p.evaluate(() => ({ n: state.stock.candles.time.length, note: state.stock.candles.note, panes: document.querySelector("#indPanes").classList.contains("hidden") }));
-  expect("research: 1D shows candles within the day, without the daily indicators", intra.n > 0 && intra.panes && (await p.locator("#priceChart canvas").count()) > 0, JSON.stringify(intra));
+  const boxes1d = await dailyBoxes();
+  expect("research: 1D shows candles within the day, without the daily indicators or their boxes", intra.n > 0 && intra.panes && (await p.locator("#priceChart canvas").count()) > 0
+    && boxes1d.every((b) => !b.shown), JSON.stringify({ ...intra, boxes1d }));
   await p.locator("#periodSeg button[data-p='1y']").click(); await p.waitForFunction(() => document.querySelector("#researchBody").style.opacity === "1", null, { timeout: SLOW });
+  await p.waitForFunction(() => state.stock && !state.stock.candles.intraday, null, { timeout: SLOW }); await p.waitForTimeout(200);
+  expect("research: back on 1Y, the SMA and Bollinger boxes are there and usable, never greyed out", (await dailyBoxes()).every((b) => b.shown && !b.off), JSON.stringify(await dailyBoxes()));
   // The chart's layers (moving averages, Bollinger bands, volume) start on, and keep what you choose
   const layers = () => p.evaluate(() => ["#tSma", "#tBb", "#tVol"].map((id) => document.querySelector(id).checked));
   const layersAtStart = await layers();

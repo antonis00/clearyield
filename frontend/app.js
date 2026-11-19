@@ -572,7 +572,10 @@ function renderPrice(s) {
   const c = s.candles, intraday = c.intraday;
   $("#indPanes").classList.toggle("hidden", !!intraday);
   $("#barSeg").classList.toggle("hidden", !!intraday);
-  ["#tSma", "#tBb"].forEach((id) => { $(id).disabled = !!intraday; });
+  // Moving averages and Bollinger bands come from daily prices, so 1D/5D (minute candles) can't draw them: their boxes
+  // are hidden there rather than greyed out still ticked, which read as a setting stuck on. Your choice is kept.
+  ["#tSma", "#tBb"].forEach((id) => { $(id).closest("label").classList.toggle("hidden", !!intraday); });
+  $("#tVol").closest(".toggles").title = intraday ? "Moving averages and Bollinger bands use daily prices, so they show from 1M" : "";
   $$("#barSeg button").forEach((x) => x.classList.toggle("on", x.dataset.b === c.bars));
   $("#chartNote").textContent = c.note ? c.note
     : intraday ? `${intraday.replace("m", "-minute")} candles, in the market's local time. Moving averages, RSI and MACD use daily prices, so they appear from 1M.`
