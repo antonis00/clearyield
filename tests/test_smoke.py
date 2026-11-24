@@ -1262,6 +1262,78 @@ def test_score_research_adoption_rule():
     assert gp3["countedRegions"] == ["Europe", "Middle East & Africa"] and "Regions with enough months to count: Europe, Middle East & Africa." in gp3["why"], gp3["why"]
 
 
+def test_stress_test_is_hand_calculated():
+    """Today's mix through a past fall: bought at the window's start and held, the fall peak to low, the months back
+    to the peak, the loss on today's value; a holding with no prices then is left out and the rest scaled up, and
+    under 60% covered nothing is worked out. The route answers in demo mode, every scenario covered."""
+    import numpy as np
+    import pandas as pd
+
+    from backend import stress
+    idx = pd.bdate_range("2019-11-01", "2021-12-31")
+    def path(points):  # straight lines between (date, price) points
+        xs = [idx.get_indexer([pd.Timestamp(d)], method="bfill")[0] for d, _ in points]
+        return pd.Series(np.interp(range(len(idx)), xs, [p for _, p in points]), index=idx)
+    a = path([("2019-11-01", 90), ("2020-02-19", 100), ("2020-03-23", 50), ("2020-09-01", 100), ("2021-12-31", 120)])
+    b = pd.Series(100.0, index=idx)
+    sc = {"key": "covid", "name": "Covid", "what": "", "from": "2020-02-19", "to": "2020-03-23"}
+    start = idx[idx <= pd.Timestamp("2020-02-19") - pd.Timedelta(days=45)][-1]
+    r = stress.scenario({"A": a, "B": b}, {"A": 0.5, "B": 0.5}, sc, value=10000)
+    a0 = a[start]
+    peak, low = 0.5 * 100 / a0 + 0.5, 0.5 * 50 / a0 + 0.5
+    assert r["enough"] and r["coverage"] == 1 and r["peak"] == "2020-02-19" and r["low"] == "2020-03-23", r
+    assert abs(r["fall"] - (low / peak - 1)) < 1e-9 and abs(r["loss"] - 10000 * (low / peak - 1)) < 1e-6
+    assert r["recovered"] == "2020-09-01" and r["recoverMonths"] == round((pd.Timestamp("2020-09-01") - pd.Timestamp("2020-02-19")).days / 30.44, 1)
+    assert "planBack" not in r, "no plan, no plan figures"
+    late = path([("2019-11-01", 10), ("2020-06-01", 10), ("2021-12-31", 10)])[lambda s: s.index >= "2020-06-01"]
+    r = stress.scenario({"A": a, "B": b, "C": late}, {"A": 0.35, "B": 0.35, "C": 0.3}, sc, value=10000, monthly=500)
+    assert r["enough"] and abs(r["coverage"] - 0.7) < 1e-9 and r["missing"] == [{"ticker": "C", "weight": 0.3, "from": "2020-06-01"}]
+    assert abs(r["fall"] - (low / peak - 1)) < 1e-9, "A and B scaled up to 50/50: the same fall"
+    assert r["planBack"] and "2020-03-23" < r["planBack"] <= r["recovered"] and r["planWorst"] < 0, "buying through the fall gets back sooner"
+    r = stress.scenario({"A": a, "C": late}, {"A": 0.5, "C": 0.5}, sc, value=10000)
+    assert not r["enough"] and r["coverage"] == 0.5
+
+    _reset()
+    with TestClient(app) as c:
+        assert c.get("/api/stress").json()["empty"] is True
+        c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "shares": 10, "price": 400})
+        c.post("/api/settings", json={"plan": {"monthly": 500}})
+        out = c.get("/api/stress").json()
+    assert len(out["scenarios"]) == len(stress.SCENARIOS) and all(s["enough"] for s in out["scenarios"]), out
+    assert out["worst"] == "gfc" and all(s["world"] is not None and s["fall"] < 0 and s["planBack"] for s in out["scenarios"])
+
+
+def test_score_research_round3_scores_within_the_sector():
+    """Round 3: value, quality and growth as the share of the same sector's stocks beaten that date (a tie half),
+    none for a sector with under 8 others. A value score swamped by which sector a stock is in (a tilt that says
+    nothing about what follows) is beaten by its own rank within the sector, which is adopted; noise isn't."""
+    import random
+
+    from backend import scorecheck as sc
+    base = {"date": "2025-01-01", "region": "Europe", "quality": None, "growth": None, "momentum": 50, "risk": 50}
+    rows = [{**base, "ticker": f"T{i}", "sector": "Energy", "value": float(v)} for i, v in enumerate([10, 20, 30, 40, 50, 60, 70, 80, 80])]
+    rows.append({**base, "ticker": "L", "sector": "Utilities", "value": 99.0})  # alone in its sector
+    sc.within_sector(rows)
+    by = {r["ticker"]: r for r in rows}
+    assert by["T0"]["value_sector"] == 0 and by["T6"]["value_sector"] == 75.0, "beats 6 of 8 others"
+    assert by["T7"]["value_sector"] == by["T8"]["value_sector"] == 100 * 7.5 / 8, "a tie counts half"
+    assert by["L"]["value_sector"] is None and by["T0"].get("quality_sector") is None, "no peers, or no score: no rank"
+    assert all(r["composite_sector"] is None for r in rows), "the overall score only where all five are there"
+
+    rows = _research_rows(seed=5)
+    rng = random.Random(3)
+    tilt = {(r["date"], s): 60 * rng.gauss(0, 1) for r in rows for s in ("A", "B", "C")}
+    for r in rows:
+        r["sector"] = "ABC"[int(r["ticker"][2:]) % 3]
+        r["value"] = 50 + 10 * r["signal"] + tilt[(r["date"], r["sector"])]  # today's: mostly which sector, that month
+    sc.within_sector(rows)
+    out = sc.judge(rows, candidate_list=sc.CANDIDATES_R3)
+    c = {x["key"]: x for x in out["candidates"]}
+    assert c["value_sector"]["adopted"], c["value_sector"]["why"]
+    assert not c["growth_sector"]["adopted"] and not c["quality_sector"]["adopted"], "noise and the placebo stay out"
+    assert out["compositeSector"]["own"]["n"] > 0 and "vsToday" in out["compositeSector"]
+
+
 def test_score_research_measures_picking_within_a_country():
     """A score that only points at the country that did well (and picks nothing within it) isn't credited with
     picking: each outcome is measured against its country's average that month."""
@@ -1332,7 +1404,7 @@ def test_score_research_end_to_end():
     # then frozen, and served from then on without being run again
     real = sc.check
     runs = []
-    sc.check = lambda tickers: runs.append(1) or {"factors": {}, "candidates": [], "stub": len(tickers), "complete": True}
+    sc.check = lambda tickers, rnd=2: runs.append(1) or {"factors": {}, "candidates": [], "stub": len(tickers), "complete": True}
     try:
         with TestClient(app) as c:
             from backend import db
@@ -4599,7 +4671,7 @@ def test_long_scorings_report_their_progress():
     with TestClient(app) as c:
         assert c.get("/api/progress").json() == {"jobs": [], "pause": 0.0}, "nothing under way"
 
-        def slow(t, settings):  # look at the progress from the page's side partway through
+        def slow(t, settings, relative=True):  # look at the progress from the page's side partway through
             r = real(t, settings)
             if t == tickers[60]:
                 seen.update(c.get("/api/progress").json())
@@ -4623,7 +4695,7 @@ def test_long_scorings_report_their_progress():
         # A short list is quick: nothing kept; a failed run still clears its entry
         insights.rows_for(tickers[:5], _db.get_settings())
         assert insights.progress()["jobs"] == []
-        insights._quick_row = lambda t, s: 1 / 0
+        insights._quick_row = lambda t, s, relative=True: 1 / 0
         try:
             try:
                 insights.rows_for(tickers[:30], _db.get_settings())
@@ -4762,7 +4834,7 @@ def test_yahoo_refusals_pause_long_lists():
     calls, slept = [], []
     real = (insights._quick_row, insights.time.sleep, insights.data.rate_limited_for)
     clock = {"left": 30.0}
-    insights._quick_row = lambda t, s: calls.append(t) or {"ticker": t}
+    insights._quick_row = lambda t, s, relative=True: calls.append(t) or {"ticker": t}
     insights.time.sleep = lambda s: (slept.append(s), clock.__setitem__("left", max(0.0, clock["left"] - s)))
     insights.data.rate_limited_for = lambda: clock["left"] if len(calls) >= insights.BATCH else 0.0
     try:
@@ -4813,6 +4885,46 @@ def test_sector_table_is_built_in_the_background():
         release.set()
         db.cache_clear()  # the stand-in table mustn't be what the next test ranks against
         _reset()
+
+
+def test_scores_within_the_sector():
+    """With Settings' score_basis "sector", value, quality and growth are the share of the sector's other stocks beaten
+    on the fixed-threshold score (a tie half), with the fixed scores kept beside; a sector with too few others keeps
+    the fixed score. Research, the Screener and the sector table agree, and "fixed" leaves everything as it was."""
+    from backend import insights, scoring
+    raw = {f"T{i}": {"sector": "Tech", "region": "Europe", "value": 10.0 * i, "quality": None, "growth": 50.0, "momentum": 50.0, "risk": 50.0} for i in range(1, 11)}
+    raw.update({f"E{i}": {"sector": "Energy", "region": "Europe", "value": 40.0 + i, "quality": 60.0, "growth": 30.0, "momentum": 50.0, "risk": 50.0} for i in range(3)})
+    s = {"score_basis": "sector", "weights": None}
+    view = insights.sector_view(raw, s)
+    assert view["T6"]["value"] == 100 * 5 / 9 and view["T6"]["abs"]["value"] == 60.0 and view["T6"]["growth"] == 50.0, "five of nine beaten; all tied: half"
+    assert view["E1"]["value"] == 41.0 and view["E1"]["quality"] == 60.0, "two others: the fixed score stays"
+    assert view["T6"]["composite"] == scoring.combine({k: view["T6"][k] for k in insights.RANKED[1:]})
+    assert insights.sector_view(raw, {"score_basis": "fixed"})["T6"]["value"] == 60.0
+    sc = {"factors": {"value": 55.0, "quality": 70.0, "growth": None, "momentum": 40.0, "risk": 60.0}, "composite": 0}
+    out = insights.within_sector("X", "Tech", sc, s, view)
+    assert out["factors"]["value"] == 50.0 and out["basis"]["within"]["value"] == {"beats": 0.5, "of": 10, "fixed": 55.0}, "beats 5 of the 10 Tech stocks"
+    assert out["factors"]["quality"] == 70.0 and out["basis"]["within"]["quality"]["beats"] is None, "no Tech stock has a quality score"
+    assert out["composite"] == scoring.combine(out["factors"]) and out["stance"] == scoring.stance(out["composite"])
+    assert insights.within_sector("X", "Tech", sc, s, {})["factors"]["value"] == 55.0, "an empty table: too few peers"
+
+    _reset()
+    with TestClient(app) as c:
+        fixed = c.get("/api/stock/AAPL").json()["scores"]
+        assert "basis" not in fixed
+        c.post("/api/settings", json={"score_basis": "sector"})
+        got = c.get("/api/stock/AAPL").json()["scores"]
+        b = got["basis"]
+        assert b["kind"] == "sector" and b["fixed"] == fixed["factors"] and b["fixedComposite"] == fixed["composite"]
+        table = insights.peer_table(__import__("backend.db", fromlist=["get_settings"]).get_settings())
+        for f in insights.SECTOR_SCORED:
+            vals = [r["abs"][f] for t, r in table.items() if r["sector"] == b["sector"] and t != "AAPL" and r["abs"].get(f) is not None]
+            if fixed["factors"][f] is not None and len(vals) >= insights.MIN_PEERS:
+                assert abs(got["factors"][f] - 100 * insights.beats_share(fixed["factors"][f], vals)) < 1e-9, f
+        assert got["factors"]["momentum"] == fixed["factors"]["momentum"], "momentum and risk aren't sector-relative"
+        row = next(r for r in c.post("/api/screener", json={"markets": ["North America"]}).json()["rows"] if r["ticker"] == "AAPL")
+        assert abs(row["composite"] - got["composite"]) < 1e-9 and abs(row["f_value"] - got["factors"]["value"]) < 1e-9
+        assert c.post("/api/settings", json={"score_basis": "rank"}).status_code == 400
+        c.post("/api/settings", json={"score_basis": "fixed"})
 
 
 def test_sector_ranks_count_the_peers_beaten():

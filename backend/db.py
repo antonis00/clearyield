@@ -76,14 +76,17 @@ DEFAULT_SETTINGS = {
     "regions": list(REGIONS),  # the regions you follow: only their stocks are downloaded, screened and ranked against
     "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
     "email_alerts": False,
-    "backup_copy_dir": "",
-    "ai_privacy": False,
+    "backup_copy_dir": "",  # a second folder for the automatic backups (another drive): a disk failure loses neither
+    "ai_privacy": False,  # Ask hides amounts of money and share counts from the AI provider (agent.redact)
     # What an order costs at your broker (orders.py): a fixed fee per order in the base currency, a share of the order,
     # a currency conversion charge when the order isn't in the base currency, and the most a fee may be of an order
     # before it's left for next month
     "costs": {"fixed": 0.0, "pct": 0.0, "fx_pct": 0.0, "max_drag": 0.01},
     # New money never takes one holding (other than a broad index fund) above this share of the portfolio
-    "max_holding": 10,  # Ask hides amounts of money and share counts from the AI provider (agent.redact)  # a second folder for the automatic backups (OneDrive, another drive): a disk failure loses neither
+    "max_holding": 10,
+    # How value, quality and growth are scored (insights.within_sector): "fixed" thresholds, the same for every
+    # company, or "sector": the share of the stock's sector it beats on the fixed-threshold score
+    "score_basis": "fixed",
     "fund_costs": {},  # {ticker: yearly cost as a fraction}, entered from a fund's factsheet; stands over Yahoo's figure
     # What you invest each month and the goal it's for (plan.py): the goal in today's money by a date, with the yearly
     # return and inflation the check assumes
@@ -535,6 +538,7 @@ SETTING_CHECKS = {
     "ai_privacy": _switch("Privacy"),
     "costs": lambda v: _costs(v),
     "max_holding": lambda v: _num(v, 1, 100, "The most in one holding"),
+    "score_basis": lambda v: _choice(v, ("fixed", "sector"), "Scoring"),
     "fund_costs": _fund_costs,
     "plan": lambda v: {**DEFAULT_SETTINGS["plan"], **__import__("backend.plan", fromlist=["check"]).check(v)},
     "setup_dismissed": _switch("Hiding the checklist"),
@@ -542,6 +546,12 @@ SETTING_CHECKS = {
     "tax_options": lambda v: __import__("backend.taxlaw", fromlist=["check_options"]).check_options(v),
     "fund_tax": lambda v: __import__("backend.taxlaw", fromlist=["check_fund_tax"]).check_fund_tax(v),
 }
+
+
+def _choice(v, allowed, what):
+    if v not in allowed:
+        raise ValueError(f"{what} must be one of: {', '.join(allowed)}.")
+    return v
 
 
 def _costs(v):

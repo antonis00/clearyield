@@ -58,7 +58,7 @@ def fill_from_statements(t, inf, fin):
     return out
 
 
-def evaluate_ticker(t, settings):
+def evaluate_ticker(t, settings, relative=True):
     full = data.history(t, "5y")
     inf = data.info(t)
     if inf.get("assetClass") == "Stocks":
@@ -67,6 +67,8 @@ def evaluate_ticker(t, settings):
         fin = data.financials(t)
         inf = {**fill_from_statements(t, inf, fin), "revenueGrowth3y": multi_year_growth(fin, "revenue"), "earningsGrowth3y": multi_year_growth(fin, "netIncome")}
     sc = scoring.evaluate(inf, full["Close"], settings.get("weights"), trend=close_in_usd(full["Close"], inf.get("currency")))
+    if relative and settings.get("score_basis") == "sector" and inf.get("assetClass") == "Stocks" and inf.get("sector"):
+        sc = within_sector(t, inf["sector"], sc, settings)
     if t in CORE_FUNDS and sc.get("composite") is not None:
         # A world or broad index fund's trend and risk say how the market has gone, not whether to hold it: a band
         # such as "Caution" after a fall read as advice to sell the core of the portfolio
@@ -130,9 +132,9 @@ def _usd(amount, currency):
         return None
 
 
-def _quick_row(t, settings):
+def _quick_row(t, settings, relative=True):
     try:
-        full, inf, sc = evaluate_ticker(t, settings)
+        full, inf, sc = evaluate_ticker(t, settings, relative)
     except Exception as e:
         return {"ticker": t, "error": str(e)}
     c = full["Close"]
@@ -198,7 +200,7 @@ def _tracked(tickers, kind):
     return job, tick
 
 
-def rows_for(tickers, settings, workers=8, patience=60, kind="scoring"):
+def rows_for(tickers, settings, workers=8, patience=60, kind="scoring", relative=True):
     """Each ticker's quick row. A long list goes in batches, and when Yahoo has just refused for asking too much, the
     next batch waits for the pause to end (up to `patience` seconds in all) rather than asking hundreds more times.
     A long list's progress is kept for `progress()` while it runs, under `kind` (what it's for)."""
@@ -206,7 +208,7 @@ def rows_for(tickers, settings, workers=8, patience=60, kind="scoring"):
 
     def row(t):
         try:
-            return _quick_row(t, settings)
+            return _quick_row(t, settings, relative)
         finally:
             tick(t)
     try:
@@ -290,13 +292,81 @@ def peer_table(settings, fresh=False, patience=60):
     table = None if fresh else db.cache_get(key, PEERS_FOR)
     if table is None:
         table = {}
-        for r in rows_for(tickers_for(regions), settings, 6, patience, kind="ranks"):
+        # Scored on the fixed thresholds: the table is what scores within a sector are worked out from
+        for r in rows_for(tickers_for(regions), settings, 6, patience, kind="ranks", relative=False):
             if "error" in r or r.get("assetClass") != "Stocks" or not r.get("sector"):
                 continue
             table[r["ticker"]] = {"sector": r["sector"], "region": r.get("region"), **{k: r.get(f"f_{k}") for k in RANKED[1:]}}
         db.cache_set(key, table)
-    weights = settings.get("weights")
-    return {t: {**r, "composite": scoring.combine({k: r[k] for k in RANKED[1:]}, weights)} for t, r in table.items()}
+    return sector_view(table, settings, key)
+
+
+SECTOR_SCORED = ("value", "quality", "growth")  # scored within the sector when Settings asks (round 3 of the research)
+_views, _views_lock = {}, __import__("threading").Lock()
+VIEW_FOR = 60  # seconds a worked-out view is reused: a screener scores hundreds of stocks against the same table
+
+
+def beats_share(mine, others):
+    """The share of `others` that `mine` beats, a tie counting half."""
+    return (sum(v < mine for v in others) + 0.5 * sum(v == mine for v in others)) / len(others)
+
+
+def sector_view(table, settings, key=""):
+    """The table as the scores are shown: with Settings' `score_basis` "sector", each stock's value, quality and growth
+    become the share of the other stocks in its sector it beats on that score, times 100 (fewer than MIN_PEERS others,
+    and the fixed-threshold score stays); the fixed-threshold scores are kept in `abs`. The overall score is worked out
+    with the weights in Settings now."""
+    weights, basis = settings.get("weights"), settings.get("score_basis")
+    memo = (key, str(sorted((weights or {}).items())), basis, len(table))
+    with _views_lock:
+        hit = _views.get(memo)
+        if key and hit and time.time() - hit[0] < VIEW_FOR:
+            return hit[1]
+    by_sector = {}
+    for t, r in table.items():
+        by_sector.setdefault(r["sector"], []).append(r)
+    out = {}
+    for t, r in table.items():
+        row = {**r, "abs": {k: r.get(k) for k in RANKED[1:]}}
+        if basis == "sector":
+            for f in SECTOR_SCORED:
+                others = [o[f] for o in by_sector[r["sector"]] if o is not r and o.get(f) is not None]
+                if r.get(f) is not None and len(others) >= MIN_PEERS:
+                    row[f] = 100 * beats_share(r[f], others)
+        row["composite"] = scoring.combine({k: row[k] for k in RANKED[1:]}, weights)
+        out[t] = row
+    if key:
+        with _views_lock:
+            _views.clear()  # one view at a time is all a page needs
+            _views[memo] = (time.time(), out)
+    return out
+
+
+def within_sector(t, sector, sc, settings, table=None):
+    """A stock's score with value, quality and growth worked out within its sector: the share of the sector's other
+    stocks in the table it beats on the fixed-threshold score, times 100. Where a sector has fewer than MIN_PEERS
+    others scored, that factor keeps the fixed-threshold score. `basis` says what was done, factor by factor, with
+    the fixed-threshold scores beside, so each figure stays traceable; `pending` while the table is being built (the
+    fixed-threshold scores stand meanwhile)."""
+    table = table if table is not None else peer_table_now(settings)
+    fixed = dict(sc["factors"])
+    if table is None:
+        return {**sc, "basis": {"kind": "sector", "pending": True, "sector": sector}}
+    others = [r for o, r in table.items() if r["sector"] == sector and o != t]
+    factors, within = dict(fixed), {}
+    for f in SECTOR_SCORED:
+        vals = [r["abs"][f] for r in others if r["abs"].get(f) is not None]
+        if fixed.get(f) is None:
+            continue
+        if len(vals) < MIN_PEERS:
+            within[f] = {"beats": None, "of": len(vals), "fixed": fixed[f]}
+            continue
+        share = beats_share(fixed[f], vals)
+        factors[f] = 100 * share
+        within[f] = {"beats": share, "of": len(vals), "fixed": fixed[f]}
+    composite = scoring.combine(factors, settings.get("weights"))
+    return {**sc, "factors": factors, "composite": composite, "stance": scoring.stance(composite),
+            "basis": {"kind": "sector", "sector": sector, "within": within, "fixed": fixed, "fixedComposite": sc.get("composite"), "minPeers": MIN_PEERS}}
 
 
 def _peer_key(settings):
@@ -340,7 +410,10 @@ def sector_ranks(ticker, settings, own=None):
         return {"pending": True}
     row = table.get(ticker)
     if row is None:  # a stock outside the list, ranked against it
-        own = own or rows_for([ticker], settings)[0]
+        own = own or rows_for([ticker], settings, relative=False)[0]
+        if settings.get("score_basis") == "sector" and "error" not in own and own.get("sector"):
+            sc = within_sector(ticker, own["sector"], {"factors": {k: own.get(f"f_{k}") for k in RANKED[1:]}}, settings, table)
+            own = {**own, "composite": sc["composite"], **{f"f_{k}": v for k, v in sc["factors"].items()}}
         if "error" in own or own.get("assetClass") != "Stocks" or not own.get("sector"):
             return None
         row = {"sector": own["sector"], "composite": own.get("composite"), **{k: own.get(f"f_{k}") for k in RANKED[1:]}}

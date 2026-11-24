@@ -95,7 +95,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, cash, data, db, firstrun, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, tax, taxlaw, taxreport  # noqa: E402
+from . import agent, ai, backtest, cash, data, db, firstrun, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, stress, tax, taxlaw, taxreport  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search, tickers_for  # noqa: E402
 
@@ -604,6 +604,15 @@ def plan_get():
         raise HTTPException(409, str(e))
 
 
+@app.get("/api/stress")
+def stress_get():
+    """Today's holdings through past market falls: stress.stress()."""
+    try:
+        return ok(stress.stress(db.get_settings()))
+    except ledger.LedgerError as e:
+        raise HTTPException(409, str(e))
+
+
 @app.get("/api/setup")
 def setup_get():
     """The dashboard's first-run checklist: each step ticked from what's saved (firstrun.summary)."""
@@ -712,11 +721,13 @@ def tax_report(year: str = ""):
 
 
 @app.get("/api/scorecheck")
-def score_check():
+def score_check(round: int = 2):
     """Do the scores rank stocks by what happens next? The research in docs/score-research.md (scorecheck.py), over
     every stock in the list whatever Settings follows: the design needs all five regions, to decide on two and confirm
     on three. Built in the background the first time; until then this says how far it's got. Weights don't enter."""
-    out = scorecheck.cached_or_start(universe_tickers(list(REGIONS)), "all")
+    if round not in (2, 3):
+        raise HTTPException(400, "The score research has rounds 2 and 3.")
+    out = scorecheck.cached_or_start(universe_tickers(list(REGIONS)), "all", round)
     return ok({**out, "regions": list(REGIONS)})
 
 

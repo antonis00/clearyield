@@ -302,6 +302,22 @@ def is_bank(info):
     return "bank" in (info.get("industry") or "").lower()
 
 
+def _basis_lines(basis):
+    """With value, quality and growth scored within the sector (Settings), what that means and the fixed-threshold
+    scores beside, so the model doesn't read a sector rank as the fixed scale or the other way round."""
+    if not basis or basis.get("kind") != "sector":
+        return {}
+    if basis.get("pending"):
+        return {"How value, quality and growth are scored": "on the fixed thresholds for now (the sector table is being prepared)"}
+    out = {"How value, quality and growth are scored": f"within the sector ({basis['sector']}): the share of the other {basis['sector']} stocks in the app's list "
+           "whose score on the fixed thresholds this one beats, times 100; momentum and risk stay on the fixed thresholds"}
+    for f, w in (basis.get("within") or {}).items():
+        out[f"{f.capitalize()} factor on the fixed thresholds"] = f"{w['fixed']:.1f} out of 100" + ("" if w["beats"] is not None else f" (used as is: only {w['of']} other {basis['sector']} stocks have this score)")
+    if basis.get("fixedComposite") is not None:
+        out["Composite on the fixed thresholds"] = f"{basis['fixedComposite']:.1f} out of 100"
+    return out
+
+
 def brief_data(ctx):
     """The facts given to the model, grouped and labelled, each with its unit. Missing figures are left out rather
     than sent as null, so the model has nothing to guess about."""
@@ -345,7 +361,8 @@ def brief_data(ctx):
                                        "Beta": _f_num(i.get("beta"))},
         "ClearYield scores": {"Composite": f"{sc['composite']:.1f} out of 100" if sc.get("composite") is not None else "not scored",
                               "Stance": sc.get("stance"),
-                              **{f"{k.capitalize()} factor": (f"{v:.1f} out of 100" if v is not None else "doesn't apply or no data") for k, v in sc["factors"].items()}},
+                              **{f"{k.capitalize()} factor": (f"{v:.1f} out of 100" if v is not None else "doesn't apply or no data") for k, v in sc["factors"].items()},
+                              **_basis_lines(sc.get("basis"))},
     }
     out = {g: {k: v for k, v in rows.items() if v not in (None, "")} for g, rows in groups.items()}
     out["What the scores mean"] = SCORE_KEY

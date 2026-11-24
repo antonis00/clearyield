@@ -767,15 +767,26 @@ function fmtPart(p) {
   if (p.fmt === "x") return isNum(p.value) ? `${num(p.value, 2)}x` : "—";
   return num(p.value, 2);
 }
+// With Settings' "Within the sector", a factor's line says what its score is and gives the fixed-threshold one
+function basisLine(b, n) {
+  if (b?.kind !== "sector" || !["value", "quality", "growth"].includes(n)) return "";
+  if (b.pending) return `<div class="basis muted sm">On the fixed thresholds while the sector table is prepared</div>`;
+  const w = b.within?.[n];
+  if (!w) return "";
+  return w.beats == null ? `<div class="basis muted sm">Fixed thresholds: only ${w.of} other ${esc(b.sector)} stock${w.of === 1 ? " has" : "s have"} this score</div>`
+    : `<div class="basis muted sm">Within ${esc(b.sector)}: beats ${pct(w.beats, 0, false)} of ${w.of} · ${num(w.fixed, 0)} on the fixed thresholds</div>`;
+}
 function renderFactors(s) {
   const f = s.scores.factors, names = ["value", "quality", "growth", "momentum", "risk"];
-  $("#rCoverage").textContent = `Data coverage ${Math.round(s.scores.coverage * 100)}% (${s.scores.metricsScored} of ${s.scores.metricsTotal} metrics)`;
+  const b = s.scores.basis;
+  $("#rCoverage").innerHTML = `Data coverage ${Math.round(s.scores.coverage * 100)}% (${s.scores.metricsScored} of ${s.scores.metricsTotal} metrics)`
+    + (b?.kind === "sector" && !b.pending ? ` · value, quality and growth within the sector${isNum(b.fixedComposite) ? `; ${num(b.fixedComposite, 0)} overall on the fixed thresholds` : ""} ${infoIcon(BASIS_INFO)}` : "");
   mkChart("radar", {
     type: "radar",
     data: { labels: names.map((n) => n[0].toUpperCase() + n.slice(1)), datasets: [{ data: names.map((n) => f[n]), spanGaps: true, backgroundColor: tint("--accent", "33"), borderColor: C("--accent"), pointBackgroundColor: C("--accent") }] },
     options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false, stepSize: 25 }, grid: { color: C("--line") }, angleLines: { color: C("--line") }, pointLabels: { color: C("--text"), font: { size: 12 } } } } },
   });
-  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}<div class="peer" data-peer="${n}"></div>
+  $("#factorList").innerHTML = names.map((n) => `<div class="factor"><div class="fh"><span>${n} ▸ ${factorInfo(n)}</span><span style="color:${scoreColor(f[n])}">${isNum(f[n]) ? num(f[n], 0) : "—"}</span></div>${isNum(f[n]) ? bar(f[n]) : `<div class="gap">${esc(factorGap(s.info, n))}</div>`}${basisLine(s.scores.basis, n)}<div class="peer" data-peer="${n}"></div>
     <div class="parts">${(s.scores.breakdown[n] || []).map((p) => `<div><span>${esc(p.label)}<small>0 at ${fmtBound(p.bad, p.fmt === "loss" ? "num" : p.fmt === "negative equity" ? "x" : p.fmt)}, 100 at ${fmtBound(p.good, p.fmt === "loss" ? "num" : p.fmt === "negative equity" ? "x" : p.fmt)}</small></span><span>${fmtPart(p)}</span><span style="color:${scoreColor(p.score)}"${p.note ? ` title="${esc(p.note)}"` : ""}>${isNum(p.score) ? num(p.score, 0) : p.note ? "not used" : "n/a"}</span></div>${p.note && p === (s.scores.breakdown[n] || []).find((x) => x.note) ? `<div class="part-note">${esc(p.note)}</div>` : ""}`).join("") || '<div><span>No data for this factor</span></div>'}</div></div>`).join("");
   $$(".factor .fh").forEach((h) => h.onclick = (e) => { if (!e.target.closest(".info")) h.parentElement.classList.toggle("open"); });
   $("#signalList").innerHTML = s.scores.signals.map((x) => `<li class="t${x.tone}">${esc(x.text)}</li>`).join("") || "<li>No notable signals.</li>";
@@ -802,6 +813,7 @@ async function loadPeers(t, request, tries = 0) {
   const where = Object.entries(r.regions).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${v}`).join(", ");
   const line = (k) => {
     const x = r.ranks[k];
+    if (state.stock?.scores?.basis?.within?.[k]?.beats != null) return "";  // already the score itself, said above
     if (x.beats == null) return x.of ? `only ${x.of} other ${esc(r.sector)} stock${x.of === 1 ? " has" : "s have"} this score: too few to rank` : "";
     return `better than <b>${pct(x.beats, 0, false)}</b> of ${x.of} ${esc(r.sector)} stocks · their middle: ${num(x.median, 0)}`;
   };
@@ -1708,7 +1720,7 @@ async function loadPortfolio() {
   const b = p.base;
   $("#ordBase").textContent = `(${b})`;
   ordDraft = null; ordPicks = {}; $("#ordPlan").innerHTML = "";  // a draft from before this change in holdings is out of date
-  loadOrders(); loadPlan(); loadDivMiss();
+  loadOrders(); loadPlan(); loadDivMiss(); loadStress();
   await cashWanted;
   $("#pfIncomplete").classList.toggle("hidden", !p.incomplete);
   if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
@@ -2435,6 +2447,45 @@ $("#planForm").onsubmit = async (e) => {
 };
 
 // ---- Dividends Yahoo lists while you held the shares, with none recorded near them
+// The stress test (stress.py): today's mix bought before each past fall and held, in the base currency
+const yearsOr = (m) => (m == null ? null : m < 18 ? `${Math.round(m)} month${Math.round(m) === 1 ? "" : "s"}` : `${(m / 12).toFixed(1)} years`);
+async function loadStress() {
+  const el = $("#stressTable"); loading(el);
+  let d;
+  try { d = await api("/api/stress"); } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; $("#stressSum").innerHTML = ""; return; }
+  $("#stressCard").classList.toggle("hidden", !!d.empty);
+  if (d.empty) return;
+  const b = d.base, rows = d.scenarios, plan = d.monthly > 0;
+  const done = rows.filter((r) => r.enough), worst = rows.find((r) => r.key === d.worst);
+  const deepest = Math.min(...done.map((r) => r.fall), ...done.map((r) => r.world ?? 0), -0.01);
+  const bar = (v, cls = "") => `<span class="stress-bar ${cls}"><i style="width:${Math.min(100, (v / deepest) * 100).toFixed(1)}%"></i></span>`;
+  // A holding with no prices then, named under the fall it's left out of
+  const left = (r) => r.missing.length ? `<br><span class="muted sm stress-left">Left out: ${r.missing.map((m) => `${esc(m.ticker)} ${pct(m.weight, 0, false)}${m.from ? `, prices from ${esc(m.from.slice(0, 4))}` : ""}`).join("; ")}</span>` : "";
+  const when = (r) => `<span class="muted sm">${esc(r.peak.slice(0, 7))} → ${esc(r.low.slice(0, 7))}${r.fallMonths >= 1 ? `, ${yearsOr(r.fallMonths)} down` : ""}</span>`;
+  $("#stressSum").innerHTML = worst ? `<div class="stress-head"><div class="stress-big down">${pct(worst.fall, 0)}</div><div>
+      <b>Worst of these: ${esc(worst.name)}.</b> Held through it, today's holdings would have fallen ${pct(-worst.fall, 0, false)} from peak to low:
+      about <b>${money(-worst.loss, b, 0)}</b> of today's ${money(d.value, b, 0)}${plan ? `, or ${Math.round(-worst.loss / d.monthly)} months of your ${money(d.monthly, b, 0)} plan` : ""}.
+      ${worst.recoverMonths != null ? `Back to the peak after ${yearsOr(worst.recoverMonths)}` : "Not yet back to the peak"}${plan && worst.planBackMonths != null ? `; with your monthly amount still going in, back above everything put in after ${yearsOr(worst.planBackMonths)}` : ""}.</div></div>` : `<div class="muted">Not enough history for any of these falls.</div>`;
+  table(el, [
+    { k: "name", label: "Fall", fmt: (v, r) => `<b>${esc(v)}</b>${infoIcon(r.what)}<br>${r.enough ? when(r) : `<span class="muted sm">${esc(r.from.slice(0, 7))} → ${esc(r.to.slice(0, 7))}</span>`}${left(r)}` },
+    { k: "fall", label: `Your holdings${infoIcon("Today's mix bought at the start of the window and held: its own worst fall inside it, peak to low, in " + b + " at each day's rate.")}`, num: true,
+      fmt: (v, r) => r.enough ? `<span class="down">${pct(v)}</span>${bar(v)}` : `<span class="muted sm">${pct(r.coverage, 0, false)} has prices then</span>` },
+    { k: "world", label: `World${infoIcon("An all-world index fund (VT, before 2008 Vanguard's US and international index funds) over the same window, in " + b + ".")}`, num: true,
+      fmt: (v) => isNum(v) ? `<span class="muted">${pct(v)}</span>${bar(v, "world")}` : "—" },
+    { k: "loss", label: "Loss today", num: true, fmt: (v, r) => r.enough ? money(v, b, 0) : "—" },
+    ...(plan ? [{ k: "months", label: `Months of plan${infoIcon(`The loss as months of your ${money(d.monthly, b, 0)} monthly amount.`)}`, num: true, fmt: (_, r) => r.enough ? String(Math.round(-r.loss / d.monthly)) : "—" }] : []),
+    { k: "recoverMonths", label: `Back to peak${infoIcon("From the peak until the holdings were worth as much again, adding nothing.")}`, num: true,
+      fmt: (v, r) => !r.enough ? "—" : v != null ? yearsOr(v) : "not yet" },
+    ...(plan ? [{ k: "planBackMonths", label: `With your plan${infoIcon(`With ${money(d.monthly, b, 0)} still going in each month at the same weights: from the peak until the value was back above everything put in. Buying while prices are low is why this is often sooner.`)}`, num: true,
+      fmt: (v, r) => !r.enough ? "—" : v != null ? yearsOr(v) : "not yet" }] : []),
+  ], rows);
+  const stand = [...new Map(d.standIns.map((s) => [s.ticker + s.standIn, s])).values()];
+  $("#stressNote").innerHTML = [
+    stand.length ? `Before their own prices begin: ${stand.map((s) => `${esc(s.ticker)} uses ${esc(s.standIn)} until ${esc(s.until.slice(0, 7))}`).join("; ")} (checked against the funds' own falls).` : "",
+    rows.some((r) => r.missing.length) ? `A holding with no prices that far back is left out and the rest scaled up to 100%; under ${pct(d.minCover, 0, false)} covered, the fall isn't worked out.` : "",
+    "Past falls aren't a forecast: the next one will differ in size, length and what falls most. Each window runs from 45 days before the world market's peak to 45 days after its low.",
+  ].filter(Boolean).join(" ");
+}
 async function loadDivMiss() {
   let rows;
   try { rows = await api("/api/dividends/unrecorded"); } catch { rows = []; }
@@ -2526,12 +2577,23 @@ async function loadScoreCheck() {
   const regs = Object.keys(rows[0][1].regions);
   $("#scRegions").innerHTML = `<table><tr><th>Score</th>${regs.map((r) => `<th>${esc(r)}</th>`).join("")}</tr>
     ${rows.map(([, f]) => `<tr><td>${esc(f.label)}</td>${regs.map((r) => `<td>${pill(f.regions[r].verdict)} <span class="muted sm">${icOf(f.regions[r].meanIC)}</span></td>`).join("")}</tr>`).join("")}</table>`;
-  $("#scCands").innerHTML = `<table><tr><th>Change</th><th>Compared with</th><th class="num">Its own IC, everywhere</th><th class="num">Gain, ${esc(dec)}</th><th class="num">p</th>
+  const candTable = (cands) => `<table><tr><th>Change</th><th>Compared with</th><th class="num">Its own IC, everywhere</th><th class="num">Gain, ${esc(dec)}</th><th class="num">p</th>
       <th>On its own, ${esc(con)}</th><th class="num">Gain there</th><th class="num">p</th><th>Result</th></tr>
-    ${d.candidates.map((c) => `<tr><td>${esc(c.label)}</td><td>${esc(c.against)}</td><td class="num">${icOf(c.own.meanIC)}</td>
+    ${cands.map((c) => `<tr><td>${esc(c.label)}</td><td>${esc(c.against)}</td><td class="num">${icOf(c.own.meanIC)}</td>
       <td class="num">${icOf(c.decide.meanDiff)}</td><td class="num">${pOf(c.decide.p)}</td><td>${pill(c.ownConfirm.verdict)}</td>
       <td class="num">${icOf(c.confirm.meanDiff)}</td><td class="num">${pOf(c.confirm.p)}</td>
       <td><span class="pill ${c.adopted ? "on" : ""}">${c.adopted ? "adopted" : "not adopted"}</span> <span class="muted sm">${esc(c.why)}</span></td></tr>`).join("")}</table>`;
+  $("#scCands").innerHTML = candTable(d.candidates);
+  // Round 3 (within the sector) is its own run, kept once complete; shown when there is one
+  api("/api/scorecheck?round=3").then((r3) => {
+    const done = r3 && !r3.building && !r3.error && r3.candidates;
+    $("#scR3Wrap").classList.toggle("hidden", !done);
+    if (!done) return;
+    const cs = r3.compositeSector, today = r3.factors.composite.horizons[h];
+    $("#scR3").innerHTML = candTable(r3.candidates) + (cs ? `<p class="muted sm">For information (not a test): the overall score with all three within the sector has an IC of ${icOf(cs.own.meanIC)} (p ${pOf(cs.own.p)}),
+      against ${icOf(today.meanIC)} for today's overall score on the same run; ${cs.vsToday.meanDiff < 0 ? "worse" : "better"} by ${Math.abs(cs.vsToday.meanDiff).toFixed(3)} on the same stocks and months.
+      ${r3.stocks} stocks, ${r3.from.slice(0, 7)} to ${r3.to.slice(0, 7)}${r3.frozen ? ", the decision run, kept as it is" : r3.complete === false ? ", incomplete: evidence only" : ""}.</p>` : "");
+  }).catch(() => $("#scR3Wrap").classList.add("hidden"));
   $("#scKind").innerHTML = rows.map(([key, f]) => `<button data-sc="${key}" class="${key === SC.kind ? "on" : ""}">${esc(f.label)}</button>`).join("");
   $$("#scKind button").forEach((b) => b.onclick = () => { SC.kind = b.dataset.sc; $$("#scKind button").forEach((x) => x.classList.toggle("on", x === b)); scChart(); });
   $("#scCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
@@ -2723,6 +2785,14 @@ function loadSettings() {
   $("#sCore").value = s.core_target;
   const co = s.costs || {};
   $("#sMaxHold").value = s.max_holding ?? 10; $("#sFeeBase").textContent = `(${s.base_currency})`;
+  setBasis(s.score_basis || "fixed");
+  // What the score research found, from its kept run, so the choice is made knowing it
+  api("/api/scorecheck?round=3").then((r3) => {
+    const cs = r3?.compositeSector, today = r3?.factors?.composite?.horizons?.[String(r3?.primaryHorizon)];
+    if (!cs || r3.building || !today) { $("#sBasisNote").textContent = ""; return; }
+    const adopted = r3.candidates.filter((c) => c.adopted).map((c) => c.label.split(" ")[0].toLowerCase());
+    $("#sBasisNote").innerHTML = `Score check, round 3: within the sector, the overall score ranked what followed ${cs.vsToday.meanDiff < 0 ? "worse" : "better"} than on the fixed thresholds (rank IC ${icOf(cs.own.meanIC)} against ${icOf(today.meanIC)}), and ${adopted.length ? `${adopted.join(", ")} passed the adoption rule` : "none of the three passed the adoption rule"}. <a href="#scorecheck">See it</a>.`;
+  }).catch(() => { $("#sBasisNote").textContent = ""; });
   $("#sFeeFixed").value = co.fixed || ""; $("#sFeePct").value = co.pct ? +(co.pct * 100).toFixed(4) : ""; $("#sFeeFx").value = co.fx_pct ? +(co.fx_pct * 100).toFixed(4) : "";
   $("#sFeeDrag").value = +((co.max_drag ?? 0.01) * 100).toFixed(3);
   showTargetClash();
@@ -2766,7 +2836,7 @@ function settingsShown() {
     regions: set($$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region)),
     tiles: set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile)),
     email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value, copyDir: $("#sBackupCopy").value.trim(), privacy: $("#sAiPrivacy").checked,
-    maxHold: num($("#sMaxHold").value), fees: ["#sFeeFixed", "#sFeePct", "#sFeeFx", "#sFeeDrag"].map((id) => num($(id).value || 0)) };
+    maxHold: num($("#sMaxHold").value), fees: ["#sFeeFixed", "#sFeePct", "#sFeeFx", "#sFeeDrag"].map((id) => num($(id).value || 0)), basis: $("#basisSeg .on")?.dataset.basis || "fixed" };
 }
 function settingsSaved() {
   const s = state.meta.settings, num = (v) => Math.round(Number(v) * 1e6) / 1e6;
@@ -2774,8 +2844,17 @@ function settingsSaved() {
     w: Object.values(s.weights).map((v) => Math.round(v * 100)), tg: Object.values(s.targets).map(num), core: num(s.core_target),
     regions: [...(s.regions || state.meta.regions)].sort(), tiles: [...s.dashboard_tiles].sort(),
     email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "", copyDir: s.backup_copy_dir || "", privacy: !!s.ai_privacy,
-    maxHold: num(s.max_holding ?? 10), fees: [s.costs?.fixed || 0, (s.costs?.pct || 0) * 100, (s.costs?.fx_pct || 0) * 100, (s.costs?.max_drag ?? 0.01) * 100].map(num) };
+    maxHold: num(s.max_holding ?? 10), fees: [s.costs?.fixed || 0, (s.costs?.pct || 0) * 100, (s.costs?.fx_pct || 0) * 100, (s.costs?.max_drag ?? 0.01) * 100].map(num), basis: s.score_basis || "fixed" };
 }
+// How value, quality and growth are scored: on one fixed scale for every company, or against the stock's own sector
+const BASIS_INFO = "Fixed thresholds: every company meets the same limits (a P/E of 15 scores the same for a bank and a software company). "
+  + "Within the sector: each of the three becomes the share of the other stocks in its sector, from every market in the list, that it beats "
+  + "on the fixed-threshold score, so a bank is compared with banks. Momentum and risk stay on the fixed scale. Research shows both.";
+function setBasis(b) {
+  $$("#basisSeg button").forEach((x) => { x.classList.toggle("on", x.dataset.basis === b); x.setAttribute("aria-checked", x.dataset.basis === b); });
+}
+$$("#basisSeg button").forEach((x) => x.onclick = () => { setBasis(x.dataset.basis); markUnsaved(); });
+$("#sBasisInfo").innerHTML = infoIcon(BASIS_INFO);
 function markUnsaved() {
   const dirty = JSON.stringify(settingsShown()) !== JSON.stringify(settingsSaved()), msg = $("#settingsMsg");
   $(".save-card").classList.toggle("dirty", dirty);
@@ -2965,7 +3044,7 @@ $("#btnSaveSettings").onclick = async () => {
   Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked, backup_copy_dir: $("#sBackupCopy").value.trim(), ai_privacy: $("#sAiPrivacy").checked });
   const maxHold = Number($("#sMaxHold").value);
   if (!(maxHold >= 1 && maxHold <= 100)) return toast("The most in one holding is a percentage from 1 to 100.");
-  Object.assign(body, { max_holding: maxHold, costs: { fixed: Number($("#sFeeFixed").value || 0), pct: Number($("#sFeePct").value || 0) / 100,
+  Object.assign(body, { score_basis: $("#basisSeg .on")?.dataset.basis || "fixed", max_holding: maxHold, costs: { fixed: Number($("#sFeeFixed").value || 0), pct: Number($("#sFeePct").value || 0) / 100,
     fx_pct: Number($("#sFeeFx").value || 0) / 100, max_drag: Number($("#sFeeDrag").value || 1) / 100 } });
   const copyBefore = state.meta.settings.backup_copy_dir || "";
   // Saved only once chosen, so "not chosen" stays visible to the first-run checklist

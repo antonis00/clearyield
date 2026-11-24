@@ -449,6 +449,13 @@ const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"
   expect("portfolio: core & satellite as two rings, money with its target tick and the swings",
     rings.length === 2 && /^Money/.test(rings[0].label) && rings[0].tick && !rings[1].tick && /^Day-to-day swings/.test(rings[1].label)
     && Math.abs(rings[0].arcs[0] - pct1(cs.core)) <= 0.02 && Math.abs(rings[1].arcs[0] - pct1(cs.riskShare.core)) <= 0.02 && rings.every((r) => r.w >= 120), JSON.stringify(rings));
+  // The stress test: today's holdings through six past falls, the worst named with what it would take and how long back
+  await p.waitForSelector("#stressTable table", { timeout: SLOW });
+  const st = await p.evaluate(() => ({ rows: document.querySelectorAll("#stressTable tbody tr").length, head: document.querySelector("#stressSum")?.innerText.replace(/\s+/g, " ") || "",
+    bars: document.querySelectorAll("#stressTable .stress-bar i").length, note: document.querySelector("#stressNote")?.innerText || "" }));
+  expect("portfolio: stress test, today's holdings through six past falls, the worst named with its loss and recovery",
+    st.rows === 6 && /Worst of these: .+\. Held through it/.test(st.head) && /Back to the peak|Not yet back/.test(st.head) && st.bars >= 2 && /aren't a forecast/.test(st.note)
+    && !/NaN|undefined/.test(st.head + st.note), JSON.stringify(st).slice(0, 300));
   await pfTab("overview");
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Satellite", null, { timeout: SLOW });
   await pfTab("performance");
@@ -602,7 +609,7 @@ const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"
   const cardsOf = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll("#view-portfolio .pf-panel")].map((el) =>
     [el.dataset.pftab, [...el.querySelectorAll(".card-h h3")].map((h) => h.firstChild.textContent.trim()).join(",")])));
   expect("portfolio: each tab holds its cards, in the order you act on them", cardsOf.overview === "Positions"
-    && cardsOf.invest === "Invest this month,Cash at your broker,Your plan,Rebalancing" && /^Your performance vs benchmark.*,Risk,Core & satellite$/.test(cardsOf.performance)
+    && cardsOf.invest === "Invest this month,Cash at your broker,Your plan,Rebalancing" && /^Your performance vs benchmark.*,Risk,Core & satellite,Stress test$/.test(cardsOf.performance)
     && cardsOf.records === "Dividends not recorded,Record a transaction,Transactions,Tax year", JSON.stringify(cardsOf));
   await pfTab("overview");
   await p.click("#pfToRecord");
@@ -693,6 +700,16 @@ const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"
   expect("score check: the three changes tested, each adopted or not with why", sc.cands.length === 3 && sc.cands.every((r) => /adopted/.test(r)) && !/undefined|NaN/.test(sc.cands.join(" ")), sc.cands.slice(0, 2).join(" | "));
   await p.click('.sc-detail:last-of-type summary'); await p.click('#scKind [data-sc="risk"]'); await p.waitForTimeout(300);
   expect("score check: month by month, a score's IC per date", (await canvasDrawn("#scChart")) && await p.evaluate(() => /Risk \(calm\): rank IC/.test(state.charts.scChart.data.datasets[0].label)));
+  // Round 3 (within the sector) is its own run, started once round 2's is kept: shown when it's done
+  for (let i = 0; i < 120; i++) {  // a promise from waitForFunction counts as true at once: ask until the run is done
+    if (!(await p.evaluate(async () => (await (await fetch("/api/scorecheck?round=3")).json()).building))) break;
+    await p.waitForTimeout(2000);
+  }
+  await nav("backtest"); await nav("scorecheck");
+  await p.waitForSelector("#scR3 table", { timeout: SLOW }).catch(() => {});
+  const r3 = await p.evaluate(() => ({ cands: [...document.querySelectorAll("#scR3 tr")].slice(1).map((r) => r.innerText.replace(/\s+/g, " ")), note: document.querySelector("#scR3 p")?.innerText || "" }));
+  expect("score check: round 3, value, quality and growth within the sector, each adopted or not, and the overall score beside", r3.cands.length === 3
+    && r3.cands.every((r) => /within its sector/.test(r) && /adopted/.test(r)) && /For information \(not a test\)/.test(r3.note) && !/undefined|NaN/.test(r3.cands.join(" ") + r3.note), JSON.stringify(r3).slice(0, 300));
   await shot("score-check");
   }
   await nav("backtest");
@@ -1060,7 +1077,16 @@ const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"
   expect("settings: base currency applies to the portfolio", after.base !== startBase && after.total > 0, `${Math.round(pf.total)} ${pf.base} -> ${Math.round(after.total)} ${after.base}`);
   await research("AAPL");
   expect("settings: custom weights shown on Research", /V \d+ · Q \d+/.test(await txt("#rStance")), await txt("#rStance"));
-  await nav("settings"); await p.click("#btnBalanced"); await p.selectOption("#sBase", startBase); await saveSettings();
+  // Scoring within the sector: value, quality and growth each say what share of the sector they beat, with the fixed score
+  await nav("settings"); await p.click('#basisSeg [data-basis="sector"]');
+  expect("settings: choosing to score within the sector is an unsaved change", /Unsaved/.test(await txt("#settingsMsg")), await txt("#settingsMsg"));
+  await saveSettings();
+  await research("AAPL");
+  await p.waitForFunction(() => document.querySelector(".factor .basis"), null, { timeout: SLOW }).catch(() => {});
+  const basis = await p.evaluate(() => ({ lines: [...document.querySelectorAll(".factor .basis")].map((x) => x.innerText), cov: document.querySelector("#rCoverage").innerText }));
+  expect("research: within the sector, value, quality and growth say what they beat and their fixed-threshold score", basis.lines.length >= 1 && basis.lines.length <= 3
+    && basis.lines.every((l) => /^Within .+: beats \d+% of \d+ · \d+ on the fixed thresholds$|^Fixed thresholds: only|while the sector table/.test(l)), JSON.stringify(basis));
+  await nav("settings"); await p.click('#basisSeg [data-basis="fixed"]'); await p.click("#btnBalanced"); await p.selectOption("#sBase", startBase); await saveSettings();
   // Dashboard tiles: pick two, see two, then put the defaults back
   await nav("settings");
   const defaults = await p.evaluate(() => $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile));

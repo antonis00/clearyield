@@ -78,6 +78,19 @@ label.block { margin: 8px 0; }
 #themeSeg button:hover:not(.on) { color: var(--text); }
 #themeSeg button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
 .cs-body { margin-bottom: 0; align-items: start; }
+.stress-head { display: flex; gap: 18px; align-items: center; margin-bottom: 14px; line-height: 1.55; }
+.stress-big { font-size: 2.2rem; font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
+.stress-bar { display: block; height: 4px; margin-top: 5px; border-radius: 2px; background: var(--line); overflow: hidden; min-width: 70px; }
+.stress-bar i { display: block; height: 100%; margin-left: auto; background: var(--down); border-radius: 2px; }
+.stress-bar.world i { background: var(--muted); }
+#stressTable td:first-child { min-width: 190px; }
+#stressTable th { white-space: normal; vertical-align: bottom; }
+#stressTable td .stress-bar { min-width: 60px; }
+#stressNote { margin-top: 10px; }
+.basis-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+#sBasisNote { margin-top: 6px; }
+.factor .basis { margin-top: 3px; }
+@media (max-width: 700px) { .stress-head { flex-direction: column; align-items: flex-start; gap: 2px; } .stress-big { font-size: 1.8rem; } }
 .cs-core { color: var(--accent2); } .cs-sat { color: var(--accent); }
 .split-legend { display: flex; justify-content: space-between; font: 12px var(--mono); }
 .cs-lines p { margin: 10px 0 0; font-size: 13px; }

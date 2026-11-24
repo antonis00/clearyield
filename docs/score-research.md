@@ -287,3 +287,24 @@ lags, past market values, country-relative outcomes, the statistics and the mini
   few companies; that's why a sector needs 8 others.
 - Company figures still cover only Yahoo's last four annual statements (2023-26), so these are confirmed across
   stocks and regions, not across time.
+
+## Round 3 result (24 Nov 2026)
+
+The decision run was complete: 407 stocks, every one loaded in every region, none skipped, Nov 2017 to Oct 2026
+(company figures from 2023). Kept in `data/research/score-round3.json`. Nothing was adopted.
+
+| Candidate | Own IC | Gain on NA + APAC (p) | On its own elsewhere | Gain elsewhere (p) | Result |
+|---|---|---|---|---|---|
+| Value within its sector | +0.016 | -0.025 (0.957) | no evidence | -0.060 (0.999) | not adopted: worse than today's |
+| Quality within its sector | -0.019 | +0.009 (0.228) | no evidence | +0.030 (0.010) | not adopted: fails Holm on NA + APAC |
+| Growth within its sector | +0.013 | -0.020 (0.804) | no evidence | -0.011 (0.742) | not adopted: no better |
+
+For information: the overall score with all three within the sector has an IC of +0.048 (p 0.021), against +0.078
+for today's overall score on the same run, worse by 0.030 on the same stocks and months (t -3.1).
+
+Reading it: comparing a company only with its sector threw away information that helped. The fixed value score's
+edge comes partly from which sectors are cheap, and that edge is lost within sectors (worse in every confirming
+region). Quality within the sector does a little better than today's backwards quality score outside North America
+and Asia-Pacific, but not where it's decided, so the rule keeps it out. The live scores stay on the fixed
+thresholds by default; Settings still offers "Within the sector" for comparing like with like, and says what this
+run found.

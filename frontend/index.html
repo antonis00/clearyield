@@ -354,6 +354,12 @@
         <div><canvas id="csPerf" height="150"></canvas><div id="csPerfNote" class="muted sm"></div></div>
       </div>
     </div>
+    <div class="card" id="stressCard">
+      <div class="card-h"><h3>Stress test</h3><span class="muted sm">Today's holdings through past market falls, in your currency</span></div>
+      <div id="stressSum" class="stress-sum"></div>
+      <div id="stressTable" class="tablewrap"></div>
+      <div id="stressNote" class="muted sm"></div>
+    </div>
     </div>
     <div class="pf-panel hidden" data-pftab="records">
     <div class="card hidden" id="divMissCard"><div class="card-h"><h3>Dividends not recorded</h3><span class="muted sm">Yahoo lists these as paid while you held the shares. Record what your broker paid.</span></div><div id="divMiss" class="tablewrap"></div></div>
@@ -460,6 +466,11 @@
         <h4 style="margin-top: 18px">Changes tested</h4>
         <p class="muted sm">Three, each from published research, fixed before any data was fetched. A change is adopted only if it beats today's score on North America and Asia-Pacific after a correction for testing three, and is then confirmed on Europe, the Middle East &amp; Africa and Latin America: working on its own there, beating today's score there, and in every one of those regions. Your live scores change only when one is adopted.</p>
         <div id="scCands" class="tablewrap"></div>
+        <div id="scR3Wrap" class="hidden">
+          <h4 style="margin-top: 18px">Round 3: scoring within the sector</h4>
+          <p class="muted sm">Value, quality and growth as the share of the stock's sector it beats, instead of one fixed scale for every company; tested the same way, under the same rule, fixed before the run (24 Nov 2026). Settings offers it either way.</p>
+          <div id="scR3" class="tablewrap"></div>
+        </div>
         <details class="sc-detail"><summary class="muted sm">Month by month</summary><div class="form-row"><div class="seg" id="scKind"></div></div><canvas id="scChart" height="90"></canvas></details>
         <ul id="scCaveats" class="signals"></ul>
       </div>
@@ -555,6 +566,9 @@
         <div class="card">
           <div class="card-h"><h3>Factor weights</h3><button class="btn ghost sm" id="btnBalanced" title="20% each">Reset to balanced</button></div>
           <div id="weightSliders"></div>
+          <div class="basis-row"><span>Value, quality and growth <span id="sBasisInfo"></span></span>
+            <div class="seg" id="basisSeg" role="radiogroup" aria-label="How value, quality and growth are scored"><button type="button" data-basis="fixed" role="radio">Fixed thresholds</button><button type="button" data-basis="sector" role="radio">Within the sector</button></div></div>
+          <div class="muted sm" id="sBasisNote"></div>
         </div>
         <div class="card">
           <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>

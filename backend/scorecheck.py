@@ -52,6 +52,11 @@ LABELS = {"value": "Value", "quality": "Quality", "growth": "Growth (1-year)", "
 CANDIDATES = [("quality_gp", "Quality as gross profitability", "quality"),
               ("quality_profit", "Quality as profitability only", "quality"),
               ("momRiskAdj", "Momentum adjusted for risk", "momentum")]
+# Round 3 (pre-registered 24 Nov 2026): value, quality and growth scored within the sector, each against today's score
+CANDIDATES_R3 = [("value_sector", "Value within its sector", "value"),
+                 ("quality_sector", "Quality within its sector", "quality"),
+                 ("growth_sector", "Growth within its sector", "growth")]
+SECTOR_PEERS = 8            # a sector needs this many other scored stocks on a date for a rank within it
 GP_BAD, GP_GOOD = 0.0, 0.6  # gross profit / total assets scored 0 at 0 and 100 at 0.6
 PROFIT_LABELS = ("Return on equity", "Operating margin", "Net margin")
 CACHE_HOURS = 24            # an incomplete run is shown this long (evidence only, no decision); a complete one is frozen
@@ -346,7 +351,7 @@ def panel(tickers):
                     fx = data.fx_on(inf.get("financialCurrency") or quote_main, quote_main, day.isoformat())
                 except data.DataError:
                     fx = None
-            row = {"date": day.isoformat(), "ticker": s["ticker"], "region": inf.get("region") or "Unknown",
+            row = {"date": day.isoformat(), "ticker": s["ticker"], "region": inf.get("region") or "Unknown", "sector": inf.get("sector"),
                    "country": country_of(s["ticker"]) or inf.get("country") or "Unknown"}  # where it's listed: its currency
             bd = scoring.factor_breakdown(info_at(inf, stmts, day, price, fx), upto)
             scores = {f: scoring._avg(bd[f]) for f in FACTORS}
@@ -373,6 +378,32 @@ def panel(tickers):
                     row[f"local{h}"] = local
             rows.append(row)
     return rows, len(loaded), counts
+
+
+def beats_share(mine, others):
+    """The share of `others` that `mine` beats, a tie counting half: what a score within the sector is (times 100)."""
+    return (sum(v < mine for v in others) + 0.5 * sum(v == mine for v in others)) / len(others)
+
+
+def within_sector(rows, peers=SECTOR_PEERS):
+    """Round 3's candidates, added to the rows in place: on each date, each stock's value, quality and growth as the
+    share of the other stocks in its sector scored on that factor that date (every region) it beats, times 100; none
+    when its sector has fewer than `peers` others. Also the overall score with those in place of today's three, where
+    every one of the five is there (for information, not a test)."""
+    groups = {}
+    for r in rows:
+        if r.get("sector"):
+            groups.setdefault((r["date"], r["sector"]), []).append(r)
+    for members in groups.values():
+        for f in FUNDAMENTAL:
+            scored = [m for m in members if m.get(f) is not None]
+            for m in scored:
+                others = [o[f] for o in scored if o is not m]
+                m[f + "_sector"] = 100 * beats_share(m[f], others) if len(others) >= peers else None
+    for r in rows:
+        parts = {f: r.get(f + "_sector") if f in FUNDAMENTAL else r.get(f) for f in FACTORS}
+        r["composite_sector"] = scoring.combine(parts) if all(v is not None for v in parts.values()) else None
+    return rows
 
 
 # ---------------------------------------------------------------- judging
@@ -463,7 +494,7 @@ def _group(rows, regions=None):
     return out
 
 
-def judge(rows, h=PRIMARY):
+def judge(rows, h=PRIMARY, candidate_list=None):
     """The research on a panel of rows (see `panel`): each score's evidence, worldwide, by group of regions and by
     region, over time halves and robustness checks; and the three candidates against the adoption rule."""
     everywhere, decide, confirm = _group(rows), _group(rows, DECIDE), _group(rows, CONFIRM)
@@ -485,7 +516,7 @@ def judge(rows, h=PRIMARY):
         factors[f]["verdict"] = factors[f]["horizons"][str(h)]["verdict"]
 
     candidates = []
-    for key, label, today in CANDIDATES:
+    for key, label, today in candidate_list or CANDIDATES:
         candidates.append({"key": key, "label": label, "against": LABELS[today],
                            "own": summarise(daily_stats(everywhere, key, h), h), "ownConfirm": summarise(daily_stats(confirm, key, h), h),
                            "decide": compare(decide, key, today, h), "confirm": compare(confirm, key, today, h),
@@ -512,18 +543,26 @@ def judge(rows, h=PRIMARY):
                     else f"Its gain over today's score is negative in {', '.join(negative)}.")
         if counted != c["regions"]:  # say which confirming regions the "every region" rule rested on
             c["why"] += f" Regions with enough months to count: {', '.join(sorted(counted)) or 'none'}."
-    return {"factors": factors, "candidates": candidates, "dates": len(everywhere), "from": min(everywhere), "to": max(everywhere),
+    out = {}
+    if any(r.get("composite_sector") is not None for r in rows):  # round 3: the overall score with the candidates in, for information
+        out["compositeSector"] = {"label": "Overall score with value, quality and growth within the sector",
+                                  "own": summarise(daily_stats(everywhere, "composite_sector", h), h),
+                                  "vsToday": compare(everywhere, "composite_sector", "composite", h)}
+    return {**out, "factors": factors, "candidates": candidates, "dates": len(everywhere), "from": min(everywhere), "to": max(everywhere),
             "primaryHorizon": h, "decideRegions": list(DECIDE), "confirmRegions": list(CONFIRM), "caveats": CAVEATS}
 
 
-def check(tickers):
-    """The whole research over `tickers` (see docs/score-research.md)."""
+def check(tickers, rnd=2):
+    """The whole research over `tickers` (see docs/score-research.md): round 2's candidates, or round 3's."""
     rows, loaded, counts = panel(tickers)
+    if rnd == 3:
+        within_sector(rows)
     skipped = sum(c["skipped"] for c in counts.values())
     if not rows:
         return {"error": "No price history to check against." + (f" {skipped} stocks were skipped while Yahoo asked for a pause: try again later." if skipped else "")}
     PROGRESS["stage"] = "judging"
-    out = judge(rows)
+    out = judge(rows, candidate_list=CANDIDATES_R3 if rnd == 3 else CANDIDATES)
+    out["round"] = rnd
     # A run missing part of the list decides on a different sample than the one designed: evidence, no decision
     short_of = [r for r, c in counts.items() if c["skipped"] or c["loaded"] < COMPLETE_SHARE * (c["listed"] - c["short"])]
     out["complete"] = not short_of
@@ -544,47 +583,50 @@ def check(tickers):
 _lock = threading.Lock()
 
 
-def frozen_path():
-    """Where the complete run the decision rests on is kept, for good (beside the database, not in the cache, which
-    forgets entries after 90 days)."""
-    return db.DB_PATH.parent / "research" / "score-round2.json"
+def frozen_path(rnd=2):
+    """Where the complete run a round's decision rests on is kept, for good (beside the database, not in the cache,
+    which forgets entries after 90 days)."""
+    return db.DB_PATH.parent / "research" / f"score-round{rnd}.json"
 
 
-def frozen():
+def frozen(rnd=2):
     try:
-        return json.loads(frozen_path().read_text(encoding="utf-8"))
+        return json.loads(frozen_path(rnd).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
 
-def cached_or_start(tickers, key):
+def cached_or_start(tickers, key, rnd=2):
     """The decision run if there is one (complete runs are frozen: the decision is made once, not redrawn every day
     until something passes); else an incomplete run from the last CACHE_HOURS (evidence, no decision); else starts the
     research in the background (one at a time) and says how far it's got. A first run downloads ten years of prices
     and four years of statements for every stock, which takes a while and waits whenever Yahoo asks for a pause."""
-    k = f"scorecheck:r2b:{key}"  # r2b: after the review's fixes (an earlier run under r2 used the method before them)
+    # r2b: after the review's fixes (an earlier run under r2 used the method before them)
+    k = f"scorecheck:r2b:{key}" if rnd == 2 else f"scorecheck:r{rnd}:{key}"
     with _lock:  # checked inside the lock, so a request arriving as a build finishes doesn't start another
-        done = frozen() or db.cache_get(k, CACHE_HOURS * 3600)
+        done = frozen(rnd) or db.cache_get(k, CACHE_HOURS * 3600)
         if done is not None:
             return done
         failed_lately = PROGRESS["error"] and time.time() - PROGRESS["finished"] < RETRY_AFTER
         if failed_lately and not PROGRESS["running"]:
             return {"building": False, "error": PROGRESS["error"] + " It will be tried again in a few minutes."}
         if not PROGRESS["running"]:
-            PROGRESS.update({"running": True, "error": None, "started": time.time(), "done": 0, "total": len(tickers), "stage": "starting"})
-            threading.Thread(target=_build, args=(tickers, k), daemon=True).start()
+            PROGRESS.update({"running": True, "error": None, "started": time.time(), "done": 0, "total": len(tickers), "stage": "starting", "round": rnd})
+            threading.Thread(target=_build, args=(tickers, k, rnd), daemon=True).start()
+        elif PROGRESS.get("round") != rnd:  # one run at a time: the other round's is under way
+            return {"building": True, "waiting": True, **{x: PROGRESS[x] for x in ("done", "total", "stage")}}
     return {"building": True, **{x: PROGRESS[x] for x in ("done", "total", "stage")},
             "elapsed": round(time.time() - (PROGRESS["started"] or time.time()))}
 
 
-def _build(tickers, k):
+def _build(tickers, k, rnd=2):
     try:
-        out = check(tickers)
+        out = check(tickers, rnd)
         out["checked"] = dt.datetime.now().isoformat(timespec="minutes")
         if "error" in out:
             PROGRESS["error"] = out["error"]
         elif out.get("complete"):
-            path = frozen_path()
+            path = frozen_path(rnd)
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps({**out, "frozen": True}, default=str), encoding="utf-8")
