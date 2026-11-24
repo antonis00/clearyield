@@ -60,8 +60,7 @@ def _chained_intermediates(roots, store):
 
 
 def _trust_windows_certificates(bundle=ROOT / "data" / "ca-bundle.pem"):
-    """On Windows, trust the certificates Windows trusts, as the browser does. Antivirus HTTPS scanning (antivirus software, for
-    one) and company proxies re-sign secure connections with their own certificate, which Windows has but Python's
+    """On Windows, trust the certificates Windows trusts, as the browser does. Antivirus HTTPS scanning and company proxies re-sign secure connections with their own certificate, which Windows has but Python's
     own list doesn't, so every call to Yahoo or a cloud AI provider would fail. Both yfinance's curl_cffi and httpx
     read SSL_CERT_FILE, so one bundle covers them. A SSL_CERT_FILE you set yourself is left alone."""
     if os.name != "nt" or os.getenv("SSL_CERT_FILE"):

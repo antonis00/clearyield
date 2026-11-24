@@ -15,3 +15,5 @@ tests/browser/out/
 
 # Editor settings
 .vscode/
+# Personal and machine-specific notes for AI sessions: never public
+CLAUDE.local.md
