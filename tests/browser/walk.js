@@ -569,8 +569,11 @@ const SLOW = 150000;
 
   // ---- Backtest
   await nav("backtest");
-  for (const s of ["buy_hold", "sma_cross", "rsi_reversion", "momentum", "dca"]) {
-    for (const per of s === "sma_cross" ? ["1y", "5y", "max"] : ["2y"]) {
+  // All at once or monthly: the only two choices (the timing rules were removed after the independent review)
+  const strats = await p.evaluate(() => [...document.querySelectorAll("#bStrat option")].map((o) => o.value).join(","));
+  expect("backtest: only all at once and monthly are offered, monthly first chosen", strats === "buy_hold,dca" && (await p.inputValue("#bStrat")) === "dca" && !(await p.locator("#bParams").count()), strats);
+  for (const s of ["buy_hold", "dca"]) {
+    for (const per of s === "dca" ? ["1y", "5y", "max"] : ["2y"]) {
       await p.fill("#bTicker", "SPY"); await p.selectOption("#bStrat", s); await p.selectOption("#bPeriod", per); await p.click("#btnBt");
       await p.waitForFunction(() => !document.querySelector("#btnBt").disabled, null, { timeout: SLOW }); await p.waitForTimeout(250);
       const t = await txt("#btTable");
@@ -673,7 +676,7 @@ const SLOW = 150000;
   expect("opportunities: each dot named on its own, nearly all of them; the y axis points up; the filters are chips",
     mapLook.shared === 0 && mapLook.named >= mapLook.n * 0.85 && /→$/.test(mapLook.y) && mapLook.chips, JSON.stringify(mapLook));
   expect("opportunities: the map, and a table of the best opportunities sorted by overall score", drawn.every(Boolean) && /stocks scored/.test(tbl.status)
-    && tbl.tabs.join() === "best,corner,fit,sale" && tbl.on === "best" && tbl.scores.length === 25 && tbl.scores.every((v, i) => i === 0 || v <= tbl.scores[i - 1])
+    && tbl.tabs.join() === "best,corner,fit" && tbl.on === "best" && tbl.scores.length === 25 && tbl.scores.every((v, i) => i === 0 || v <= tbl.scores[i - 1])
     && ["Rank", "Stock", "Sector", "Overall score", "Value", "Quality", "Growth", "Trend", "Calm", "P/E", "1-year return", "Below high", "Moves with you", "Why"].every((h) => tbl.heads.includes(h)) && /^Show all \d+/.test(tbl.more)
     && tbl.infos === 12,
     `${tbl.status} | ${tbl.heads.join(",")} | ${tbl.scores.slice(0, 5).join(",")} | ${tbl.more}`);
@@ -684,9 +687,10 @@ const SLOW = 150000;
   await p.locator("#oppTable tbody tr").nth(1).hover(); await p.waitForTimeout(200);
   const spot = await p.evaluate(() => ({ active: state.charts.oppMap.getActiveElements().map((e) => state.charts.oppMap.data.datasets[0].data[e.index].row.ticker), row: document.querySelectorAll("#oppTable tbody tr")[1].dataset.stock }));
   expect("opportunities: hovering a row lights up its dot on the map", spot.active.length === 1 && spot.active[0] === spot.row, JSON.stringify(spot));
-  await p.click('#oppTabs [data-view="sale"]'); await p.waitForTimeout(200);
-  const sale = await p.evaluate(() => ({ on: document.querySelector("#oppTabs .on")?.dataset.view, help: document.querySelector("#oppTableHelp").textContent, rows: document.querySelectorAll("#oppTable tbody tr").length, n: Number(document.querySelector('#oppTabs [data-view="sale"] .muted').textContent) }));
-  expect("opportunities: a view tab shows its own list with its rule", sale.on === "sale" && /below the past year's high/.test(sale.help) && sale.rows === Math.min(sale.n, 25), JSON.stringify(sale));
+  await p.click('#oppTabs [data-view="corner"]'); await p.waitForTimeout(200);
+  const sale = await p.evaluate(() => ({ on: document.querySelector("#oppTabs .on")?.dataset.view, help: document.querySelector("#oppTableHelp").textContent, rows: document.querySelectorAll("#oppTable tbody tr").length, n: Number(document.querySelector('#oppTabs [data-view="corner"] .muted').textContent),
+    tabs: [...document.querySelectorAll("#oppTabs button")].map((b) => b.dataset.view).join(",") }));
+  expect("opportunities: a view tab shows its own list with its rule; no Quality on sale", sale.on === "corner" && /value and momentum scores both/.test(sale.help) && sale.rows === Math.min(sale.n, 25) && sale.tabs === "best,corner,fit", JSON.stringify(sale));
   await p.click('#oppTabs [data-view="fit"]'); await p.waitForTimeout(200);
   expect("opportunities: the fit view adds its Fit column", (await p.evaluate(() => [...document.querySelectorAll("#oppTable th")].some((th) => /^Fit/.test(th.textContent)) || /holdings|history/.test(document.querySelector("#oppTable").textContent))));
   await p.click('#oppTabs [data-view="best"]'); await p.waitForTimeout(200);

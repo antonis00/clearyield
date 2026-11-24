@@ -375,9 +375,8 @@ def _beats(row, table):
 OPP_ZONE = 60          # the map's "cheap and rising" corner: value and momentum both at least this
 OPP_TOP = 10           # how many the ranked list shows
 OPP_FIT = 8            # how many portfolio-fit candidates
-SALE_QUALITY = 60      # "quality on sale": a quality score at least this...
-SALE_DROP = -0.10      # ...and at least 10% below its 52-week high, with the fall paused: back above its 50-day
-                       # average (a stock still falling tends to keep falling for a while, so it isn't "on sale" yet)
+# "Quality on sale" (quality 60+, 10% below the high) was removed after the independent review: it ranked by the
+# quality score, which the app's own score research found works backwards, and prompted buying dips
 REASON_AT = 65         # a factor this strong is named as a reason
 SECTOR_CAP = 3         # at most this many from one sector in a ranked list, so a list isn't one sector's bet
 FIT_PERIOD = "2y"      # how far back the portfolio fit compares weekly returns
@@ -461,15 +460,13 @@ def opportunities(settings, markets):
         diversifies = (1 - max(r["corr"], 0)) * 100
         fit.append({**pick(r), "diversifies": diversifies, "fit": (r["composite"] + diversifies) / 2})
     fit = _capped(sorted(fit, key=lambda r: -r["fit"]), OPP_FIT)
-    sale = _capped(sorted((r for r in stocks if (r.get("f_quality") or 0) >= SALE_QUALITY and r["fromHigh"] <= SALE_DROP and r.get("above50")),
-                          key=lambda r: -r["f_quality"]), OPP_TOP)
     cs = p.get("coreSatellite") or {}
     return {
         "markets": markets, "scanned": len(rows), "failed": failed, "map": [pick(r) for r in stocks], "top": [pick(r) for r in top],
-        "fit": fit, "onSale": [pick(r) for r in sale], "holdings": sorted(held),
+        "fit": fit, "holdings": sorted(held),
         "fitWeeks": int((total.index[-1] - total.index[0]).days // 7) if total is not None and len(total) > 1 else None,
         "satellite": {"amount": cs.get("amount"), "action": cs.get("action"), "target": cs.get("target"), "core": cs.get("core"), "base": p["base"]} if cs else None,
-        "rules": {"zone": OPP_ZONE, "top": OPP_TOP, "fit": OPP_FIT, "saleQuality": SALE_QUALITY, "saleDrop": SALE_DROP, "reasonAt": REASON_AT, "sectorCap": SECTOR_CAP},
+        "rules": {"zone": OPP_ZONE, "top": OPP_TOP, "fit": OPP_FIT, "reasonAt": REASON_AT, "sectorCap": SECTOR_CAP},
     }
 
 
@@ -1054,7 +1051,7 @@ def _in_days(n):
 def digest(settings, tiles=None):
     """What's worth knowing today: alerts and journal reminders first, then your portfolio, your holdings and
     watchlist, the market's notable moves, and headlines naming your stocks. Every item is a rule with its figures.
-    The short-term lines (a day's moves, RSI, stance changes, market moves) carry `short`, so the page's Long-term
+    The short-term lines (a day's moves, stance changes, market moves) carry `short`, so the page's Long-term
     view can leave them out and keep what a buy-and-hold investor acts on."""
     held = ledger.held_tickers()
     watched = [r["ticker"] for r in db.q("SELECT ticker FROM watchlist")]
@@ -1069,10 +1066,6 @@ def digest(settings, tiles=None):
         tag = "holding" if t in held else "watchlist"
         if r["day"] is not None and abs(r["day"]) >= 0.03:
             items.append({"tone": 1 if r["day"] > 0 else -1, "ticker": t, "priority": 5, "short": True, "text": f"{t} ({tag}) moved {r['day']:+.1%} {r['moveDay']}."})
-        if r["rsi"] >= 70:
-            items.append({"tone": -1, "ticker": t, "priority": 6, "short": True, "text": f"{t} is overbought (RSI {r['rsi']:.0f})."})
-        elif r["rsi"] <= 30:
-            items.append({"tone": 1, "ticker": t, "priority": 6, "short": True, "text": f"{t} is oversold (RSI {r['rsi']:.0f})."})
         ev = r["events"]
         if t in held and ev["earningsDays"] is not None and ev["earningsDays"] <= 14:
             items.append({"tone": 0, "ticker": t, "priority": 3, "text": f"{t} reports earnings {_in_days(ev['earningsDays'])} ({ev['earnings']})."})

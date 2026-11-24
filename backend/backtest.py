@@ -1,47 +1,21 @@
-"""Simple single-asset strategy backtests with trading costs. A signal from a day's close trades at the next open."""
-import numpy as np
+"""One asset bought all at once or monthly, with trading costs: does spreading the money out help, over this history?"""
 import pandas as pd
 
 from . import indicators as ind
 
+# Investing it all at once against investing monthly. The trading rules that were here (moving-average crossover, RSI
+# mean reversion, absolute momentum) were removed after the independent review: tuning a rule on one price series until
+# it beats holding is curve-fitting, and it invites moving a long-term holding in and out of the market.
 STRATEGIES = {
-    "buy_hold": {"label": "Buy & hold", "params": {}},
-    "sma_cross": {"label": "Moving-average crossover", "params": {"fast": 50, "slow": 200}},
-    "rsi_reversion": {"label": "RSI mean reversion", "params": {"period": 14, "buy_below": 30, "sell_above": 55}},
-    "momentum": {"label": "Absolute momentum (time-series)", "params": {"lookback": 126}},
-    "dca": {"label": "Monthly dollar-cost averaging", "params": {}},
+    "buy_hold": {"label": "All at once (buy & hold)", "params": {}},
+    "dca": {"label": "Monthly, in equal parts", "params": {}},
 }
 
 
 def _positions(close, strategy, p):
     if strategy == "buy_hold":
         return pd.Series(1.0, index=close.index)
-    if strategy == "sma_cross":
-        n_fast, n_slow = int(p.get("fast", 50)), int(p.get("slow", 200))
-        if not 1 <= n_fast < n_slow:
-            raise ValueError("The fast average must be at least 1 and shorter than the slow one.")
-        fast, slow = ind.sma(close, n_fast), ind.sma(close, n_slow)
-        return (fast > slow).astype(float).where(slow.notna(), 0.0)
-    if strategy == "rsi_reversion":
-        if int(p.get("period", 14)) < 1:
-            raise ValueError("The RSI period must be at least 1.")
-        r = ind.rsi(close, int(p.get("period", 14)))
-        lo, hi = float(p.get("buy_below", 30)), float(p.get("sell_above", 55))
-        pos, state = [], 0.0
-        for v in r:
-            if v == v:
-                if state == 0 and v < lo:
-                    state = 1.0
-                elif state == 1 and v > hi:
-                    state = 0.0
-            pos.append(state)
-        return pd.Series(pos, index=close.index)
-    if strategy == "momentum":
-        lb = int(p.get("lookback", 126))
-        if lb < 1:
-            raise ValueError("The lookback must be at least 1.")
-        return (close / close.shift(lb) - 1 > 0).astype(float).where(close.shift(lb).notna(), 0.0)
-    raise ValueError(f"Unknown strategy {strategy}")
+    raise ValueError(f"Unknown strategy {strategy}: choose all at once or monthly.")
 
 
 def _metrics(eq, rf, trades=None):
@@ -49,7 +23,7 @@ def _metrics(eq, rf, trades=None):
             "sharpe": ind.sharpe(eq, rf), "maxDrawdown": ind.max_drawdown(eq), "trades": trades}
 
 
-def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=10000, start=None):
+def run(df, strategy="dca", params=None, cost_bps=10, rf=0.04, capital=10000, start=None):
     """Backtest from `start` (default: the first bar). Earlier bars of `df` only warm up the indicators."""
     params = params or {}
     if cost_bps < 0:
@@ -104,7 +78,7 @@ def run(df, strategy="sma_cross", params=None, cost_bps=10, rf=0.04, capital=100
         "caveats": [
             "Single-asset backtest on adjusted prices: excludes taxes, slippage beyond the cost setting, and dividends timing. Money not in the market earns the risk-free rate from Settings.",
             "Survivorship bias: you are testing a ticker that still exists today.",
-            "Parameters tuned on the same history overfit easily - check other periods and tickers before trusting a result.",
+            "One history: whether monthly beat all at once depends on how the market moved over these dates, not on a rule that repeats.",
         ],
     }
     if strategy != "dca":

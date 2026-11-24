@@ -335,7 +335,7 @@ INFO_KEYS = [
     "returnOnEquity", "debtToEquity", "currentRatio", "revenueGrowth", "earningsGrowth",
     "dividendYield", "payoutRatio", "beta", "sharesOutstanding", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
     "targetMeanPrice", "recommendationKey", "numberOfAnalystOpinions", "longBusinessSummary",
-    "trailingEps", "forwardEps", "pegRatio", "totalCash", "totalDebt", "financialCurrency",
+    "trailingEps", "forwardEps", "totalCash", "totalDebt", "financialCurrency",
     "impliedSharesOutstanding", "ebitda", "earningsTimestampStart", "exDividendDate", "netExpenseRatio",
     "currentPrice", "regularMarketPrice", "netIncomeToCommon",
     "website",  # for the company's site icon (logos.py)

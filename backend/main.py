@@ -20,7 +20,6 @@ def _load_env(env=ROOT / ".env"):
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 k = k.strip()
-                k = "CLEARYIELD_" + k[len("STOCKPILOT_"):] if k.startswith("STOCKPILOT_") else k  # the app's old name
                 os.environ.setdefault(k, v.strip().strip('"').strip("'"))
 
 
@@ -202,7 +201,8 @@ async def _warm_loop():
         await asyncio.sleep(WARM_EVERY)
 
 
-app = FastAPI(title="ClearYield", lifespan=lifespan)
+# No /docs, /redoc or /openapi.json: a map of every route helps nobody but someone probing the app
+app = FastAPI(title="ClearYield", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 FRONT = ROOT / "frontend"
 
 
@@ -247,7 +247,9 @@ async def always_revalidate(request, call_next):
     return response
 
 
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+# No inline scripts (the theme is set by /static/theme.js): text that slipped past esc() can't run as script. Inline
+# styles stay allowed: the page sets widths and colours in style attributes, and a style can't run code.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'; object-src 'none'")
 
@@ -964,7 +966,7 @@ def run_backtest(body: dict = Body(...)):
     df = _hist_or_404(t, "max")  # all of it, so indicators are warmed up when the chosen period starts
     start = data.slice_period(df, body.get("period", "5y")).index[0]
     try:
-        res = backtest.run(df, body.get("strategy", "sma_cross"), body.get("params") or {}, cost_bps,
+        res = backtest.run(df, body.get("strategy", "dca"), {}, cost_bps,
                            db.get_settings().get("risk_free_rate", 0.04), start=start)
     except ValueError as e:
         raise HTTPException(400, str(e))

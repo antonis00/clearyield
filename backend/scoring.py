@@ -155,7 +155,10 @@ def evaluate(info, close, weights=None, trend=None):
 
 
 def signals(info, close):
-    """Plain-language observations. tone: 1 supportive, -1 cautionary, 0 informational."""
+    """Plain-language observations. tone: 1 supportive, -1 cautionary, 0 informational. No timing prompts: the
+    golden and death crosses and RSI's "overbought"/"oversold" were removed after the independent review (untested,
+    and they nudge a long-term investor to trade); the trend, the distance from the high and analysts' targets are
+    stated as information, not as reasons to buy or sell."""
     out = []
 
     def add(tone, text):
@@ -166,35 +169,23 @@ def signals(info, close):
     price = float(close.iloc[-1])
     s50, s200 = ind.sma(close, 50), ind.sma(close, 200)
     if len(close) > 210:
-        now_above = s50.iloc[-1] > s200.iloc[-1]
-        before_above = s50.iloc[-21] > s200.iloc[-21]
-        if now_above and not before_above:
-            add(1, "Golden cross in the last month: 50-day average moved above the 200-day.")
-        elif before_above and not now_above:
-            add(-1, "Death cross in the last month: 50-day average fell below the 200-day.")
-        elif now_above:
-            add(1, "Long-term uptrend: 50-day average is above the 200-day.")
+        if s50.iloc[-1] > s200.iloc[-1]:
+            add(0, "Long-term uptrend: the 50-day average is above the 200-day.")
         else:
-            add(-1, "Long-term downtrend: 50-day average is below the 200-day.")
-    r = ind.rsi(close).iloc[-1]
-    if r == r:
-        if r >= 70:
-            add(-1, f"RSI {r:.0f}: overbought, short-term pullback risk is elevated.")
-        elif r <= 30:
-            add(1, f"RSI {r:.0f}: oversold, a rebound is possible but trend may still be down.")
+            add(0, "Long-term downtrend: the 50-day average is below the 200-day.")
     hi = float(ind.window(close, 252).max())
     off = price / hi - 1
     if off <= -0.30:
         add(0, f"Trading {abs(off):.0%} below its 52-week high.")
     elif off >= -0.02:
-        add(1, "Trading at or near its 52-week high.")
+        add(0, "Trading at or near its 52-week high.")
     g = info.get
     if info.get("assetClass") == "Stocks":
         tgt = g("targetMeanPrice")
         n = int(g("numberOfAnalystOpinions") or 0)
         if tgt and n >= 3:
             up = tgt / price - 1
-            add(1 if up > 0.10 else (-1 if up < -0.05 else 0), f"Analyst mean target implies {up:+.0%} ({n} analysts).")
+            add(0, f"Analysts' mean target is {up:+.0%} from here ({n} analysts); targets are often wrong and follow the price.")
         # A bank's cash flow follows its deposits and loans, and its debt is what it lends from: neither is a warning
         bank = "bank" in (info.get("industry") or "").lower()
         if (g("freeCashflow") or 0) < 0 and not bank:

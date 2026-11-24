@@ -17,12 +17,7 @@ from .universe import DEFAULT_TILES, REGIONS
 
 _DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "clearyield.db"
 DB_PATH = Path(os.getenv("CLEARYIELD_DB", _DEFAULT_DB))
-# The database from when the app was called StockPilot moves to the new name once, with everything in it
-_OLD_DB = _DEFAULT_DB.with_name("stockpilot.db")
-if DB_PATH == _DEFAULT_DB and not DB_PATH.exists() and _OLD_DB.exists():
-    for _suffix in ("", "-wal", "-shm"):
-        if Path(f"{_OLD_DB}{_suffix}").exists():
-            os.replace(f"{_OLD_DB}{_suffix}", f"{DB_PATH}{_suffix}")
+
 
 
 def cache_path(path=None):

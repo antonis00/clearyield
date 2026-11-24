@@ -5,15 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClearYield</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-<script>
-  // Set the theme before anything is drawn, so the page never flashes the other one
-  (function () {
-    let t = "navy";
-    try { t = localStorage.getItem("theme") || "navy"; } catch (e) { /* storage blocked: keep navy */ }
-    if (t === "system") t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "navy";
-    document.documentElement.dataset.theme = ["dark", "navy", "light"].includes(t) ? t : "navy";
-  })();
-</script>
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="/static/styles.css">
 <!-- Chart libraries are bundled locally so the app works without a CDN -->
@@ -163,7 +155,7 @@
       </div>
 
       <div class="grid2">
-        <div class="card"><div class="card-h"><h3>Key statistics</h3></div><div id="statGrid" class="statgrid"></div><div id="rEarnings"></div></div>
+        <div class="card"><div class="card-h"><h3>Key statistics</h3></div><div id="statGrid" class="statgrid"></div><div id="statDates"></div><div id="rEarnings"></div></div>
         <div class="card" id="finCard">
           <div class="card-h"><h3>Fundamentals trend</h3></div>
           <canvas id="finChart" height="220"></canvas>
@@ -445,14 +437,13 @@
     <div class="card">
       <div class="form-row">
         <label>Ticker<input id="bTicker" value="SPY"></label>
-        <label>Strategy<select id="bStrat"></select></label>
-        <span id="bParams" class="form-row inline"></span>
+        <label>Invest<select id="bStrat"></select></label>
         <label>Period<select id="bPeriod"><option>1y</option><option>2y</option><option selected>5y</option><option value="max">Max</option></select></label>
         <label>Cost (bps)<input type="number" id="bCost" value="10"></label>
         <button class="btn" id="btnBt">Run backtest</button>
       </div>
     </div>
-    <div class="card"><div class="card-h"><h3>Equity curve (10,000 start)</h3></div><canvas id="btChart" height="110"></canvas></div>
+    <div class="card"><div class="card-h"><h3>10,000 invested: all at once or monthly</h3></div><canvas id="btChart" height="110"></canvas></div>
     <div class="grid2">
       <div class="card"><div class="card-h"><h3>Results</h3></div><div id="btTable" class="tablewrap"></div></div>
       <div class="card"><div class="card-h"><h3>Read before trusting this</h3></div><ul id="btCaveats" class="signals"></ul></div>

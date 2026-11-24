@@ -68,9 +68,13 @@ def test_all():
         p = c.get("/api/portfolio").json()
         assert p["total"] > 0 and p["performance"]["portfolio"] and p["rebalance"]
 
-        for strat in ["buy_hold", "sma_cross", "rsi_reversion", "momentum", "dca"]:
+        for strat in ["buy_hold", "dca"]:
             r = c.post("/api/backtest", json={"ticker": "MSFT", "strategy": strat, "period": "5y"})
             assert r.status_code == 200, (strat, r.text)
+        # The timing rules were removed after the independent review: asked for, they're refused
+        for strat in ["sma_cross", "rsi_reversion", "momentum"]:
+            assert c.post("/api/backtest", json={"ticker": "MSFT", "strategy": strat}).status_code == 400, strat
+        assert set(c.get("/api/meta").json()["strategies"]) == {"buy_hold", "dca"}
 
         assert c.post("/api/journal", json={"ticker": "AAPL", "action": "buy", "price": 150, "thesis": "x",
                                             "stop_price": 1e9, "review_date": "2000-01-01"}).status_code == 200
@@ -1554,35 +1558,6 @@ def test_journal_stops_work_for_any_ticker():
         assert not any(i["ticker"] in ("MSFT", "NVDA") and ("moved" in i["text"] or "RSI" in i["text"]) for i in items)
 
 
-def test_backtest_fills_at_the_next_open():
-    """A signal from today's close can only trade at tomorrow's open. Hand-calculated with no costs."""
-    import pandas as pd
-
-    from backend import backtest
-    closes = [100.0] * 60 + [110, 120, 90, 100, 110]
-    opens = [100.0] * 60 + [105, 112, 118, 88, 102]
-    df = pd.DataFrame({"Open": opens, "Close": closes}, index=pd.bdate_range("2024-01-01", periods=65))
-    # Lookback 1 means long the day after any up close:
-    #   110 up -> buy at the next open, 112, and that day ends at 120
-    #   120 up -> hold, and that day ends at 90
-    #    90 down -> sell at the next open, 88
-    #   100 up -> buy at the next open, 102, and that day ends at 110
-    r = backtest.run(df, "momentum", {"lookback": 1}, 0, 0.0)
-    expected = (120 / 112) * (90 / 120) * (88 / 90) * (110 / 102) - 1
-    assert abs(r["strategy"]["totalReturn"] - expected) < 1e-9, (r["strategy"]["totalReturn"], expected)
-    assert r["strategy"]["trades"] == 3
-
-    # Costs still come off each trade
-    costed = backtest.run(df, "momentum", {"lookback": 1}, 100, 0.0)
-    assert costed["strategy"]["totalReturn"] < r["strategy"]["totalReturn"]
-
-    # No look-ahead: changing a later price can't change anything before it
-    moved = df.copy()
-    moved.loc[moved.index[-1], "Close"] = 500.0
-    later = backtest.run(moved, "momentum", {"lookback": 1}, 0, 0.0)
-    assert later["equity"][:-1] == r["equity"][:-1]
-
-
 def test_compare_handles_different_calendars_and_histories():
     import pandas as pd
 
@@ -2138,33 +2113,6 @@ def test_only_local_addresses_are_served():
     env.write_bytes("\ufeffCLEARYIELD_TEST_KEY=héllo\n".encode("utf-8"))
     main._load_env(env)
     assert os.environ.pop("CLEARYIELD_TEST_KEY") == "héllo"
-    # A setting under the app's old name (StockPilot) counts as the new one
-    env.write_text("STOCKPILOT_TEST_OLD=1\n", encoding="utf-8")
-    main._load_env(env)
-    assert os.environ.pop("CLEARYIELD_TEST_OLD") == "1" and "STOCKPILOT_TEST_OLD" not in os.environ
-
-
-def test_database_from_the_old_name_moves_with_its_data():
-    """data/stockpilot.db, from when the app was called StockPilot, becomes data/clearyield.db, with what was in it."""
-    import sqlite3
-    import subprocess
-    import sys
-    root = Path(tempfile.mkdtemp())
-    (root / "backend").mkdir()
-    (root / "data").mkdir()
-    for f in ("__init__.py", "db.py", "universe.py"):
-        (root / "backend" / f).write_bytes((Path(__file__).resolve().parent.parent / "backend" / f).read_bytes())
-    with sqlite3.connect(root / "data" / "stockpilot.db") as con:
-        con.execute("CREATE TABLE note (t TEXT)")
-        con.execute("INSERT INTO note VALUES ('kept')")
-    con.close()
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLEARYIELD_", "STOCKPILOT_"))}
-    out = subprocess.run([sys.executable, "-c", "from backend import db; print(db.DB_PATH.name)"], cwd=root, env=env, capture_output=True, text=True)
-    assert out.stdout.strip() == "clearyield.db", out.stderr[-400:]
-    assert not (root / "data" / "stockpilot.db").exists()
-    with sqlite3.connect(root / "data" / "clearyield.db") as con:
-        assert con.execute("SELECT t FROM note").fetchall() == [("kept",)]
-    con.close()
 
 
 def test_ledger_matches_sales_to_the_oldest_lots():
@@ -2781,18 +2729,13 @@ def test_idle_cash_earns_the_risk_free_rate_in_backtests():
     import pandas as pd
 
     from backend import backtest
-    # Falling every day, so momentum stays in cash throughout: 4% a year on 79 days
     idx = pd.bdate_range("2024-01-01", periods=80)
-    df = pd.DataFrame({"Close": [100 * 0.999 ** i for i in range(80)]}, index=idx)
-    r = backtest.run(df, "momentum", {"lookback": 1}, 0, 0.04)
-    assert r["strategy"]["trades"] == 0
-    assert abs(r["strategy"]["totalReturn"] - ((1 + 0.04 / 252) ** 79 - 1)) < 1e-9
-    assert r["strategy"]["sharpe"] is not None and any("risk-free" in c for c in r["caveats"])
-    # DCA: money waiting to be invested earns it too
+    # Monthly: money waiting to be invested earns the risk-free rate, and the caveats say so
     flat = pd.DataFrame({"Close": [100.0] * 80}, index=idx)
     no_interest = backtest.run(flat, "dca", {}, 0, 0.0)["strategy"]["totalReturn"]
-    with_interest = backtest.run(flat, "dca", {}, 0, 0.04)["strategy"]["totalReturn"]
-    assert abs(no_interest) < 1e-9 and with_interest > 0
+    monthly = backtest.run(flat, "dca", {}, 0, 0.04)
+    with_interest = monthly["strategy"]["totalReturn"]
+    assert abs(no_interest) < 1e-9 and with_interest > 0 and any("risk-free" in c for c in monthly["caveats"])
     # Buy & hold pays its one trade
     held = backtest.run(flat, "buy_hold", {}, 10, 0.0)
     assert abs(held["benchmark"]["totalReturn"] + 0.001) < 1e-9 and abs(held["strategy"]["totalReturn"] + 0.001) < 1e-9
@@ -2813,11 +2756,12 @@ def test_digest_puts_urgent_items_first():
     texts = [i["text"] for i in d["items"]]
     assert [t.split()[0] for t in texts[:2]] == ["Alert:", "AAA"] and "hit your thesis stop" in texts[1]
     own = [i["text"] for i in d["items"] if i.get("kind") != "news"]  # headlines come after everything else
-    assert "review due" in texts[2] and "overbought" in own[-1], texts
+    assert "review due" in texts[2], texts
     assert "rows" not in d
-    # The Long-term view leaves out what's about a day or a week: RSI here; alerts, stops and reviews stay
-    short = {i["text"].split(" (")[0] for i in d["items"] if i.get("short")}
-    assert any("overbought" in t for t in short) and not any(i.get("short") for i in d["items"] if i["text"].startswith("Alert:") or "stop" in i["text"] or "review due" in i["text"]), short
+    # No RSI timing prompts (removed after the independent review), however far a price has run
+    assert not any("overbought" in t or "oversold" in t or "RSI" in t for t in own), own
+    # The Long-term view leaves out what's about a day or a week; alerts, stops and reviews stay
+    assert not any(i.get("short") for i in d["items"] if i["text"].startswith("Alert:") or "stop" in i["text"] or "review due" in i["text"])
 
 
 def test_digest_covers_portfolio_markets_and_headlines():
@@ -2923,13 +2867,9 @@ def test_opportunities_follow_their_rules():
     assert len(o["top"]) == R["top"] and scores == sorted(scores, reverse=True) and scores[0] == max(r["composite"] for r in o["map"])
     # No more than the cap from one sector in any ranked list
     from collections import Counter
-    for name in ("top", "fit", "onSale"):
+    assert "onSale" not in o, "Quality on sale was removed"
+    for name in ("top", "fit"):
         assert max(Counter(r["sector"] for r in o[name]).values(), default=0) <= R["sectorCap"], (name, Counter(r["sector"] for r in o[name]))
-    # Quality on sale: every one meets the limits and its fall has paused (back above its 50-day average); best quality first
-    assert all(r["f_quality"] >= R["saleQuality"] and r["fromHigh"] <= R["saleDrop"] for r in o["onSale"])
-    falling = {r["ticker"] for r in o["map"] if not r.get("above50", True)}
-    assert not falling & {r["ticker"] for r in o["onSale"]}
-    assert [r["f_quality"] for r in o["onSale"]] == sorted((r["f_quality"] for r in o["onSale"]), reverse=True)
     # Fits your portfolio: never what you hold; fit is the average of the score and how much it diversifies
     assert o["holdings"] == ["SAP.DE"] and o["fit"] and all(r["ticker"] != "SAP.DE" for r in o["fit"])
     assert all(abs(r["fit"] - (r["composite"] + (1 - max(r["corr"], 0)) * 100) / 2) < 1e-9 for r in o["fit"]) and o["fitWeeks"] > 26
@@ -4249,26 +4189,25 @@ def start_close(df, start):
     return df["Close"][df.index >= start].iloc[0]
 
 
-def test_backtest_uses_history_before_the_window():
-    """A 1y test must be judged on the 1y window with indicators already warmed up on earlier data."""
+def test_backtest_compares_all_at_once_with_monthly():
+    """One asset, all at once or monthly: judged on the chosen window only, the one-off purchase paying its cost once,
+    the monthly one buying on each month's first trading day."""
     import pandas as pd
 
     from backend import backtest
     idx = pd.bdate_range("2021-01-01", periods=800)
     df = pd.DataFrame({"Close": [100 * 1.001 ** i for i in range(800)]}, index=idx)
     start = idx[-252]
-    r = backtest.run(df, "sma_cross", {}, 10, 0.04, start=start)
-    # A steady uptrend is above its 200-day average from the first day of the window
-    assert r["strategy"]["exposure"] == 1.0
-    assert r["dates"][0] == start.strftime("%Y-%m-%d") and len(r["dates"]) == 252
-    # Fully invested from day one, with the same 10 bps entry cost as buy & hold, so they match
-    assert abs(r["strategy"]["totalReturn"] - r["benchmark"]["totalReturn"]) < 1e-9
-    assert abs((1 + r["benchmark"]["totalReturn"]) / (df["Close"].iloc[-1] / start_close(df, start)) - 0.999) < 1e-9
-    # Nothing changes position inside the window except that first entry
-    assert r["strategy"]["trades"] == 1
-    # Signals only use past prices: the same test without the earlier data has to sit in cash for 200 bars
-    cold = backtest.run(df.loc[start:], "sma_cross", {}, 10, 0.04)
-    assert cold["strategy"]["exposure"] < 0.25
+    once = backtest.run(df, "buy_hold", {}, 10, 0.04, start=start)
+    assert once["dates"][0] == start.strftime("%Y-%m-%d") and len(once["dates"]) == 252
+    # All at once is the same as the benchmark line, with the 10 bps entry cost
+    assert abs(once["strategy"]["totalReturn"] - once["benchmark"]["totalReturn"]) < 1e-9 and once["strategy"]["trades"] == 1
+    assert abs((1 + once["benchmark"]["totalReturn"]) / (df["Close"].iloc[-1] / start_close(df, start)) - 0.999) < 1e-9
+    monthly = backtest.run(df, "dca", {}, 10, 0.04, start=start)
+    months = len(pd.Series(1, index=idx[-252:]).groupby(idx[-252:].to_period("M")).head(1))
+    assert monthly["strategy"]["trades"] == months and monthly["label"].startswith("Monthly")
+    # In a steady rise, money waiting to be invested earns less than the market: all at once ends ahead
+    assert once["strategy"]["totalReturn"] > monthly["strategy"]["totalReturn"]
 
 
 def _tool_call(*calls):

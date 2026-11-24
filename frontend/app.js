@@ -737,21 +737,29 @@ async function loadPeers(t, request, tries = 0) {
     : `In its sector: the overall score is better than <b>${pct(c.beats, 0, false)}</b> of ${c.of} other ${esc(r.sector)} stocks <span class="muted">(${where})</span>`) + ` ${infoIcon(PEER_INFO)}`;
   $$(".factor .peer").forEach((el) => { el.innerHTML = line(el.dataset.peer); });
 }
+// A large amount in its currency, compactly ("€490.33B", "KWD 8.05B"): a market cap in the main unit, never pence or fils
+function bigMoney(v, cur) {
+  if (!isNum(v)) return "—";
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur, notation: "compact", maximumFractionDigits: 2 }).format(v); }
+  catch { return `${big(v)} ${esc(cur || "")}`.trim(); }
+}
 function renderStats(s) {
   const i = s.info, st = s.stats, cur = i.currency;
   const rows = [
-    ["Market cap", isNum(i.marketCap) ? `${big(i.marketCap)} ${esc(MAIN_UNIT[i.currency] || i.currency || "")}`.trim() : "—"], ["52w high", priceOf(st.high52, i)], ["52w low", priceOf(st.low52, i)], ["RSI (14)", num(st.rsi, 0)],
+    ["Market cap", bigMoney(i.marketCap, MAIN_UNIT[i.currency] || i.currency)], ["52w high", priceOf(st.high52, i)], ["52w low", priceOf(st.low52, i)], ["RSI (14)", num(st.rsi, 0)],
     ["1M", cpct(st.ret1m)], ["3M", cpct(st.ret3m)], ["YTD", cpct(st.ytd)], ["1Y", cpct(st.ret1y)], ["5Y CAGR", cpct(st.ret5yCagr)],
     ["Volatility 1Y", pct(st.vol1y, 1, false)], ["Max DD 1Y", cpct(st.maxDD1y)], ["Sharpe 1Y", num(st.sharpe1y)],
     ["Beta (2Y vs bench)", num(st.betaCalc)], ["P/E", num(i.trailingPE, 1)], ["Fwd P/E", num(i.forwardPE, 1) + (i.forwardNote ? ` ${infoIcon(i.forwardNote)}` : "")], ["P/B", num(i.priceToBook, 1)],
-    ["EV/EBITDA", num(i.enterpriseToEbitda, 1)], ["PEG", num(i.pegRatio)], ["ROE", pct(i.returnOnEquity, 1, false)],
+    ["EV/EBITDA", num(i.enterpriseToEbitda, 1)], ["ROE", pct(i.returnOnEquity, 1, false)],
     ["Op. margin", pct(i.operatingMargins, 1, false)], ["Net margin", pct(i.profitMargins, 1, false)], ["Debt/Equity", isNum(i.debtToEquity) ? num(i.debtToEquity) + "x" : "—"],
     ["Rev. growth", cpct(i.revenueGrowth)], ["EPS growth", cpct(i.earningsGrowth)], ["Div. yield", `${pct(i.dividendYield, 2, false)}${i.dividendNote ? infoIcon(i.dividendNote) : ""}`],
     ["Payout ratio", pct(i.payoutRatio, 0, false)], ["Analyst target", money(i.targetMeanPrice, cur)], ["Consensus", esc((i.recommendationKey || "—").replace("_", " "))],
-    ...(i.assetClass === "Stocks" ? [["Next earnings", esc(s.events.earnings || "not announced")], ["Ex-dividend", esc(s.events.exDividend || "not announced")]] : []),
   ];
   const shown = i.assetClass === "Stocks" ? rows : rows.filter(([, v]) => String(v).replace(/<[^>]+>/g, "") !== "—"); // funds have no fundamentals
+  // The dates come after the figures, on a line of their own: they're events, not statistics
+  const dates = i.assetClass === "Stocks" ? `<p class="stat-dates sm"><span class="muted">Next earnings</span> ${esc(s.events.earnings || "not announced")}<span class="muted">·</span><span class="muted">Ex-dividend</span> ${esc(s.events.exDividend || "not announced")}</p>` : "";
   $("#statGrid").innerHTML = shown.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+  $("#statDates").innerHTML = dates;
 }
 // Company statements and a cash-flow valuation only mean something for a company: for a fund, crypto, an index or a
 // currency both cards are hidden and their neighbours take the full row
@@ -1523,7 +1531,7 @@ async function loadOpportunities(force) {
   oppTable(d);
 }
 // The table under the map: every scored stock in one place, best overall score first, in views that match the rules
-// (cheap and rising, fits your portfolio, quality on sale); a column header sorts, a row opens the stock, hovering a
+// (cheap and rising, fits your portfolio); a column header sorts, a row opens the stock, hovering a
 // row lights up its dot on the map. 25 rows, then Show all. The view is remembered.
 const OPP_PAGE = 25;
 let oppAllRows = false;
@@ -1539,9 +1547,6 @@ function oppTable(d) {
       help: d.holdings.length ? `The ${d.fit.length} best by the average of the overall score and how little each moved with what you hold now (100 = independently, 0 = in step), in your base currency over the past ${d.fitWeeks} weeks${d.fitWeeks < 26 ? ", a short period, so a rough guide" : ""}. Stocks you hold are left out.${sat && isNum(sat.core) ? ` Satellite is ${pct(1 - sat.core, 0, false)} of your portfolio (your limit ${pct(1 - sat.target, 0, false)}).` : ""}`
         : "Add your holdings on the Portfolio page to see which stocks would fit them.",
       empty: d.holdings.length ? "Not enough shared price history with your portfolio yet: it needs about two months." : "Add your holdings on the Portfolio page to see which stocks would fit them." },
-    sale: { label: "Quality on sale", rows: d.onSale,
-      help: `Quality score ${R.saleQuality}+, at least ${Math.abs(R.saleDrop * 100)}% below the past year's high, and back above its 50-day average so the fall has paused. A fall can be a bargain or a warning: check why it fell.`,
-      empty: `No stock with a quality score of ${R.saleQuality}+ is ${Math.abs(R.saleDrop * 100)}% or more below its 52-week high with its fall paused right now.` },
   };
   let view; try { view = localStorage.getItem("oppView"); } catch { view = null; }
   if (!views[view]) view = "best";
@@ -1847,22 +1852,19 @@ $("#btnAddHolding").onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- backtest */
-function renderParams() {
-  const s = state.meta.strategies[$("#bStrat").value];
-  $("#bParams").innerHTML = Object.entries(s.params).map(([k, v]) => `<label>${k.replace("_", " ")}<input type="number" name="param-${k}" data-param="${k}" value="${v}"></label>`).join("");
-}
+// One asset, all at once or monthly: whether spreading the money out helped over this history. The timing rules that
+// were here (crossovers, RSI) were removed after the independent review.
 $("#btnBt").onclick = async () => {
   const b = $("#btnBt"); b.disabled = true;
-  const params = Object.fromEntries($$("[data-param]").map((i) => [i.dataset.param, Number(i.value)]));
   try {
-    const d = await api("/api/backtest", { method: "POST", body: { ticker: $("#bTicker").value, strategy: $("#bStrat").value, params, period: $("#bPeriod").value, cost_bps: $("#bCost").value } });
+    const d = await api("/api/backtest", { method: "POST", body: { ticker: $("#bTicker").value, strategy: $("#bStrat").value, period: $("#bPeriod").value, cost_bps: $("#bCost").value } });
     mkChart("btChart", { type: "line", data: { labels: d.dates, datasets: [
       { label: d.label, data: d.equity, borderColor: C("--accent"), borderWidth: 2, pointRadius: 0 },
-      { label: "Buy & hold", data: d.buyHold, borderColor: C("--muted"), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 }] },
+      { label: "All at once", data: d.buyHold, borderColor: C("--muted"), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 }] },
       options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 10 } } } } });
     const m = [["Total return", "totalReturn", (v) => cpct(v)], ["CAGR", "cagr", (v) => cpct(v)], ["Volatility", "volatility", (v) => pct(v, 1, false)],
-      ["Sharpe", "sharpe", (v) => num(v)], ["Max drawdown", "maxDrawdown", (v) => cpct(v)], ["Trades", "trades", (v) => num(v, 0)], ["Time in market", "exposure", (v) => pct(v, 0, false)]];
-    $("#btTable").innerHTML = `<table><tr><th>Metric</th><th class="num">${esc(d.label)}</th><th class="num">Buy &amp; hold</th></tr>${m.map(([l, k, f]) => `<tr><td>${l}</td><td class="num">${f(d.strategy[k])}</td><td class="num">${k === "exposure" ? "100%" : f(d.benchmark[k])}</td></tr>`).join("")}</table>`;
+      ["Sharpe", "sharpe", (v) => num(v)], ["Max drawdown", "maxDrawdown", (v) => cpct(v)], ["Purchases", "trades", (v) => num(v, 0)]];
+    $("#btTable").innerHTML = `<table><tr><th>Metric</th><th class="num">${esc(d.label)}</th><th class="num">All at once</th></tr>${m.map(([l, k, f]) => `<tr><td>${l}</td><td class="num">${f(d.strategy[k])}</td><td class="num">${f(d.benchmark[k])}</td></tr>`).join("")}</table>`;
     $("#btCaveats").innerHTML = d.caveats.map((c) => `<li>${esc(c)}</li>`).join("");
   } catch (e) { toast(e.message); } finally { b.disabled = false; }
 };
@@ -1870,7 +1872,7 @@ $("#btnBt").onclick = async () => {
 /* ---------------------------------------------------------------- portfolio backtest and futures */
 // One mix feeds both: how it did (a day-by-day backtest) and what it might do (paths drawn from its own months).
 const PM = { loaded: false, base: "USD" };
-const BT_HINT = { single: "One asset, one trading rule.", portfolio: "A mix of assets: how it did, and a range of what it might do.",
+const BT_HINT = { single: "One asset: investing all at once, or monthly in equal parts.", portfolio: "A mix of assets: how it did, and a range of what it might do.",
   score: "Whether each score ranked the stocks you follow by what came next, month by month, and which changes would help." };
 function setBtMode(mode, load = true) {
   $$("#btMode button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
@@ -2986,8 +2988,7 @@ function renderMarketChoices() {
   checkFiredAlerts(); setInterval(checkFiredAlerts, 60000);
   watchBackground();
   renderMarketChoices();
-  $("#bStrat").innerHTML = Object.entries(m.strategies).map(([k, v]) => `<option value="${k}" ${k === "sma_cross" ? "selected" : ""}>${v.label}</option>`).join("");
-  $("#bStrat").onchange = renderParams; renderParams();
+  $("#bStrat").innerHTML = Object.entries(m.strategies).map(([k, v]) => `<option value="${k}" ${k === "dca" ? "selected" : ""}>${v.label}</option>`).join("");
   $("#aKind").innerHTML = Object.entries(m.alertKinds).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
   const route = () => {
     const [view, arg] = location.hash.slice(1).split("/");

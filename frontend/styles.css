@@ -674,3 +674,7 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 .fp-chosen { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .fp-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .fp-places { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); } .fp-place span small { display: none; } }
 #backupCopyNote.amber { color: var(--accent); }
+
+/* Research's Key statistics: the next earnings and ex-dividend dates on a line under the figures */
+.stat-dates { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 14px 0 0; }
+.stat-dates .muted:not(:first-child) { margin-left: 6px; }

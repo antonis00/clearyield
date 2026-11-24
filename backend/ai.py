@@ -326,7 +326,6 @@ def brief_data(ctx):
                   "Number of analysts": int(i["numberOfAnalystOpinions"]) if i.get("numberOfAnalystOpinions") else None},
         "Valuation": {"P/E, trailing 12 months": _f_x(i.get("trailingPE")), "P/E, forward": _f_x(i.get("forwardPE")),
                       "Price to book": _f_x(i.get("priceToBook")), "EV to EBITDA": _f_x(i.get("enterpriseToEbitda")),
-                      "PEG ratio": _f_num(i.get("pegRatio")),
                       # how Yahoo's earnings figures were checked (a split it hadn't applied, a currency it mixed, a P/E left out)
                       "Note on the earnings figures": i.get("forwardNote")},
         "Profitability and balance sheet": {"Return on equity": _f_pct(i.get("returnOnEquity")), "Operating margin": _f_pct(i.get("operatingMargins")),

@@ -168,9 +168,8 @@ def get_opportunities(markets=None):
     return {
         "top_ranked": [short(r) for r in o["top"]],
         "fits_your_portfolio": [short(r, {"fit": _f_num(r["fit"], 1), "moves_with_your_portfolio": _f_num(r["corr"], 2)}) for r in o["fit"]],
-        "quality_on_sale": [short(r, {"below_52_week_high": _f_pct(r["fromHigh"], 0)}) for r in o["onSale"]],
         "rules": "Top ranked: highest overall score, at most 3 per sector. Fit: average of score and how little it moved with what you hold "
-                 "(2 years of weekly returns in your base currency; correlation 1 = in step). Quality on sale: quality 60+, 10%+ below its high, back above its 50-day average.",
+                 "(2 years of weekly returns in your base currency; correlation 1 = in step).",
     }
 
 
@@ -636,7 +635,7 @@ TOOLS = {
                                                                      "min/max_rsi, min/max_ret1y, min/max_ytd, min_off_high/max_off_high (below 52w high), max_above_low, "
                                                                      "beat_market, sort (also size, return)"},
                   "question": {"type": "string", "description": "or a short plain question: 'cheap European banks'"}})),
-    "get_opportunities": (get_opportunities, "Top ranked stocks; fits_your_portfolio (measured correlation with the holdings: use for diversification); quality on sale.",
+    "get_opportunities": (get_opportunities, "Top ranked stocks; fits_your_portfolio (measured correlation with the holdings: use for diversification).",
                           S({"markets": {"type": "array", "items": {"type": "string", "enum": REGIONS}}})),
     "compare": (compare, "Up to 5 assets side by side over one period, in the base currency at each day's rate: return, yearly rate (from a year), volatility, drawdown, Sharpe, P/E, fund cost, overall score and stance, and the correlation of each pair.",
                 S({"tickers": {"type": "array", "items": {"type": "string"}}, "period": {"type": "string", "enum": ["6mo", "1y", "2y", "5y"]}}, ["tickers"])),
