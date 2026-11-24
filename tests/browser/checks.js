@@ -323,7 +323,7 @@ const CHECKS = {
     expect("Forward returns to Journal", (await visible()) === "view-journal", await visible());
     await page.evaluate(() => { location.hash = "#research/AAPL"; });
     await page.waitForFunction(() => document.querySelector("#rSym")?.textContent === "AAPL", null, { timeout: 60000 });
-    await page.click('[data-view="screener"]'); await page.waitForTimeout(200);
+    await page.click('[data-view="journal"]'); await page.waitForTimeout(200);
     await page.goBack(); await page.waitForTimeout(600);
     expect("Back returns to the stock", (await visible()) === "view-research" && (await page.textContent("#rSym")) === "AAPL");
     await page.goBack(); await page.waitForTimeout(300);

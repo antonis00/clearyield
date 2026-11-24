@@ -21,7 +21,7 @@ const SLOW = 150000;
   p.on("dialog", (d) => (d.type() === "prompt" ? d.accept(dialogAnswer ?? "") : d.accept()));
   // A screen in the menu is clicked there; one inside a place (Compare, Opportunities, Simulate, Score check) through
 // its place and then the sub-tab, as a person would
-const NAV_GROUP = { backtest: "portfolio", compare: "research", opportunities: "screener", scorecheck: "screener" };
+const NAV_GROUP = { backtest: "portfolio", compare: "research", screener: "opportunities", scorecheck: "opportunities" };
 const nav = async (v) => {
   if (NAV_GROUP[v]) { await p.click(`#nav [data-view="${NAV_GROUP[v]}"]`); await p.waitForTimeout(250); await p.click(`#subnav [data-route="${v}"]`); }
   else await p.click(`#nav [data-view="${v}"]`);
@@ -387,6 +387,21 @@ const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"
     more.open && more.count === "(3 set)" && more.mcap === "10" && more.off === "10" && more.rsi === "60" && applied?.filters?.min_mcap === 1e10 && applied?.filters?.min_off_high === 0.1 && applied?.filters?.max_rsi === 60,
     JSON.stringify({ more, applied: applied?.filters }));
   if (await p.locator("#scrTable tbody tr").count()) { await p.locator("#scrTable tbody tr").first().click(); await p.waitForTimeout(700); expect("screener: row opens Research", (await p.evaluate(() => location.hash)).startsWith("#research")); }
+
+  // Research with no stock chosen opens one (the last looked at, else the day's most traded), never an empty page;
+  // Discover starts on Opportunities
+  const fresh = await ctx.newPage();
+  await fresh.goto(`${BASE}#research`);
+  await fresh.evaluate(() => { try { localStorage.removeItem("lastStock"); } catch {} });
+  await fresh.reload();
+  const opened = await fresh.waitForFunction(() => typeof state !== "undefined" && state.stock?.ticker && !document.querySelector("#researchBody").classList.contains("hidden") && location.hash.startsWith("#research/"), null, { timeout: SLOW }).then(() => true).catch(() => false);
+  const firstStock = await fresh.evaluate(() => ({ t: state.stock?.ticker, empty: !document.querySelector("#researchEmpty").classList.contains("hidden") }));
+  await fresh.evaluate(() => { location.hash = "#dashboard"; }); await fresh.waitForTimeout(300);
+  await fresh.click('#nav [data-group="discover"]'); await fresh.waitForTimeout(400);
+  const disc = await fresh.evaluate(() => ({ hash: location.hash, tabs: [...document.querySelectorAll("#subnav a")].map((a) => a.dataset.route).join(",") }));
+  await fresh.close();
+  expect("research: with no stock chosen it opens one, not an empty page; Discover starts on Opportunities", opened && firstStock.t && !firstStock.empty
+    && disc.hash === "#opportunities" && disc.tabs === "opportunities,screener,scorecheck", JSON.stringify({ firstStock, disc }));
 
   // ---- Portfolio
   await nav("portfolio");
