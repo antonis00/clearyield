@@ -161,7 +161,7 @@ function modal(html, onSubmit) {
 const GROUPS = {
   portfolio: [["portfolio/overview", "Overview"], ["portfolio/invest", "Invest"], ["portfolio/performance", "Performance"], ["portfolio/records", "Records & tax"], ["backtest", "Simulate"]],
   research: [["research", "Research"], ["compare", "Compare"]],
-  discover: [["opportunities", "Opportunities"], ["screener", "Screener"], ["scorecheck", "Score check"]],
+  discover: [["screener", "Screener"], ["opportunities", "Opportunities"], ["scorecheck", "Score check"]],
 };
 const GROUP_OF = { portfolio: "portfolio", backtest: "portfolio", research: "research", compare: "research", screener: "discover", opportunities: "discover", scorecheck: "discover" };
 const PF_TABS = ["overview", "invest", "performance", "records"];
@@ -209,8 +209,7 @@ function show(route, push = true) {
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
   renderSubnav(view);
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare,
-     research: () => { if (!state.ticker) openDefaultStock(); } }[el] || (() => {}))();
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare }[el] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); show(a.dataset.view); });
 
@@ -545,16 +544,6 @@ $("#refreshDigest").onclick = loadDigest;
 /* ---------------------------------------------------------------- research */
 // The range is how far back the chart goes; bars is how much time each candle covers
 const chartUrl = () => `/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}&bars=${state.bars}`;
-// Research with no stock chosen opens one, never an empty page: the last you looked at, or else the day's most traded
-// large company on Yahoo (as Compare starts), or your benchmark when Yahoo doesn't answer
-async function openDefaultStock() {
-  let t = null;
-  try { t = localStorage.getItem("lastStock"); } catch { /* none remembered */ }
-  if (!t) {
-    try { const s = await api("/api/compare/start"); t = (s.popular && s.popular[0]) || s.benchmark; } catch { t = state.meta?.settings?.benchmark || "SPY"; }
-  }
-  if (!state.ticker && t && $("#view-research") && !$("#view-research").classList.contains("hidden")) openStock(t);
-}
 async function openStock(t, period) {
   if (state.ticker !== t.toUpperCase()) window.scrollTo(0, 0);  // another stock starts at the top too, also from Research itself
   state.ticker = t.toUpperCase(); state.period = period || state.period;
@@ -567,7 +556,6 @@ async function openStock(t, period) {
     const s = await api(chartUrl());
     if (request !== state.stockRequest) return;
     state.stock = s; body.style.opacity = 1;
-    try { localStorage.setItem("lastStock", state.ticker); } catch { /* this visit only */ }
     renderHeader(s); renderPrice(s); renderFactors(s); renderStats(s); renderFin(s);
     loadPeers(state.ticker, request);
     $("#briefOut").innerHTML = "Combines scores, price action, fundamentals and headlines into a bull/bear summary.";
