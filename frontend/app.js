@@ -569,7 +569,6 @@ async function renderResearchStart() {
   groups.popular = group("popular", "Most traded today", (pop?.popular || []).map((t) => ({ t, n: pop.names?.[t] && pop.names[t] !== t ? pop.names[t] : "" })), "large companies, on Yahoo");
   draw();
 }
-$("#rsSearch").onclick = () => { const g = $("#globalSearch"); g.focus(); g.select(); };
 // The quick picks are buttons, which the page-wide stock click leaves alone: they open their stock here (Ctrl/Cmd or
 // a middle click opens a new tab, as elsewhere)
 $("#rsGroups").addEventListener("click", (e) => { const c = e.target.closest(".rs-chip"); if (!c) return; if (e.ctrlKey || e.metaKey) openInNewTab(c.dataset.stock); else openStock(c.dataset.stock); });

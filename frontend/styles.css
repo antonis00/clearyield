@@ -740,12 +740,7 @@ nav a:hover .nav-svg .hole, nav a.active .nav-svg .hole, nav a:hover .nav-svg .i
   background: color-mix(in srgb, var(--accent) 16%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
 .rs-mark svg { width: 28px; height: 28px; stroke: var(--accent); }
 .rs-hero h2 { position: relative; margin: 0 0 8px; font-size: 26px; }
-.rs-hero p { position: relative; margin: 0 auto 24px; max-width: 560px; line-height: 1.55; }
-.rs-search { position: relative; display: inline-flex; align-items: center; gap: 12px; width: min(560px, 100%); padding: 14px 18px; border-radius: 999px; cursor: text;
-  border: 1px solid var(--field-line, var(--line)); background: var(--bg); color: var(--muted); font: 15px var(--sans); text-align: left;
-  box-shadow: 0 8px 28px #0004; transition: border-color .15s, box-shadow .15s; }
-.rs-search:hover, .rs-search:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent), 0 8px 28px #0004; outline: none; }
-.rs-search svg { width: 18px; height: 18px; flex: none; stroke: var(--muted); }
+.rs-hero p { position: relative; margin: 0 auto; max-width: 640px; text-wrap: balance; line-height: 1.55; }
 .rs-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 .rs-group { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
 .rs-group h4 { margin: 0 0 12px; }
