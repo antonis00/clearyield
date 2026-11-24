@@ -544,6 +544,8 @@
           <div class="card-h"><h3>Data</h3></div>
           <div class="form-row"><button class="btn ghost" id="btnClearCache">Refresh all data</button><a class="btn ghost" id="btnBackup" href="/api/backup" download style="margin-left: auto">Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
         <p class="muted sm" id="autoBackupNote" style="margin: 0"></p>
+        <label class="backup-copy">Also copy backups to <input id="sBackupCopy" name="backup-copy" placeholder="a folder on another drive or in OneDrive, e.g. C:\Users\you\OneDrive\ClearYield" spellcheck="false"></label>
+        <p class="sm" id="backupCopyNote" style="margin: 4px 0 0"></p>
         <p class="sm hidden" id="setupShow" style="margin: 8px 0 0"><button class="btn ghost sm" id="btnSetupShow">Show the Getting started checklist</button></p>
         </div>
       </div>

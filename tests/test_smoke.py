@@ -149,9 +149,9 @@ def test_real_yahoo_shapes():
     real_yf, real_demo = data._yf, data.DEMO
     data._yf, data.DEMO = (lambda: YF), False
     try:
-        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v12:EMPTY.X") is None
-        db.cache_set("info:v12:OLD.X", {"trailingPE": 12.0})
-        db.cache_expire("info:v12:OLD.X")
+        assert data.info("EMPTY.X")["trailingPE"] is None and db.cache_get_stale("info:v13:EMPTY.X") is None
+        db.cache_set("info:v13:OLD.X", {"trailingPE": 12.0})
+        db.cache_expire("info:v13:OLD.X")
         assert data.info("OLD.X")["trailingPE"] == 12.0
         assert data.news("EMPTY.X") == [] and db.cache_get_stale("news:EMPTY.X") is None
     finally:
@@ -1429,7 +1429,8 @@ def test_tax_year_is_hand_calculated():
 
 
 def test_automatic_backups():
-    """A backup a week beside the database, the last 8 kept, written whole or not at all, and each one restores."""
+    """A backup a day beside the database, the last 14 kept, written whole or not at all, copied to a second folder
+    when one is set (with the frozen research), and each one restores; a restore saves what it replaces first."""
     import json
     import shutil
     import time
@@ -1439,27 +1440,56 @@ def test_automatic_backups():
     shutil.rmtree(db.backup_dir(), ignore_errors=True)
     with TestClient(app) as c:  # starting the app writes the first one
         st = c.get("/api/meta").json()["autoBackup"]
-        assert st["count"] == 1 and st["last"] == time.strftime("%Y-%m-%d") and st["keep"] == 8, st
+        assert st["count"] == 1 and st["last"] == time.strftime("%Y-%m-%d") and st["keep"] == 14 and st["everyDays"] == 1, st
+        assert st["copyFolder"] == "" and st["copyError"] is None, "only on this disk until a folder is set"
         c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "shares": 3, "price": 100})
         c.post("/api/settings", json={"base_currency": "EUR"})
     t0 = time.time()
-    assert db.auto_backup(now=t0 + 3600) is None, "not again within the week"
-    first = db.auto_backup(now=t0 + 8 * 86400)
-    assert first and first.name == f"clearyield-auto-{time.strftime('%Y-%m-%d', time.localtime(t0 + 8 * 86400))}.json"
+    assert db.auto_backup(now=t0 + 3600) is None, "not again within the day"
+    first = db.auto_backup(now=t0 + 2 * 86400)
+    assert first and first.name == f"clearyield-auto-{time.strftime('%Y-%m-%d', time.localtime(t0 + 2 * 86400))}.json"
     saved = json.loads(first.read_text(encoding="utf-8"))
     assert saved["transactions"][0]["ticker"] == "AAPL" and saved["settings"]["base_currency"] == "EUR" and saved["version"] == db.BACKUP_VERSION
     assert not list(db.backup_dir().glob("*.tmp")), "no half-written file left"
-    for week in range(2, 12):
-        assert db.auto_backup(now=t0 + 8 * 86400 + week * 7 * 86400)
+    for day in range(3, 22):
+        assert db.auto_backup(now=t0 + day * 86400)
     have = db.auto_backups()
     assert len(have) == db.AUTO_KEEP and have[0].name > have[-1].name, [h.name for h in have]
     assert first not in have, "the oldest went first"
 
-    # Any of them restores, like a downloaded backup
+    # Any of them restores, like a downloaded backup; what was there is saved first, so a wrong file can be undone
     with TestClient(app) as c:
         c.post("/api/transactions", json={"ticker": "MSFT", "kind": "buy", "shares": 1, "price": 100})
-        assert c.post("/api/backup/restore", json=json.loads(have[0].read_text(encoding="utf-8"))).status_code == 200
+        r = c.post("/api/backup/restore", json=json.loads(have[0].read_text(encoding="utf-8")))
+        assert r.status_code == 200 and r.json()["before"].startswith(db.BEFORE_RESTORE_PREFIX), r.text
         assert [t["ticker"] for t in c.get("/api/transactions").json()] == ["AAPL"]
+        before = json.loads((db.backup_dir() / r.json()["before"]).read_text(encoding="utf-8"))
+        assert sorted(t["ticker"] for t in before["transactions"]) == ["AAPL", "MSFT"], "the replaced data is kept"
+        assert r.json()["before"] not in [h.name for h in db.auto_backups()], "apart from the daily ones"
+        # A bad file restores nothing and saves nothing
+        n = len(list(db.backup_dir().glob(f"{db.BEFORE_RESTORE_PREFIX}*")))
+        assert c.post("/api/backup/restore", json={"version": 99}).status_code == 400
+        assert len(list(db.backup_dir().glob(f"{db.BEFORE_RESTORE_PREFIX}*"))) == n
+
+        # A second folder: refused unless a full path; once set, today's backup and the frozen research are copied at once
+        assert c.post("/api/settings", json={"backup_copy_dir": "backups"}).status_code == 400
+        research = db.DB_PATH.parent / "research"
+        research.mkdir(exist_ok=True)
+        (research / "frozen.json").write_text("{}", encoding="utf-8")
+        second = Path(tempfile.mkdtemp()) / "OneDrive" / "ClearYield"
+        assert c.post("/api/settings", json={"backup_copy_dir": str(second)}).status_code == 200
+        st = c.get("/api/meta").json()["autoBackup"]
+        assert st["copyFolder"] == str(second) and st["copyError"] is None and st["copyLast"], st
+        assert (second / have[0].name).exists() and (second / "research" / "frozen.json").exists()
+        # A folder that can't be written is reported, and the backup itself still happens
+        blocker = Path(tempfile.mkdtemp()) / "a-file"
+        blocker.write_text("x", encoding="utf-8")
+        c.post("/api/settings", json={"backup_copy_dir": str(blocker / "sub")})
+        st = c.get("/api/meta").json()["autoBackup"]
+        assert st["copyError"], st
+        assert db.auto_backup(force=True), "the copy failing doesn't stop the backup"
+        c.post("/api/settings", json={"backup_copy_dir": ""})
+        shutil.rmtree(research, ignore_errors=True)
     shutil.rmtree(db.backup_dir(), ignore_errors=True)
     _reset()
 
@@ -3958,7 +3988,7 @@ def test_brief_accuracy():
     data = ai.brief_data(ctx)
     flat = json.dumps(data, ensure_ascii=False)
     assert data["Profitability and balance sheet"]["Return on equity"] == "142.1%" and data["Valuation"]["P/E, trailing 12 months"] == "38.1x"
-    assert data["Company"]["Market capitalisation"] == "4.98T USD" and data["Dividend"]["Dividend yield"] == "0.32%"
+    assert data["Company"]["Market capitalisation"] == "4.98T USD" and data["Dividend"]["Dividend yield, paid over the past year"] == "0.32%"
     assert data["Price"]["Target vs last price"] == "-1.0%" and data["Price performance and risk"]["Largest fall from a peak, 1 year"] == "-13.8%"
     assert data["Annual accounts, oldest first"] == [{"Year": "2025", "Revenue": "391.04B USD", "Free cash flow": "108.80B USD"}]
     assert "1.4213" not in flat and "null" not in flat and "Beta" not in flat, "missing figures are left out"
@@ -5761,6 +5791,117 @@ def test_cache_in_its_own_file_and_wal():
     finally:
         db.DB_PATH = real
         db._mem.clear()
+
+
+def test_ai_figure_check_says_what_it_proves():
+    """Only ClearYield's data verifies a figure: one found only on a web page is listed apart (the page may be about
+    another company or date), one found only in the question is the investor's own, and neither is a problem to
+    revise; a market cap is given to the model in pounds or dinars, never pence or fils."""
+    from backend import agent, ai
+    data = ['{"Return on equity":"34.2%","P/E":"26.5x"}']
+    pages = ['{"results":[{"content":"Revenue rose 12.4% at a rival"}]}']
+    ch = agent.check_answer("ROE is 34.2%, revenue grew 12.4%, and your 3.7% yield target is near; margin 61.3%.", data, pages,
+                            "Is a 3.7% yield safe?")
+    assert ch["web"] == ["12.4%"] and ch["asked"] == ["3.7%"] and ch["unmatched"] == ["61.3%"], ch
+    assert ch["checked"] == 4
+    # Nothing outside the data: the web and question lists are empty
+    assert agent.check_answer("ROE is 34.2%.", data, [], "")["web"] == []
+    # Market cap in the main unit
+    for cur, unit in (("GBp", "GBP"), ("KWF", "KWD"), ("USD", "USD")):
+        d = ai.brief_data({"ticker": "X", "info": {"name": "X", "currency": cur, "marketCap": 201.36e9}, "scores": {"composite": 50, "stance": "Neutral", "factors": {}}, "stats": {}})
+        assert d["Company"]["Market capitalisation"].endswith(unit), d["Company"]
+
+
+def test_web_search_cannot_carry_the_portfolio_out():
+    """A page the model read could tell it to search for an address with the investor's holdings in it: a web search
+    with an address is never run, and once the portfolio, plan or tax has been looked up, nor one with an amount of
+    money or a figure from them. Plain words, names and tickers pass. The answer's links are only its sources'."""
+    from backend import agent
+    private = agent._numbers('{"VWCE.DE":{"value":41200.5,"weight":"79.9%"},"total":51567.12}')
+    assert private == {"41200", "51567"}, private
+    leak = lambda q, p=private: agent.search_leak(q, p)  # noqa: E731
+    assert leak("Apple earnings this week") is None and leak("S&P 500 news 2026") is None and leak("NVDA Q3 results") is None
+    assert "address" in leak("see https://x.example/?q=1", set()) and "address" in leak("x.example.com/report")
+    assert "amount" in leak("portfolio worth $41k") and "amount" in leak("51,567 EUR portfolio")
+    assert "portfolio" in leak("VWCE 41,200.50") and "portfolio" in leak("total 51567")
+    assert leak("VWCE 41,200.50", set()) is None, "nothing private looked up yet"
+    # A refused search isn't run: its result says why, the others run as usual
+    ran = []
+    real = agent.run_tools
+    agent.run_tools = lambda calls: [ran.append(c) or ('{"ok":1}', True) for c in calls]
+    try:
+        out = agent.run_guarded([("web_search", {"query": "VWCE 41200"}), ("get_stock", {"ticker": "AAPL"})], private)
+    finally:
+        agent.run_tools = real
+    assert ran == [("get_stock", {"ticker": "AAPL"})] and not out[0][1] and "wasn't run" in out[0][0] and out[1] == ('{"ok":1}', True), out
+    assert agent.sources_in(['{"url":"https://reuters.com/a."}', "see http://b.com/x)"]) == ["http://b.com/x", "https://reuters.com/a"]
+
+
+def test_dividend_yield_is_what_was_paid():
+    """The yield is the past year's payments over today's price, both in the quote unit (NBK.KW pays twice a year, in
+    fils): Yahoo's latest-payment figure is kept beside it, and a gap between them is explained."""
+    from backend import data
+    real = data.dividends_past_year
+    try:
+        data.dividends_past_year = lambda t: 58.81  # fils, two half-year payments
+        d = data.paid_yield("NBK.KW", {"dividendYield": 0.0401, "currentPrice": 880.0})
+        assert abs(d["dividendYield"] - 58.81 / 880) < 1e-12 and d["dividendYieldYahoo"] == 0.0401 and "6.68%" in d["dividendNote"], d
+        data.dividends_past_year = lambda t: 1.06
+        d = data.paid_yield("AAPL", {"dividendYield": 0.0031, "currentPrice": 349.08})
+        assert abs(d["dividendYield"] - 1.06 / 349.08) < 1e-12 and "dividendNote" not in d, "close to Yahoo's: no note"
+        data.dividends_past_year = lambda t: 0.0
+        d = data.paid_yield("NEW.X", {"dividendYield": 0.02, "currentPrice": 10.0})
+        assert d["dividendYield"] == 0.02 and "No dividend paid" in d["dividendNote"], "a new payer keeps Yahoo's, said so"
+        data.dividends_past_year = lambda t: None
+        assert data.paid_yield("X", {"dividendYield": 0.02, "currentPrice": 10.0})["dividendYield"] == 0.02, "Yahoo not answering"
+        assert data.paid_yield("BTC-USD", {"dividendYield": None})["dividendYield"] is None
+    finally:
+        data.dividends_past_year = real
+
+
+def test_a_session_built_from_candles_takes_the_official_close():
+    """A day Yahoo's daily series lacks is built from 15-minute candles, whose last close misses the closing auction:
+    the latest one takes Yahoo's previous close once today's session has started, or its last price before then; a
+    figure far from the candles' isn't used."""
+    import datetime as dt
+
+    import pandas as pd
+
+    from backend import data
+    today = dt.date(2026, 11, 24)
+    daily = pd.DataFrame({"Open": [1160.0], "High": [1180.0], "Low": [1150.0], "Close": [1168.0], "Volume": [1e5]}, index=[pd.Timestamp("2026-11-20")])
+    candles = lambda days: pd.DataFrame({"Open": [1270.0] * len(days), "High": [1280.0] * len(days), "Low": [1265.0] * len(days),  # noqa: E731
+                                         "Close": [1277.0] * len(days), "Volume": [10.0] * len(days)}, index=pd.DatetimeIndex(days))
+
+    class Fi(dict):
+        pass
+
+    class Yf:
+        quote = Fi(lastPrice=1272.2, previousClose=1272.2)
+
+        class Ticker:
+            def __init__(self, t):
+                self.fast_info = Yf.quote
+
+    real = data._yf
+    data._yf = lambda: Yf
+    try:
+        # Before today's open: the last price is the 23rd's official close
+        intra = candles([pd.Timestamp("2026-11-23 16:15")])
+        out = data._official_close("ASML.AS", data.sessions_from_intraday(intra, daily, today), daily, intra, today)
+        assert out.at[pd.Timestamp("2026-11-23"), "Close"] == 1272.2 and out.at[pd.Timestamp("2026-11-20"), "Close"] == 1168.0
+        # Today under way: today's bar is the price so far
+        Yf.quote = Fi(lastPrice=1290.0, previousClose=1272.2)
+        intra = candles([pd.Timestamp("2026-11-23 16:15"), pd.Timestamp("2026-11-24 10:00")])
+        out = data._official_close("ASML.AS", data.sessions_from_intraday(intra, daily, today), daily, intra, today)
+        assert out.at[pd.Timestamp("2026-11-24"), "Close"] == 1290.0 and out.at[pd.Timestamp("2026-11-24"), "High"] == 1290.0
+        # A quote far from the candles is another day's: the candles' close stands
+        Yf.quote = Fi(lastPrice=900.0, previousClose=900.0)
+        intra = candles([pd.Timestamp("2026-11-23 16:15")])
+        out = data._official_close("ASML.AS", data.sessions_from_intraday(intra, daily, today), daily, intra, today)
+        assert out.at[pd.Timestamp("2026-11-23"), "Close"] == 1277.0
+    finally:
+        data._yf = real
 
 
 if __name__ == "__main__":

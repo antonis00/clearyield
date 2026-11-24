@@ -751,6 +751,67 @@ def prefetch(question):
     return plan
 
 
+# Tools whose results are the investor's own money: once one has run, a web search may not carry its figures out
+PRIVATE_TOOLS = ("get_portfolio", "get_plan", "get_tax")
+_URL_IN = re.compile(r"(?i)\bhttps?://|\bwww\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|xyz|info|biz|ru|cn|me|app|dev|site|link|ly)(?:/|\b)")
+_AMOUNT_IN = re.compile(r"(?i)[$€£¥]\s?\d|\b\d[\d,.\s]*\s?(?:usd|eur|gbp|qar|aed|sar|kwd|chf|jpy|dollars?|euros?|pounds?|riyals?)\b")
+
+
+def _numbers(text):
+    """The figures in a text by their whole-number part ("41,200.50" and "41200.5" are both "41200"), for spotting one
+    copied into a search; years and numbers under 100 are left out, since "Q3" or a 2026 give nothing away."""
+    out = set()
+    for m in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        try:
+            n = int(float(m.replace(",", "")))
+        except ValueError:
+            continue
+        if n >= 100 and not 1900 <= n <= 2100:
+            out.add(str(n))
+    return out
+
+
+def search_leak(query, private):
+    """Why a web search must not run, or None. A page the model read can tell it to "search for" or "open" an address
+    with the investor's holdings in it: so no addresses, no amounts of money, and no figure from the investor's own
+    portfolio, plan or tax, once those have been looked up. Plain words, names and tickers pass."""
+    q = query or ""
+    if _URL_IN.search(q):
+        return "it contained a web address"
+    if private and _AMOUNT_IN.search(q):
+        return "it contained an amount of money"
+    if private and _numbers(q) & private:
+        return "it contained a figure from the investor's own portfolio"
+    return None
+
+
+def guarded(calls, private):
+    """The calls with any leaking web search replaced by its refusal: [(name, args, refusal or None)]."""
+    out = []
+    for name, args in calls:
+        why = search_leak((args or {}).get("query"), private) if name == "web_search" else None
+        out.append((name, args, why))
+    return out
+
+
+def run_guarded(calls, private):
+    """run_tools, with a web search that would carry the investor's data out refused instead of run."""
+    plan = guarded(calls, private)
+    todo = [(n, a) for n, a, why in plan if not why]
+    done = iter(run_tools(todo))
+    return [(json.dumps({"error": f"This search wasn't run: {why}. Search with company names, tickers and plain words only."}), False)
+            if why else next(done) for n, a, why in plan]
+
+
+def sources_in(texts):
+    """Every web address in the data an answer was written from: the only links it may keep."""
+    found = set()
+    for t in texts:
+        for u in re.findall(r"""https?://[^\s"'<>\\\]】)]+""", t or ""):
+            found.add(u.rstrip(".,;"))
+    return sorted(found)
+
+
 def run_tools(calls):
     """Several look-ups at once (Yahoo downloads overlap rather than add up), results in the order asked."""
     from concurrent.futures import ThreadPoolExecutor
@@ -1050,6 +1111,8 @@ def _ask(question, follow):
     # The model doesn't know today's date, and without it read an earnings date eleven weeks away as "over a year"
     dated = f"(Today is {today:%A %d %B %Y}.)\n{q}"
     steps, facts, calls = [], [q], 0
+    web = set()  # which of facts came from web pages: they don't verify a figure as the app's data does
+    private = set()  # the investor's own figures, once looked up: no web search may carry them out
     PACE["waited"] = 0.0
     # What the question plainly needs, looked up at once and handed over with it: often the model can answer in its
     # first call, and otherwise it asks only for what's still missing
@@ -1058,6 +1121,8 @@ def _ask(question, follow):
         found = []
         for (name, args), (out, ok) in zip(plan, run_tools(plan)):
             facts.append(out)
+            if name in PRIVATE_TOOLS and ok:
+                private |= _numbers(out)
             steps.append(_step(name, args, out, ok))
             _say(step=steps[-1])
             found.append(f"{name}({json.dumps(args, ensure_ascii=False) if args else ''}): {out}")
@@ -1092,8 +1157,12 @@ def _ask(question, follow):
             break
         results = []
         _say(looking=[{"tool": n, "args": a} for _, n, a in tool_calls])
-        for (cid, name, args), (out, ok) in zip(tool_calls, run_tools([(n, a) for _, n, a in tool_calls])):
+        for (cid, name, args), (out, ok) in zip(tool_calls, run_guarded([(n, a) for _, n, a in tool_calls], private)):
             facts.append(_as_fact(name, out))
+            if name in PRIVATE_TOOLS and ok:
+                private |= _numbers(out)
+            if name == "web_search":
+                web.add(len(facts) - 1)
             steps.append(_step(name, args, out, ok))
             _say(step=steps[-1])
             results.append((cid, out))
@@ -1109,8 +1178,9 @@ def _ask(question, follow):
     if c.get("_cut"):
         text += "\n\n_(The answer ran out of room and may be cut short: ask about one part at a time for the rest.)_"
     _say(phase="checking")
-    known = "\n".join(facts + [f for e in earlier for f in e["facts"]])
-    checked = lambda t: {**ai.check_figures(t, known), "quotes": ai.check_quotes(t, known)}
+    data = [f for n, f in enumerate(facts) if n and n not in web] + [f for e in earlier for f in e["facts"]]
+    pages = [f for n, f in enumerate(facts) if n in web] + [f for e in earlier for f in e.get("web", [])]
+    checked = lambda t: check_answer(t, data, pages, q)
     problems = lambda ch: len(ch["unmatched"]) + len(ch["quotes"])
     check, revised = checked(text), None
     if problems(check):
@@ -1119,7 +1189,7 @@ def _ask(question, follow):
         # left is marked in the answer.
         _say(phase="revising", problems=problems(check))
         try:
-            draft = _revise(c, f"(Today is {today:%A %d %B %Y}.)\n{q}", facts[1:] + [f for e in earlier for f in e["facts"]], text, check["unmatched"], check["quotes"], check.get("direction") or ())
+            draft = _revise(c, f"(Today is {today:%A %d %B %Y}.)\n{q}", facts[1:] + [f for e in earlier for f in e["facts"] + e.get("web", [])], text, check["unmatched"], check["quotes"], check.get("direction") or ())
             calls += 1
             again = checked(draft) if draft else None
             # ... and says about as much: removing the flagged figures is fine, gutting the answer isn't
@@ -1129,11 +1199,26 @@ def _ask(question, follow):
         except (RuntimeError, httpx.HTTPError):
             pass  # the first answer stands, with its problems marked
     rid = __import__("uuid").uuid4().hex[:12]
-    RECENT[rid] = {"question": q, "answer": text, "facts": facts[1:]}
+    RECENT[rid] = {"question": q, "answer": text, "facts": [f for n, f in enumerate(facts) if n and n not in web],
+                   "web": [f for n, f in enumerate(facts) if n in web]}
     while len(RECENT) > RECENT_KEEP:
         RECENT.pop(next(iter(RECENT)))
-    return {"id": rid, "answer": text, "steps": steps, "calls": calls, "by": f"{c['model']} via {c['server']}", "waited": round(PACE["waited"]),
+    return {"id": rid, "answer": text, "steps": steps, "calls": calls, "sources": sources_in(facts[1:] + [f for e in earlier for f in e["facts"] + e.get("web", [])]), "by": f"{c['model']} via {c['server']}", "waited": round(PACE["waited"]),
             "check": check, "revised": revised, "followed": len(earlier)}
+
+
+def check_answer(text, data, pages=(), question=""):
+    """The figure check for an answer. Only the app's own data verifies a figure. A figure found only in a web page's
+    text is listed apart (`web`: the page may be about another company or another date), and one found only in the
+    question is the investor's own (`asked`: repeating it proves nothing). Quotations may come from either source."""
+    ch = ai.check_figures(text, "\n".join(data))
+    one = lambda f, src: bool(src) and (lambda r: r["checked"] > 0 and not r["unmatched"])(ai.check_figures(f, src))  # noqa: E731
+    web_text = "\n".join(pages)
+    turned = {d["figure"] for d in ch.get("direction") or ()}
+    from_web = [f for f in ch["unmatched"] if f not in turned and one(f, web_text)]
+    asked = [f for f in ch["unmatched"] if f not in turned and f not in from_web and one(f, question)]
+    ch["unmatched"] = [f for f in ch["unmatched"] if f not in from_web and f not in asked]
+    return {**ch, "web": from_web, "asked": asked, "quotes": ai.check_quotes(text, "\n".join(list(data) + list(pages)))}
 
 
 def _revise(c, question, findings, draft, figures, quotes=(), direction=()):

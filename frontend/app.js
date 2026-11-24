@@ -121,7 +121,22 @@ document.addEventListener("load", (e) => { if (e.target.matches?.(".logo img")) 
 document.addEventListener("error", (e) => { if (e.target.matches?.(".logo img")) e.target.remove(); }, true);
 // A model's markdown as HTML with nothing that loads or runs: no images (an image's address could carry data out),
 // no styles, forms or embedded content; links open in a new tab
-const safeHtml = (md) => DOMPurify.sanitize(marked.parse(md || ""), { FORBID_TAGS: ["img", "svg", "math", "style", "form", "input", "button", "iframe", "video", "audio", "picture", "source"], FORBID_ATTR: ["style", "srcset"] });
+const safeHtml = (md, links) => {
+  const html = DOMPurify.sanitize(marked.parse(md || ""), { FORBID_TAGS: ["img", "svg", "math", "style", "form", "input", "button", "iframe", "video", "audio", "picture", "source"], FORBID_ATTR: ["style", "srcset"] });
+  if (!links) return html;
+  // Model text keeps only the links its sources gave it (and the app's own pages): a page it read could have told it to
+  // link an address carrying the investor's holdings out. Any other link stays as its words, not clickable.
+  const norm = (u) => String(u).trim().replace(/[.,;]+$/, "").replace(/\/$/, "");
+  const ok = new Set(links.map(norm));
+  const box = document.createElement("template"); box.innerHTML = html;
+  box.content.querySelectorAll("a").forEach((a) => {
+    const h = a.getAttribute("href") || "";
+    if (/^#research\/[\w.^=-]+$/.test(h)) return;
+    if (/^https?:\/\//i.test(h) && ok.has(norm(h))) { a.target = "_blank"; a.rel = "noopener noreferrer"; return; }
+    a.replaceWith(document.createTextNode(a.textContent));
+  });
+  return box.innerHTML;
+};
 const symLogo = (t, name) => `<span class="symwrap">${logoOf(t, name, "sm")}<span class="sym">${esc(t)}</span></span>`;
 const symCell = (v, r) => `<span class="symwrap">${logoOf(v, r.name)}<span><span class="sym">${esc(v)}</span>${oldMark(r)}<span class="sub">${esc(r.name || "")}</span></span></span>`;
 
@@ -725,13 +740,13 @@ async function loadPeers(t, request, tries = 0) {
 function renderStats(s) {
   const i = s.info, st = s.stats, cur = i.currency;
   const rows = [
-    ["Market cap", big(i.marketCap)], ["52w high", priceOf(st.high52, i)], ["52w low", priceOf(st.low52, i)], ["RSI (14)", num(st.rsi, 0)],
+    ["Market cap", isNum(i.marketCap) ? `${big(i.marketCap)} ${esc(MAIN_UNIT[i.currency] || i.currency || "")}`.trim() : "—"], ["52w high", priceOf(st.high52, i)], ["52w low", priceOf(st.low52, i)], ["RSI (14)", num(st.rsi, 0)],
     ["1M", cpct(st.ret1m)], ["3M", cpct(st.ret3m)], ["YTD", cpct(st.ytd)], ["1Y", cpct(st.ret1y)], ["5Y CAGR", cpct(st.ret5yCagr)],
     ["Volatility 1Y", pct(st.vol1y, 1, false)], ["Max DD 1Y", cpct(st.maxDD1y)], ["Sharpe 1Y", num(st.sharpe1y)],
     ["Beta (2Y vs bench)", num(st.betaCalc)], ["P/E", num(i.trailingPE, 1)], ["Fwd P/E", num(i.forwardPE, 1) + (i.forwardNote ? ` ${infoIcon(i.forwardNote)}` : "")], ["P/B", num(i.priceToBook, 1)],
     ["EV/EBITDA", num(i.enterpriseToEbitda, 1)], ["PEG", num(i.pegRatio)], ["ROE", pct(i.returnOnEquity, 1, false)],
     ["Op. margin", pct(i.operatingMargins, 1, false)], ["Net margin", pct(i.profitMargins, 1, false)], ["Debt/Equity", isNum(i.debtToEquity) ? num(i.debtToEquity) + "x" : "—"],
-    ["Rev. growth", cpct(i.revenueGrowth)], ["EPS growth", cpct(i.earningsGrowth)], ["Div. yield", pct(i.dividendYield, 2, false)],
+    ["Rev. growth", cpct(i.revenueGrowth)], ["EPS growth", cpct(i.earningsGrowth)], ["Div. yield", `${pct(i.dividendYield, 2, false)}${i.dividendNote ? infoIcon(i.dividendNote) : ""}`],
     ["Payout ratio", pct(i.payoutRatio, 0, false)], ["Analyst target", money(i.targetMeanPrice, cur)], ["Consensus", esc((i.recommendationKey || "—").replace("_", " "))],
     ...(i.assetClass === "Stocks" ? [["Next earnings", esc(s.events.earnings || "not announced")], ["Ex-dividend", esc(s.events.exDividend || "not announced")]] : []),
   ];
@@ -869,7 +884,7 @@ async function loadNews() {
 $("#btnBrief").onclick = async () => {
   const ticker = state.ticker;
   const b = $("#btnBrief"), out = $("#briefOut"); b.disabled = true; loading(out, state.meta?.ai ? "The AI is writing the brief…" : "Writing brief…");
-  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(safeHtml(r.text), r.check) + briefFooter(r); briefSections(out); }
+  try { const r = await api(`/api/stock/${encodeURIComponent(ticker)}/brief`, { method: "POST" }); if (ticker !== state.ticker) return; out.classList.remove("muted"); out.innerHTML = markFigures(safeHtml(r.text, r.sources || []), r.check) + briefFooter(r); briefSections(out); }
   catch (e) { out.textContent = e.message; } finally { b.disabled = false; }
 };
 // The brief's sections, each a heading with what follows it, so the two columns never part a heading from its text;
@@ -897,23 +912,33 @@ function briefFooter(r) {
   const how = worked ? ` ${worked === 1 ? "One is" : `${worked} are`} worked out from the others (underlined; hover to see how).` : "";
   const fixed = r.revised?.fixed ? ` The model corrected ${r.revised.fixed === 1 ? "one figure or quote" : `${r.revised.fixed} figures or quotes`} that weren't in the data.` : "";
   const quotes = c.quotes?.length ? ` ${c.quotes.length === 1 ? "A quotation isn't" : `${c.quotes.length} quotations aren't`} in the sources word for word (marked).` : "";
-  if (!c.unmatched.length && !quotes) return `<p class="brief-check ok">✓ All ${facts} figures match the data.${how}${fixed}${own} ${by}</p>`;
-  if (!c.unmatched.length) return `<p class="brief-check warn">All ${facts} figures match the data.${quotes}${how}${fixed}${own} ${by}</p>`;
+  // What the tick means, said plainly: each number appears in the data; the sentence around it isn't checked. Figures
+  // found only on a web page, or only in your own question, are named apart: neither is ClearYield's data.
+  const many = (n, one, more) => n === 1 ? one : more.replace("#", n);
+  const web = c.web?.length ? ` ${many(c.web.length, "One is", "# are")} only on a web page (dotted; the page may be about another company or date): ${c.web.map(esc).join(", ")}.` : "";
+  const asked = c.asked?.length ? ` ${many(c.asked.length, "One comes", "# come")} only from your question, so ${c.asked.length === 1 ? "it isn't" : "they aren't"} checked: ${c.asked.map(esc).join(", ")}.` : "";
+  const inData = facts - (c.web?.length || 0) - (c.asked?.length || 0);
+  const scope = " The wording around the figures isn't checked.";
+  const all = `${inData === facts ? `All ${facts}` : `${inData} of ${facts}`} figures appear in ClearYield's data.`;
+  if (!c.unmatched.length && !quotes) return `<p class="brief-check ${web || asked ? "warn" : "ok"}">${web || asked ? "" : "✓ "}${all}${web}${asked}${how}${fixed}${own}${scope} ${by}</p>`;
+  if (!c.unmatched.length) return `<p class="brief-check warn">${all}${web}${asked}${quotes}${how}${fixed}${own}${scope} ${by}</p>`;
   // A figure that's in the data but described going the wrong way ("rose 6.6%" when it fell) is told apart
   const turned = (c.direction || []).filter((d) => c.unmatched.includes(d.figure));
   const missing = c.unmatched.filter((f) => !turned.some((d) => d.figure === f));
   const wrongWay = turned.length ? ` ${turned.length === 1 ? "A figure goes" : `${turned.length} figures go`} the wrong way (marked): ${turned.map((d) => `<b>${esc(d.figure)}</b> is said to go ${d.says}, but the data has it ${d.data}`).join("; ")}.` : "";
   const notIn = missing.length ? `${missing.length} of ${facts} figures aren't in the data and can't be worked out from it (marked): <b>${missing.map(esc).join(", ")}</b>.` : "";
-  return `<p class="brief-check warn">${notIn}${wrongWay} Check ${c.unmatched.length === 1 ? "it" : "them"} before relying on ${c.unmatched.length === 1 ? "it" : "them"}.${quotes}${how}${fixed}${own} ${by}</p>`;
+  return `<p class="brief-check warn">${notIn}${wrongWay} Check ${c.unmatched.length === 1 ? "it" : "them"} before relying on ${c.unmatched.length === 1 ? "it" : "them"}.${web}${asked}${quotes}${how}${fixed}${own}${scope} ${by}</p>`;
 }
 // Marks figures inside rendered text: unsupported ones highlighted, worked-out ones underlined with how. A figure is
 // matched however the model wrote its separators (a narrow space or a comma between thousands, a typographic minus).
 function markFigures(html, c) {
-  if (!c || (!c.unmatched?.length && !c.derived?.length && !c.quotes?.length)) return html;
+  if (!c || (!c.unmatched?.length && !c.derived?.length && !c.quotes?.length && !c.web?.length && !c.asked?.length)) return html;
   const pattern = (f) => f.split("").map((ch) => /[,   ]/.test(ch) ? "[,\\u202f\\u00a0\\u2009]" : /[-−‑–]/.test(ch) ? "[-\\u2212\\u2011\\u2013]" : /\s/.test(ch) ? "\\s*" : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
   const marks = [...(c.unmatched || []).map((f) => ({ f, cls: "fig-bad", title: "Not in the data, and can't be worked out from it" })),
                  ...(c.quotes || []).map((f) => ({ f, cls: "fig-bad", title: "Not in the sources word for word" })),
-                 ...(c.derived || []).map((d) => ({ f: d.figure, cls: "fig-worked", title: `Worked out: ${d.how}` }))]
+                 ...(c.derived || []).map((d) => ({ f: d.figure, cls: "fig-worked", title: `Worked out: ${d.how}` })),
+                 ...(c.web || []).map((f) => ({ f, cls: "fig-web", title: "Only on a web page, not in ClearYield's data: check the page" })),
+                 ...(c.asked || []).map((f) => ({ f, cls: "fig-web", title: "From your question: not checked" }))]
     .filter((m) => m.f).sort((a, b) => b.f.length - a.f.length);
   if (!marks.length) return html;
   // Not inside a longer number: "40" mustn't light up in "1,400" or "40.5"
@@ -1217,7 +1242,7 @@ state.askThread = [];
 function askCard(q, r) {
   const card = document.createElement("div"); card.className = "card ask-answer";
   const secs = r.seconds != null ? `, ${r.seconds} s` : "";
-  card.innerHTML = `<div class="ask-q">${r.followed ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><div class="brief">${markFigures(safeHtml(r.answer), r.check)}</div>
+  card.innerHTML = `<div class="ask-q">${r.followed ? '<span class="pill">Follow-up</span> ' : ""}${esc(q)}</div><div class="brief">${markFigures(safeHtml(r.answer, r.sources || []), r.check)}</div>
     <details class="ask-steps"><summary>How it was worked out: ${r.steps.length} look-up${r.steps.length === 1 ? "" : "s"}, ${r.calls} model call${r.calls === 1 ? "" : "s"}${secs}</summary><ol>${r.steps.map(askStepLi).join("") || "<li>Answered without looking anything up.</li>"}</ol></details>
     ${briefFooter({ ...r, check: { ...r.check, suggested: [] } })}`;
   linkTickers($(".brief", card), r.steps);
@@ -2559,7 +2584,14 @@ function loadSettings() {
   $("#sEmail").value = s.alert_email || ""; $("#sEmailOn").checked = !!s.email_alerts;
   emailSwitched(); renderEmailStatus(); markUnsaved();
   const ab = state.meta.autoBackup;
-  $("#autoBackupNote").textContent = ab ? `Backed up automatically every week to ${ab.folder.split(/[\\/]/).slice(-2).join("\\")}, the last ${ab.keep} kept${ab.last ? ` · latest ${ab.last}` : ""}.` : "";
+  $("#autoBackupNote").textContent = ab ? `Backed up automatically every day to ${ab.folder.split(/[\\/]/).slice(-2).join("\\")}, the last ${ab.keep} kept${ab.last ? ` · latest ${ab.last}` : ""}. A restore saves what it replaces there first.` : "";
+  $("#sBackupCopy").value = s.backup_copy_dir || "";
+  // Same disk only, until a second folder is set: a failed or stolen disk would take the backups with it
+  const cn = $("#backupCopyNote");
+  cn.className = `sm ${ab?.copyError ? "down" : ab?.copyFolder ? "up" : "muted"}`;
+  cn.textContent = !ab ? "" : ab.copyError ? `The copy failed: ${ab.copyError}. Check the folder exists and can be written to.`
+    : ab.copyFolder ? `Copied there too${ab.copyLast ? ` · latest ${ab.copyLast}` : ""}, with the frozen score research.`
+    : "Only on this disk for now: set a second folder so a failed disk doesn't take the backups with it.";
   const st = state.meta.startup;
   $("#startupOpt").classList.toggle("hidden", !st?.supported); $("#sStartup").checked = !!st?.enabled;
 }
@@ -2580,14 +2612,14 @@ function settingsShown() {
     w: $$("[data-w]").map((r) => Number(r.value)), tg: $$("[data-tgt]").map((i) => num(i.value)), core: num($("#sCore").value),
     regions: set($$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region)),
     tiles: set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile)),
-    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value };
+    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value, copyDir: $("#sBackupCopy").value.trim() };
 }
 function settingsSaved() {
   const s = state.meta.settings, num = (v) => Math.round(Number(v) * 1e6) / 1e6;
   return { base: s.base_currency, rf: num((s.risk_free_rate * 100).toFixed(2)), bench: s.benchmark,
     w: Object.values(s.weights).map((v) => Math.round(v * 100)), tg: Object.values(s.targets).map(num), core: num(s.core_target),
     regions: [...(s.regions || state.meta.regions)].sort(), tiles: [...s.dashboard_tiles].sort(),
-    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "" };
+    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "", copyDir: s.backup_copy_dir || "" };
 }
 function markUnsaved() {
   const dirty = JSON.stringify(settingsShown()) !== JSON.stringify(settingsSaved()), msg = $("#settingsMsg");
@@ -2775,7 +2807,8 @@ $("#btnSaveSettings").onclick = async () => {
     dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile),
     core_target: Number($("#sCore").value), regions: $$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region) };
   if (!body.regions.length) return toast("Follow at least one region.");
-  Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked });
+  Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked, backup_copy_dir: $("#sBackupCopy").value.trim() });
+  const copyBefore = state.meta.settings.backup_copy_dir || "";
   // Saved only once chosen, so "not chosen" stays visible to the first-run checklist
   if ($("#sTaxRes").value || state.meta.settings.tax_residence) body.tax_residence = $("#sTaxRes").value;
   if (body.email_alerts && !body.alert_email) return toast("Enter the email address to send alerts to.");
@@ -2784,6 +2817,8 @@ $("#btnSaveSettings").onclick = async () => {
   state.meta.settings = await api("/api/settings", { method: "POST", body });
   if (state.meta.settings.regions.join() !== regionsBefore) {  // other regions: other markets and countries to offer
     state.meta = await api("/api/meta"); renderMarketChoices(); state.opp = null; cmpBaseLabel();
+  } else if ((state.meta.settings.backup_copy_dir || "") !== copyBefore) {
+    state.meta = await api("/api/meta");  // whether the copy to the new folder worked
   }
   $("#settingsMsg").textContent = "Saved"; renderModeBadge(); loadSettings(); toast("Settings saved");
 };
@@ -2797,7 +2832,7 @@ $("#restoreFile").onchange = async (e) => {
   try { backup = JSON.parse(await file.text()); } catch { return toast("That file isn't a ClearYield backup."); }
   const n = (k) => (Array.isArray(backup[k]) ? backup[k].length : 0);
   if (!confirm(`Replace everything in the app with this backup? It has ${n("transactions") + n("holdings")} transactions, ${n("journal")} journal entries, ${n("alerts")} alerts and ${n("watchlist")} watchlist items.`)) return;
-  try { await api("/api/backup/restore", { method: "POST", body: backup }); toast("Backup restored"); setTimeout(() => location.reload(), 600); }
+  try { const r = await api("/api/backup/restore", { method: "POST", body: backup }); toast("Backup restored"); try { sessionStorage.setItem("restoredNote", `Backup restored. What was here before is saved in the backups folder as ${r.before}.`); } catch {} setTimeout(() => location.reload(), 600); }
   catch (err) { toast(err.message); }
 };
 
@@ -2893,3 +2928,5 @@ function renderMarketChoices() {
   window.addEventListener("hashchange", route);
   route();
 })();
+// After a restore the page reloads: say where what it replaced was saved
+try { const n = sessionStorage.getItem("restoredNote"); if (n) { sessionStorage.removeItem("restoredNote"); setTimeout(() => toast(n), 800); } } catch {}

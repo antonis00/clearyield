@@ -1132,9 +1132,15 @@ def settings_set(body: dict = Body(...)):
             raise HTTPException(400, "The core target is a percentage from 0 to 100.")
         body["core_target"] = v
     try:
-        return ok(db.set_settings(body))
+        before = db.get_settings().get("backup_copy_dir")
+        saved = db.set_settings(body)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if saved.get("backup_copy_dir") and saved["backup_copy_dir"] != before:
+        # A new second folder gets today's backup at once, so the Data card can say whether it works
+        latest = db.auto_backups()
+        db.copy_backup(latest[0]) if latest else db.auto_backup(force=True)
+    return ok(saved)
 
 
 # ---------------------------------------------------------------- start with Windows
@@ -1173,11 +1179,14 @@ def backup():
 @app.post("/api/backup/restore")
 def backup_restore(body: dict = Body(...)):
     try:
-        ledger.replay(db.read_backup(body)["transactions"])  # LedgerError is a ValueError
-        db.restore_user_data(body)
+        # Under the ledger's write lock, so a transaction or an order's fill can't land halfway through
+        with ledger._WRITE:
+            ledger.replay(db.read_backup(body)["transactions"])  # LedgerError is a ValueError
+            saved = db.before_restore()  # what was here, kept so a wrong file can be undone
+            db.restore_user_data(body)
     except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e))
-    return ok({"ok": True})
+    return ok({"ok": True, "before": saved.name, "folder": str(saved.parent)})
 
 
 @app.post("/api/cache/clear")

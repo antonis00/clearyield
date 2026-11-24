@@ -755,6 +755,24 @@ const SLOW = 150000;
       { unmatched: ["40", "€35,816.51"], derived: [{ figure: "94.4%", how: "100% − 5.6%" }] });
     return { bad: [...box.querySelectorAll("mark.fig-bad")].map((m) => m.textContent), worked: [...box.querySelectorAll("mark.fig-worked")].map((m) => `${m.textContent}|${m.title}`) };
   });
+  // An answer keeps only the links its sources gave it (a page it read could ask for a link carrying your holdings out);
+  // the check says what the tick proves, and names figures from a web page or from your question apart
+  const guard_ = await p.evaluate(() => {
+    const box = document.createElement("div");
+    box.innerHTML = safeHtml("See [Reuters](https://reuters.com/a), [this](https://evil.example/?d=VWCE%2041200) and [AAPL](#research/AAPL).", ["https://reuters.com/a"]);
+    const links = [...box.querySelectorAll("a")].map((a) => `${a.getAttribute("href")}|${a.target}|${a.rel}`);
+    const foot = document.createElement("div");
+    foot.innerHTML = briefFooter({ by: "test", check: { checked: 4, unmatched: [], derived: [], quotes: [], web: ["12.4%"], asked: ["3.7%"] } });
+    const ok = document.createElement("div");
+    ok.innerHTML = briefFooter({ by: "test", check: { checked: 3, unmatched: [], derived: [], quotes: [] } });
+    const marks = document.createElement("div");
+    marks.innerHTML = markFigures("<p>Revenue grew 12.4% and your 3.7% target.</p>", { unmatched: [], derived: [], web: ["12.4%"], asked: ["3.7%"] });
+    return { links, text: box.textContent, foot: foot.textContent, ok: ok.textContent, marks: [...marks.querySelectorAll("mark.fig-web")].map((m) => m.title) };
+  });
+  expect("ask: answers keep only their sources' links; the check says what it proves and names web and question figures apart",
+    guard_.links.length === 2 && guard_.links[0] === "https://reuters.com/a|_blank|noopener noreferrer" && guard_.links[1].startsWith("#research/AAPL")
+    && /this/.test(guard_.text) && /2 of 4 figures appear in ClearYield's data/.test(guard_.foot) && /only on a web page/.test(guard_.foot) && /only from your question/.test(guard_.foot)
+    && /^✓ All 3 figures appear in ClearYield's data\. The wording around the figures isn't checked\./.test(guard_.ok) && guard_.marks.length === 2, JSON.stringify(guard_));
   // A quotation the sources don't have word for word is marked too
   const quoted_ = await p.evaluate(() => { const box = document.createElement("div");
     box.innerHTML = markFigures("<p>Zacks wrote “Novo shares jumped on strong sales” today.</p>", { unmatched: [], derived: [], quotes: ["Novo shares jumped on strong sales"] });
@@ -1021,7 +1039,8 @@ const SLOW = 150000;
   expect("settings: start with Windows turns on at once", stOn && /sign in to Windows/.test(await txt("#toast")) && /No unsaved|Saved/.test(await txt("#settingsMsg")), await txt("#toast"));
   await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/startup"), { timeout: SLOW }), p.click("#startupOpt .switch")]); await p.waitForTimeout(200);
   expect("settings: and off again", !(await p.evaluate(async () => (await (await fetch("/api/startup")).json()).enabled)) && !(await p.isChecked("#sStartup")));
-  expect("settings: automatic weekly backups, with the latest", /Backed up automatically every week to \S+\\backups, the last 8 kept · latest \d{4}-\d\d-\d\d/.test(await txt("#autoBackupNote")), await txt("#autoBackupNote"));
+  expect("settings: automatic daily backups, with the latest, and a second folder offered", /Backed up automatically every day to \S+\\backups, the last 14 kept · latest \d{4}-\d\d-\d\d\. A restore saves what it replaces/.test(await txt("#autoBackupNote"))
+    && /Only on this disk for now/.test(await txt("#backupCopyNote")) && (await p.locator("#sBackupCopy").isVisible()), `${await txt("#autoBackupNote")} | ${await txt("#backupCopyNote")}`);
   // The save card says when something is unsaved, and Discard puts the saved values back
   const saveMsg = () => txt("#settingsMsg");
   const asiaWas = await p.isChecked('#sRegions [data-region="Asia-Pacific"]');

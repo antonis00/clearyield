@@ -78,6 +78,7 @@ DEFAULT_SETTINGS = {
     "regions": list(REGIONS),  # the regions you follow: only their stocks are downloaded, screened and ranked against
     "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
     "email_alerts": False,
+    "backup_copy_dir": "",  # a second folder for the automatic backups (OneDrive, another drive): a disk failure loses neither
     "fund_costs": {},  # {ticker: yearly cost as a fraction}, entered from a fund's factsheet; stands over Yahoo's figure
     # What you invest each month and the goal it's for (plan.py): the goal in today's money by a date, with the yearly
     # return and inflation the check assumes
@@ -283,11 +284,16 @@ def export_user_data():
 
 
 # ---- automatic backups ----
-# The same file "Download backup" gives, written once a week beside the database, the last AUTO_KEEP kept: years of
-# entries shouldn't hang on one file and on remembering to download a copy. Restore any of them with "Restore from file".
-AUTO_EVERY_DAYS = 7
-AUTO_KEEP = 8
+# The same file "Download backup" gives, written once a day beside the database, the last AUTO_KEEP kept, and copied to
+# a second folder when one is set (backup_copy_dir): years of entries shouldn't hang on one disk and on remembering to
+# download a copy. Restore any of them with "Restore from file". Your records are a few KB, so a daily copy costs nothing.
+AUTO_EVERY_DAYS = 1
+AUTO_KEEP = 14
 AUTO_PREFIX = "clearyield-auto-"
+# Before a restore replaces everything, what was there is saved first, so a wrong file can be undone
+BEFORE_RESTORE_PREFIX = "clearyield-before-restore-"
+BEFORE_RESTORE_KEEP = 5
+COPY_STATUS = {"error": None, "last": None}
 
 
 def backup_dir():
@@ -316,13 +322,55 @@ def auto_backup(now=None, force=False):
     os.utime(path, (now, now))
     for old in auto_backups()[AUTO_KEEP:]:
         old.unlink(missing_ok=True)
+    copy_backup(path)
+    return path
+
+
+def copy_backup(path):
+    """The backup, and the frozen score research (which can never be redrawn), copied to the second folder when one is
+    set, keeping the newest AUTO_KEEP there too. A failure is recorded for the Data card and never stops the app."""
+    import shutil
+    folder = get_settings().get("backup_copy_dir") or ""
+    if not folder:
+        COPY_STATUS.update(error=None)
+        return None
+    try:
+        d = Path(folder)
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, d / path.name)
+        research = DB_PATH.parent / "research"
+        if research.exists():
+            for f in research.glob("*.json"):
+                (d / "research").mkdir(exist_ok=True)
+                shutil.copy2(f, d / "research" / f.name)
+        for old in sorted(d.glob(f"{AUTO_PREFIX}*.json"), key=lambda p: p.name, reverse=True)[AUTO_KEEP:]:
+            old.unlink(missing_ok=True)
+        COPY_STATUS.update(error=None, last=time.strftime("%Y-%m-%d"))
+        return d / path.name
+    except OSError as e:
+        COPY_STATUS.update(error=f"{type(e).__name__}: {e.strerror or e}")
+        log.warning("backup copy to %s failed: %s", folder, e)
+        return None
+
+
+def before_restore():
+    """What's in the app now, saved before a restore replaces it. Returns the file."""
+    d = backup_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{BEFORE_RESTORE_PREFIX}{time.strftime('%Y-%m-%d-%H%M%S')}.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(export_user_data()), encoding="utf-8")
+    os.replace(tmp, path)
+    for old in sorted(d.glob(f"{BEFORE_RESTORE_PREFIX}*.json"), key=lambda p: p.name, reverse=True)[BEFORE_RESTORE_KEEP:]:
+        old.unlink(missing_ok=True)
     return path
 
 
 def auto_backup_status():
     have = auto_backups()
     return {"last": time.strftime("%Y-%m-%d", time.localtime(have[0].stat().st_mtime)) if have else None, "count": len(have),
-            "folder": str(backup_dir()), "everyDays": AUTO_EVERY_DAYS, "keep": AUTO_KEEP}
+            "folder": str(backup_dir()), "everyDays": AUTO_EVERY_DAYS, "keep": AUTO_KEEP,
+            "copyFolder": get_settings().get("backup_copy_dir") or "", "copyError": COPY_STATUS["error"], "copyLast": COPY_STATUS["last"]}
 
 
 def read_backup(backup):
@@ -474,6 +522,7 @@ SETTING_CHECKS = {
     "regions": _regions,
     "alert_email": _email,
     "email_alerts": _switch("Email alerts"),
+    "backup_copy_dir": lambda v: _folder(v),
     "fund_costs": _fund_costs,
     "plan": lambda v: {**DEFAULT_SETTINGS["plan"], **__import__("backend.plan", fromlist=["check"]).check(v)},
     "setup_dismissed": _switch("Hiding the checklist"),
@@ -481,6 +530,16 @@ SETTING_CHECKS = {
     "tax_options": lambda v: __import__("backend.taxlaw", fromlist=["check_options"]).check_options(v),
     "fund_tax": lambda v: __import__("backend.taxlaw", fromlist=["check_fund_tax"]).check_fund_tax(v),
 }
+
+
+def _folder(v):
+    """A second folder for backups: empty, or a full path on this computer (C:\\..., D:\\..., \\\\server\\share)."""
+    v = ("" if v is None else str(v)).strip().strip('"')
+    if not v:
+        return ""
+    if len(v) > 260 or not re.match(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|/)", v) or any(c in v for c in '<>|?*"'):
+        raise ValueError("The backup copy folder must be a full path, such as D:\\Backups\\ClearYield or your OneDrive folder.")
+    return v
 
 
 def check_settings(values):

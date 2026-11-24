@@ -305,6 +305,7 @@ def is_bank(info):
 def brief_data(ctx):
     """The facts given to the model, grouped and labelled, each with its unit. Missing figures are left out rather
     than sent as null, so the model has nothing to guess about."""
+    from .data import main_unit
     i, st, sc = ctx["info"], ctx["stats"], ctx["scores"]
     cur, fin_cur = i.get("currency") or "", i.get("financialCurrency") or i.get("currency") or ""
     price = ctx.get("price")
@@ -316,7 +317,8 @@ def brief_data(ctx):
     groups = {
         "Company": {"Name": i.get("name"), "Symbol": ctx["ticker"], "Asset class": i.get("assetClass"), "Sector": i.get("sector"),
                     "Industry": i.get("industry"), "Region": i.get("region"), "Quote currency": cur,
-                    "Market capitalisation": _f_money(i.get("marketCap"), cur)},
+                    # Yahoo gives it in the main unit (pounds, dinars) even for a stock quoted in pence or fils
+                    "Market capitalisation": _f_money(i.get("marketCap"), main_unit(cur))},
         "Price": {"Last price": _f_money(price, cur) if price is not None else None,
                   "Analysts' mean target price": _f_money(target, cur),
                   "Target vs last price": _f_pct(target / price - 1) if target and price else None,
@@ -335,7 +337,8 @@ def brief_data(ctx):
         "Growth": {"Revenue growth a year, over 3 years": _f_pct(i.get("revenueGrowth3y")), "Net income growth a year, over 3 years": _f_pct(i.get("earningsGrowth3y")),
                    "Revenue growth, latest quarter vs a year before": _f_pct(i.get("revenueGrowth")),
                    "Earnings growth, latest quarter vs a year before": _f_pct(i.get("earningsGrowth"))},
-        "Dividend": {"Dividend yield": _f_pct(i.get("dividendYield"), 2), "Payout ratio": _f_pct(i.get("payoutRatio"))},
+        "Dividend": {"Dividend yield, paid over the past year": _f_pct(i.get("dividendYield"), 2), "Payout ratio": _f_pct(i.get("payoutRatio")),
+                     "Note on the dividend": i.get("dividendNote")},
         "Price performance and risk": {"Return, 1 month": _f_pct(st.get("ret1m")), "Return, 3 months": _f_pct(st.get("ret3m")),
                                        "Return, year to date": _f_pct(st.get("ytd")), "Return, 1 year": _f_pct(st.get("ret1y")),
                                        "Annual growth rate, 5 years": _f_pct(st.get("ret5yCagr")), "Volatility, 1 year (annualised)": _f_pct(st.get("vol1y")),
@@ -592,7 +595,9 @@ def brief(ctx):
     c = config()
     try:
         text = complete(prompt)
-        return {"source": "ai", "text": text, "by": f"{c['model']} via {c['server']}", "check": {**check_brief(text, facts), "quotes": check_quotes(text, facts)}}
+        links = sorted({u.rstrip(".,;") for u in re.findall(r"""https?://[^\s"'<>\\]]+""", facts)})  # the only links the brief may keep
+        return {"source": "ai", "text": text, "by": f"{c['model']} via {c['server']}", "check": {**check_brief(text, facts), "quotes": check_quotes(text, facts)},
+                "sources": links}
     except httpx.TimeoutException:
         return {"source": "rules", "text": rule_brief(ctx) + f"\n\n_(The AI model didn't answer within {c['timeout']:g} seconds.)_"}
     except Exception as e:

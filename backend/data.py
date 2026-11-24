@@ -179,7 +179,41 @@ def _with_recent_sessions(ticker, df, today=None):
     filled = sessions_from_intraday(intra, df, today)
     if len(filled) > len(df):
         log.info("%s: %d recent day(s) filled in from intraday prices", ticker, len(filled) - len(df))
+        filled = _official_close(ticker, filled, df, intra, today)
     return filled
+
+
+def _official_close(ticker, filled, daily, intra, today=None):
+    """The last 15-minute candle misses the closing auction (ASML.AS: 1,277.00 from the candles, 1,272.20 official),
+    so the latest session built from candles takes Yahoo's own figure: the previous close once today's session has
+    started, the last price before it has (and for today's, the price so far). Only a figure within CLOSE_FIT of the
+    candles' is used, so a quote from another day can't replace it."""
+    today = today or dt.date.today()
+    built = [d for d in filled.index if d not in daily.index]
+    if not built:
+        return filled
+    day = max(built)
+    if any(d > day for d in daily.index if d.date() < today):
+        return filled  # a later session is already in the daily series: Yahoo's previous close isn't this day's
+    try:
+        fi = _yf().Ticker(ticker).fast_info
+        last, prev = fi.get("lastPrice") or fi.get("last_price"), fi.get("previousClose") or fi.get("previous_close")
+    except Exception as e:  # the candles' close stands
+        log.info("%s: no official close (%s)", ticker, e)
+        return filled
+    started = any(d == today for d in intra.index.date)
+    official = last if day.date() == today or not started else prev if day.date() < today else None
+    close = filled.at[day, "Close"]
+    if not official or not close or abs(official / close - 1) > CLOSE_FIT:
+        return filled
+    filled = filled.copy()
+    filled.at[day, "Close"] = float(official)
+    filled.at[day, "High"] = max(filled.at[day, "High"], float(official))
+    filled.at[day, "Low"] = min(filled.at[day, "Low"], float(official))
+    return filled
+
+
+CLOSE_FIT = 0.05
 
 
 def _fetch_history(ticker, period):
@@ -333,7 +367,7 @@ def info(ticker):
 
 
 def _info(ticker):
-    key = f"info:v12:{ticker}"  # bump when the stored fields change, so old entries are refetched
+    key = f"info:v13:{ticker}"  # bump when the stored fields change, so old entries are refetched
     cached = db.cache_get(key, TTL["info"])
     if cached is not None:
         return cached
@@ -354,6 +388,7 @@ def _info(ticker):
             return db.cache_get_stale(key) or _normalize_info(ticker, {k: None for k in INFO_KEYS})
         out = {k: raw.get(k) for k in INFO_KEYS}
         out = _normalize_info(ticker, out)
+        paid_yield(ticker, out)
         if out["statementFx"] is None:
             return out  # retry next time rather than keeping the gap for hours
     db.cache_set(key, out)
@@ -745,6 +780,36 @@ def splits(ticker):
         return [tuple(x) for x in stale]
     db.cache_set(key, out)
     return out
+
+
+YIELD_GAP = 0.25  # paid over the year and Yahoo's figure further apart than this (relative) are both shown
+
+
+def paid_yield(ticker, d):
+    """The dividend yield as what was actually paid over the past year over today's price, both in the quote unit.
+    Yahoo's figure annualises the latest payment, which understates a company paying unevenly (NBK.KW: 4.0% against
+    6.7% paid, two half-year payments; HSBA.L 2.5% against 4.4%), and its own trailing fields are in the wrong unit for
+    pence and fils. Yahoo's stays as dividendYieldYahoo; where Yahoo lists no payments, or none this year while it
+    still gives a yield (a new payer), its figure is kept and says so."""
+    yahoo = d.get("dividendYield")
+    d["dividendYieldYahoo"] = yahoo
+    d.pop("dividendNote", None)
+    if ticker.endswith(("-USD", "=X")) or ticker.startswith("^"):
+        return d
+    price = d.get("currentPrice") or d.get("regularMarketPrice")
+    paid = dividends_past_year(ticker)
+    if paid is None or not price or price <= 0:
+        return d
+    if paid == 0:
+        if yahoo:
+            d["dividendNote"] = f"No dividend paid in the past year; Yahoo's {yahoo * 100:.2f}% is its latest payment annualised."
+        return d
+    mine = paid / price
+    d["dividendYield"] = mine
+    if yahoo and abs(mine / yahoo - 1) > YIELD_GAP:
+        d["dividendNote"] = (f"Paid over the past year: {mine * 100:.2f}% of today's price. Yahoo's {yahoo * 100:.2f}% annualises only the "
+                             "latest payment, so they differ for a company paying unevenly or after a special dividend.")
+    return d
 
 
 def dividends_past_year(ticker):
