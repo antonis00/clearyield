@@ -557,6 +557,8 @@ function rsChips(list) {
 }
 async function renderResearchStart() {
   $("#researchStart").classList.remove("hidden"); $("#researchBody").classList.add("hidden"); $("#researchEmpty").classList.add("hidden");
+  // Ready to type: the search box at the top takes the cursor (and shows its outline)
+  requestAnimationFrame(() => $("#globalSearch").focus({ preventScroll: true }));
   const box = $("#rsGroups");
   const group = (key, title, list, note) => list.length ? `<section class="rs-group" data-g="${key}"><h4>${esc(title)}${note ? ` <span class="muted">${esc(note)}</span>` : ""}</h4><div class="rs-chips">${rsChips(list)}</div></section>` : "";
   const groups = { recent: group("recent", "Recently viewed", recentStocks()) };
