@@ -63,6 +63,12 @@ def summary(settings, today=None, with_orders=True):
     net, trades = _month_flows(db.q("SELECT * FROM transactions"), base, today)
     left = max(0.0, monthly - net)
     out["thisMonth"] = {"invested": net, "trades": trades, "left": left, "orders": [], "notes": [], "empty": []}
+    # The cash at your broker, when you record deposits: the Invest card offers it as the amount to invest
+    from . import cash
+    try:
+        out["cash"] = cash.balance(base)
+    except data.DataError:
+        out["cash"] = None
     if with_orders and left > 0 and s.get("positions"):
         try:
             d = orders.plan(settings, new_money=left, fractional=True)

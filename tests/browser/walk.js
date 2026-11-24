@@ -19,7 +19,16 @@ const SLOW = 150000;
   p.on("response", (r) => { const u = r.url(); if (u.startsWith(BASE) && r.status() >= 400 && !u.endsWith("favicon.ico") && !expected404.test(u) && !(refusalExpected && refusalExpected.test(u))) http.push(`${r.status()} ${u.replace(BASE, "/")}`); });
   let dialogAnswer = null;
   p.on("dialog", (d) => (d.type() === "prompt" ? d.accept(dialogAnswer ?? "") : d.accept()));
-  const nav = async (v) => { await p.click(`[data-view="${v}"]`); await p.waitForTimeout(350); };
+  // A screen in the menu is clicked there; one inside a place (Compare, Opportunities, Simulate, Score check) through
+// its place and then the sub-tab, as a person would
+const NAV_GROUP = { backtest: "portfolio", compare: "research", opportunities: "screener", scorecheck: "screener" };
+const nav = async (v) => {
+  if (NAV_GROUP[v]) { await p.click(`#nav [data-view="${NAV_GROUP[v]}"]`); await p.waitForTimeout(250); await p.click(`#subnav [data-route="${v}"]`); }
+  else await p.click(`#nav [data-view="${v}"]`);
+  await p.waitForTimeout(350);
+};
+// Portfolio's tabs: each card lives on one
+const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"]`); await p.waitForTimeout(300); };
   // Saving settings waits for the save itself, not a fixed time: the server may still be loading what the last page asked for
   const saveSettings = async () => {
     await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/settings") && r.request().method() === "POST", { timeout: SLOW }), p.click("#btnSaveSettings")]);
@@ -54,7 +63,7 @@ const SLOW = 150000;
   await p.click('[data-setup-go="trade"]'); await p.waitForTimeout(900);
   await p.waitForTimeout(1500);
   const stepLanded = await p.evaluate(() => ({ hash: location.hash, top: document.querySelector("#recordCard").getBoundingClientRect().top, h: innerHeight }));
-  expect("dashboard: a checklist step opens where it's done", stepLanded.hash === "#portfolio" && stepLanded.top >= 0 && stepLanded.top < stepLanded.h, JSON.stringify(stepLanded));
+  expect("dashboard: a checklist step opens where it's done", stepLanded.hash === "#portfolio/records" && stepLanded.top >= 0 && stepLanded.top < stepLanded.h, JSON.stringify(stepLanded));
   await p.goto(`${BASE}#dashboard`, { waitUntil: "load" }); await p.reload();
   await p.waitForFunction(() => !document.querySelector("#setupCard").classList.contains("hidden") && document.querySelector("#setupSteps li"), null, { timeout: SLOW });
   await p.click("#setupHide");
@@ -381,6 +390,12 @@ const SLOW = 150000;
 
   // ---- Portfolio
   await nav("portfolio");
+  // Six places and Ask in the menu; Portfolio's screens as sub-tabs, Overview first
+  const places = await p.evaluate(() => ({ nav: [...document.querySelectorAll("#nav a")].map((a) => a.dataset.group).join(","),
+    sub: [...document.querySelectorAll("#subnav a")].map((a) => a.textContent).join(","), on: document.querySelector("#subnav a.on")?.dataset.route, hash: location.hash }));
+  expect("menu: six places and Ask; Portfolio's screens are sub-tabs, Overview first", places.nav === "dashboard,portfolio,research,discover,journal,settings,ask"
+    && places.sub === "Overview,Invest,Performance,Records & tax,Simulate" && places.on === "portfolio/overview" && places.hash === "#portfolio/overview", JSON.stringify(places));
+  await pfTab("records");
   for (const [t, s, c, d] of [["AZN.L", 10, 11000, "2024-06-03"], ["QNBK.QA", 500, 15, "2024-06-03"], ["SPY", 5, 500, ""], ["BTC-USD", 0.02, 60000, "2025-01-02"]]) {
     await p.fill("#hTicker", t); await p.fill("#hShares", String(s)); await p.fill("#hCost", String(c)); await p.fill("#hDate", d); await p.click("#btnAddHolding"); await p.waitForTimeout(2500);
   }
@@ -391,11 +406,20 @@ const SLOW = 150000;
   expect("portfolio: 5 positions, all priced", pf.positions.length === 5 && !pf.incomplete, `total ${Math.round(pf.total)} ${pf.base}, P&L ${Math.round(pf.pnl)}`);
   expect("portfolio: positions add up to the total", Math.abs(sum - pf.total) < 1e-6);
   for (const k of ["assetClass", "region", "sector", "currency", "currencyLookThrough", "bucket"]) expect(`portfolio: ${k} allocation adds up`, Math.abs(Object.values(pf.allocation[k]).reduce((a, b) => a + b, 0) - pf.total) < 1e-6);
+  await pfTab("overview");
   expect("portfolio: SPY's currencies opened up, with the trading-currency view beside it", pf.allocation.currencyOpened.includes("SPY") && /SPY counted by the currencies/.test(await txt("#aCurNote")), await txt("#aCurNote"));
   expect("portfolio: risk figures present", pf.risk.volatility != null && pf.risk.sharpe != null && pf.risk.beta != null && pf.performance.dates.length > 200, `vol ${pf.risk.volatility?.toFixed(3)} beta ${pf.risk.beta?.toFixed(2)}, ${pf.performance.dates.length} days`);
   expect("portfolio: undated lot warned about", pf.base === "USD" ? true : pf.warnings.some((w) => w.includes("SPY") && w.includes("exchange rate")), pf.warnings.find((w) => w.includes("exchange rate")) ?? "(USD base)");
   expect("portfolio: rebalancing shown", (await p.locator("#pfRebal tbody tr").count()) >= 3);
-  for (const id of ["#pfPerf", "#aAsset", "#aRegion", "#aSector", "#aCur"]) expect(`portfolio: chart ${id}`, await canvasDrawn(id));
+  for (const id of ["#aAsset", "#aRegion", "#aSector", "#aCur"]) expect(`portfolio: chart ${id}`, await canvasDrawn(id));
+  // One headline: your return with timing, and the same money in the benchmark; the other measures explained under Performance
+  const heads = await p.evaluate(() => [...document.querySelectorAll("#pfKpis .kpi .l")].map((l) => l.textContent.trim()));
+  expect("portfolio: the headline is your return and the same money in the benchmark, in even rows", heads.includes("Your return") && heads.some((h) => /^vs /.test(h)) && heads.length % 4 === 0
+    && !heads.includes("Realised P&L") && !heads.includes("Annual return"), heads.join(" | "));
+  await pfTab("performance");
+  expect("portfolio: chart #pfPerf", await canvasDrawn("#pfPerf"));
+  const how = await p.evaluate(() => ({ open: document.querySelector("#pfHow details")?.open, text: document.querySelector("#pfHow").innerText }));
+  expect("portfolio: how returns are measured, under Risk, each measure for what it answers", how.open && /money-weighted/.test(how.text) && /Time-weighted/.test(how.text) && /Same money in SPY/.test(how.text), how.text.slice(0, 160));
   // Core and satellite: SPY is core by default, the rest satellite; the risk shares add up; the comparison is drawn
   const cs = pf.coreSatellite, spy = pf.positions.find((r) => r.ticker === "SPY");
   expect("portfolio: core is the index fund", spy.bucket === "core" && Math.abs(cs.core - spy.value / pf.total) < 1e-9 && cs.action, `core ${(cs.core * 100).toFixed(1)}%, ${cs.action}`);
@@ -409,8 +433,11 @@ const SLOW = 150000;
   expect("portfolio: core & satellite as two rings, money with its target tick and the swings",
     rings.length === 2 && /^Money/.test(rings[0].label) && rings[0].tick && !rings[1].tick && /^Day-to-day swings/.test(rings[1].label)
     && Math.abs(rings[0].arcs[0] - pct1(cs.core)) <= 0.02 && Math.abs(rings[1].arcs[0] - pct1(cs.riskShare.core)) <= 0.02 && rings.every((r) => r.w >= 120), JSON.stringify(rings));
+  await pfTab("overview");
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Satellite", null, { timeout: SLOW });
-  expect("portfolio: switching a holding's bucket", /Core 0\.0%/.test(await txt("#csSplit")) && (await p.evaluate(() => location.hash)) === "#portfolio", (await txt("#csSplit"))?.slice(0, 60));
+  await pfTab("performance");
+  expect("portfolio: switching a holding's bucket", /Core 0\.0%/.test(await txt("#csSplit")) && (await p.evaluate(() => location.hash)).startsWith("#portfolio"), (await txt("#csSplit"))?.slice(0, 60));
+  await pfTab("overview");
   await p.click('[data-bucket="SPY"]'); await p.waitForFunction(() => document.querySelector('[data-bucket="SPY"]')?.textContent === "Core", null, { timeout: SLOW }); await p.waitForTimeout(400);
   // The day's change names its day unless everything is from today; stocks and crypto can differ at a weekend
   const dayKpi = await p.evaluate(() => [...document.querySelectorAll("#pfKpis .kpi")].map((k) => k.innerText.replace(/\s+/g, " ")).find((t) => /^(Today|Latest day)/i.test(t)) || "");
@@ -429,6 +456,7 @@ const SLOW = 150000;
   expect("portfolio: emptied, Yahoo's figure is back", (await p.evaluate(async () => (await fetch("/api/settings")).json())).fund_costs.SPY === undefined);
   await shot("portfolio");
   // A sale and a dividend through the form
+  await pfTab("records");
   await p.selectOption("#hKind", "sell"); await p.fill("#hTicker", "QNBK.QA"); await p.fill("#hShares", "100"); await p.fill("#hCost", "18"); await p.fill("#hDate", "2025-06-02"); await p.click("#btnAddHolding"); await p.waitForTimeout(3000);
   await p.selectOption("#hKind", "dividend");
   expect("portfolio: a dividend asks for the tax withheld, a purchase doesn't", await p.evaluate(() => !document.querySelector("#hWithheldWrap").classList.contains("hidden") && document.querySelector("#hSharesWrap").classList.contains("hidden")));
@@ -436,15 +464,19 @@ const SLOW = 150000;
   await p.selectOption("#hKind", "buy");
   const led = await p.evaluate(async () => (await fetch("/api/portfolio")).json());
   expect("portfolio: sale and dividend recorded", led.positions.find((x) => x.ticker === "QNBK.QA").shares === 400 && led.realised !== 0 && led.dividends > 0, `realised ${Math.round(led.realised)}, dividends ${Math.round(led.dividends)} ${led.base}`);
+  await pfTab("overview");
   expect("portfolio: no annual return while a lot has no date", led.xirr === null && /Needs a date on every purchase and sale/.test(await txt("#pfKpis")), await txt("#pfKpis"));
+  await pfTab("records");
   expect("portfolio: transaction list", (await p.locator("#txTable tbody tr").count()) === 7);
   // A logo beside the ticker in every row of a list (letters in demo mode)
   const withLogos = (sel) => p.evaluate((q) => { const rows = [...document.querySelectorAll(q)].filter((r) => !r.querySelector(".empty")); return [rows.length, rows.filter((r) => r.querySelector(".logo[data-l]")).length]; }, sel);
   const txLogos = await withLogos("#txTable tbody tr");
   expect("portfolio: every transaction has a logo", txLogos[0] === 7 && txLogos[1] === 7, txLogos.join("/"));
+  await pfTab("overview");
   // Logos: each position has one, or in demo mode (no internet) its first letter on the tile
   const logoTiles = await p.evaluate(() => [...document.querySelectorAll("#pfTable tbody tr")].map((tr) => tr.querySelector(".logo")?.dataset.l || ""));
   expect("portfolio: every position has a logo tile", logoTiles.length >= 4 && logoTiles.every((l) => /^[A-Z0-9]$/.test(l)), logoTiles.join(" "));
+  await pfTab("records");
   // Tax year: the 2025 sale and dividend, in the base currency, with the CSV for that year
   await p.waitForFunction(() => /2025/.test(document.querySelector("#taxYear")?.value || "") && document.querySelector("#taxSales tbody tr"), null, { timeout: SLOW });
   const taxCard = await p.evaluate(() => ({ text: document.querySelector("#taxCard").innerText.replace(/\s+/g, " "), csv: document.querySelector("#taxCsv").getAttribute("href"),
@@ -487,12 +519,22 @@ const SLOW = 150000;
   await p.selectOption("#taxRes", ""); await p.waitForFunction(() => /Choose your tax residence/.test(document.querySelector("#taxIntro").textContent), null, { timeout: SLOW });
   expect("portfolio: look-through adds up", Math.abs(Object.values(led.allocation.sectorLookThrough).reduce((a, b) => a + b, 0) - led.total) < 1e-6, Object.keys(led.allocation.sectorLookThrough).slice(0, 4).join(", "));
   await shot("ledger");
+  // Cash at your broker: a deposit, and what it leaves to invest after what's bought, at the top of Invest this month
+  await pfTab("invest");
+  await p.selectOption("#cashKind", "deposit"); await p.fill("#cashAmount", "10000"); await p.selectOption("#cashCur", "USD"); await p.click("#cashForm .btn");
+  await p.waitForFunction(() => /to invest, since/.test(document.querySelector("#cashSum").innerText) && /Cash at your broker/.test(document.querySelector("#investSum").innerText), null, { timeout: SLOW });
+  const cashShown = await p.evaluate(async () => ({ sum: document.querySelector("#cashSum").innerText.replace(/\s+/g, " "), api: (await (await fetch("/api/cash")).json()).balance, rows: document.querySelectorAll("#cashList tbody tr").length }));
+  expect("cash: a deposit shows what's left to invest, in Invest this month too", cashShown.api && cashShown.rows === 1 && /to invest, since \d{4}-\d\d-\d\d/.test(cashShown.sum), cashShown.sum.slice(0, 140));
+  await p.click("#cashListBox summary");
+  await p.click("#cashList [data-cdel]");  // the walk accepts every confirm await p.waitForFunction(() => /Record the money you pay/.test(document.querySelector("#cashSum").innerText), null, { timeout: SLOW });
+  expect("cash: deleting the entry takes it away", !(await p.evaluate(async () => (await (await fetch("/api/cash")).json()).balance)));
   // Orders: prepared from the targets with new money, one approved, marked done (into the ledger), the rest left
   await p.fill("#ordMoney", "5000"); await p.click("#ordForm .btn");
   await p.waitForFunction(() => document.querySelector("#ordPlan tbody tr") || /Nothing|hold nothing/.test(document.querySelector("#ordPlan").innerText), null, { timeout: SLOW });
   const draft = await p.evaluate(() => ({ rows: document.querySelectorAll("#ordPlan tbody tr").length, text: document.querySelector("#ordPlan").innerText.replace(/\s+/g, " ") }));
   expect("orders: prepared from the targets, each with its reason", draft.rows >= 1 && /target/.test(draft.text) && /After these/.test(draft.text) && !/undefined|NaN/.test(draft.text), draft.text.slice(0, 220));
   expect("orders: new money only, so no sales", !/\bSell\b/.test(await txt("#ordPlan tbody")));
+  expect("orders: each order's fee has a column, and Settings is where fees are set", /fee/i.test(await txt("#ordPlan thead")) && /Set your broker's fees in Settings/.test(await txt("#ordPlan")));
   // not SPY: a later step deletes SPY's only lot
   const pick = await p.evaluate(() => [...document.querySelectorAll("#ordPlan tbody tr [data-stock]")].findIndex((td) => td.dataset.stock !== "SPY"));
   const firstOrder = await p.evaluate((i) => document.querySelectorAll("#ordPlan tbody tr [data-stock]")[i].dataset.stock, pick);
@@ -512,11 +554,13 @@ const SLOW = 150000;
   expect("orders: nothing open after it's done, and it's listed as done", !(await p.locator("#ordOpen .ord-done").count()) && /done, in the ledger/.test(await p.evaluate(() => document.querySelector("#ordOpen").textContent)));
   expect("orders: no bad text", !/undefined|NaN|\[object/.test(await txt("#ordCard")));
   await shot("orders");
+  await pfTab("overview");
   await p.click("#pfTable thead th:nth-child(6)"); await p.waitForTimeout(200);
   await p.locator('#pfTable tbody tr:has-text("SPY") [data-lots]').click(); await p.waitForTimeout(300);
   await p.locator("#modal [data-del]").first().click(); await p.waitForFunction(() => document.querySelectorAll("#pfTable tbody tr").length === 4, null, { timeout: SLOW });
   expect("portfolio: delete a lot after sorting", true);
   // With SPY gone nothing is held in ETFs: the draft asks what to buy there, and buys the ticker you type
+  await pfTab("invest");
   await p.fill("#ordMoney", "3000"); await p.click("#ordForm .btn");
   await p.waitForSelector('#ordPlan .ord-pick[data-class="ETFs"]', { timeout: SLOW });
   expect("orders: a class you hold nothing in asks what to buy", !(await p.locator('#ordPlan tbody tr [data-stock="SPY"]').count()) && /you hold nothing there/.test(await txt("#ordPlan")), (await txt("#ordPlan")).slice(0, 200));
@@ -538,21 +582,27 @@ const SLOW = 150000;
   await p.click("#ordPlan .ord-discard");
   expect("orders: Discard drops the suggestion, keeping the amount", !(await p.evaluate(() => document.querySelector("#ordPlan").innerHTML.trim())) && (await p.inputValue("#ordMoney")) === "3000"
     && !(await p.evaluate(async () => (await fetch("/api/orders")).json())).open.length);
-  // What you act on comes before the analysis, and the transaction form sits by the list of transactions
-  const cardOrder = await p.evaluate(() => [...document.querySelectorAll("#view-portfolio .card-h h3")].map((h) => h.firstChild.textContent.trim()));
-  const at = (t) => cardOrder.indexOf(t);
-  expect("portfolio: positions, plan, rebalancing and orders come before the analysis and the records",
-    at("Positions") < at("Your plan") && at("Your plan") < at("Rebalancing") && at("Rebalancing") < at("Orders") && at("Orders") < at("Risk")
-    && at("Risk") < at("Record a transaction") && at("Record a transaction") < at("Transactions") && at("Transactions") < at("Tax year"), cardOrder.join(" > "));
+  // Each tab holds its cards: what you hold, then investing this month, then how it went, then the records
+  const cardsOf = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll("#view-portfolio .pf-panel")].map((el) =>
+    [el.dataset.pftab, [...el.querySelectorAll(".card-h h3")].map((h) => h.firstChild.textContent.trim()).join(",")])));
+  expect("portfolio: each tab holds its cards, in the order you act on them", cardsOf.overview === "Positions"
+    && cardsOf.invest === "Invest this month,Cash at your broker,Your plan,Rebalancing" && /^Your performance vs benchmark.*,Risk,Core & satellite$/.test(cardsOf.performance)
+    && cardsOf.records === "Dividends not recorded,Record a transaction,Transactions,Tax year", JSON.stringify(cardsOf));
+  await pfTab("overview");
   await p.click("#pfToRecord");
   await p.waitForFunction(() => document.activeElement?.id === "hTicker", null, { timeout: 5000 }).catch(() => {});
   expect("portfolio: + Record a transaction goes to the form", (await p.evaluate(() => document.activeElement?.id)) === "hTicker");
-  // Your plan: the month's money, where it goes, the goal's chance; Prepare these orders fills the Orders card
+  expect("portfolio: + Record a transaction opens Records & tax", (await p.evaluate(() => location.hash)) === "#portfolio/records");
+  // Your plan: the month's money at the top of Invest this month, the goal's chance in Your plan
+  await pfTab("invest");
+  await p.fill("#ordMoney", "");
   await p.locator("#planMonthly").pressSequentially("800"); await p.fill("#planGoal", "250000"); await p.fill("#planBy", "2040-01-01");
   await p.click("#planForm .plan-go");
-  await p.waitForFunction(() => /chance of/.test(document.querySelector("#planOut").innerText) && /still to invest/.test(document.querySelector("#planOut").innerText), null, { timeout: SLOW });
-  const planText = await p.evaluate(() => document.querySelector("#planOut").innerText.replace(/\s+/g, " "));
-  expect("plan: this month and the goal are shown with figures", /\d+% chance of/.test(planText) && /a month/.test(planText) && !/undefined|NaN/.test(planText), planText.slice(0, 220));
+  await p.waitForFunction(() => /chance of/.test(document.querySelector("#planOut").innerText) && /still to go in/.test(document.querySelector("#investSum").innerText), null, { timeout: SLOW });
+  const planText = await p.evaluate(() => document.querySelector("#planOut").innerText.replace(/\s+/g, " ") + " | " + document.querySelector("#investSum").innerText.replace(/\s+/g, " "));
+  expect("plan: this month and the goal are shown with figures", /\d+% chance of/.test(planText) && /a month/.test(planText) && /still to go in of/.test(planText) && !/undefined|NaN/.test(planText), planText.slice(0, 220));
+  const filled = Number(await p.inputValue("#ordMoney"));
+  expect("plan: the amount to invest fills in from what's left of the month", filled > 0 && filled <= 800, String(filled));
   if (await p.locator("#planToOrders").count()) {
     await p.click("#planToOrders");
     await p.waitForFunction(() => document.querySelector("#ordPlan tbody tr"), null, { timeout: SLOW });
@@ -610,7 +660,11 @@ const SLOW = 150000;
   // Demo only: live, a fresh server would download four years of statements and prices for every followed stock,
   // hundreds of requests a run, which is what gets the computer refused by Yahoo. tests/test_smoke.py checks the method.
   if (MODE === "demo") {
-  await p.click("#btMode button[data-mode=score]");
+  // Score check is under Discover now: its own sub-tab, the same screen without Simulate's switch
+  await nav("scorecheck");
+  const scPlace = await p.evaluate(() => ({ hash: location.hash, on: document.querySelector("#nav a.active")?.dataset.group, sub: document.querySelector("#subnav a.on")?.dataset.route,
+    switch: !document.querySelector(".bt-switch").classList.contains("hidden") }));
+  expect("score check: under Discover, its own sub-tab, without Simulate's switch", scPlace.hash === "#scorecheck" && scPlace.on === "discover" && scPlace.sub === "scorecheck" && !scPlace.switch, JSON.stringify(scPlace));
   // The first run builds in the background (every stock in the list): the tab says how far it's got meanwhile
   await p.waitForFunction(() => /of \d+ stocks/.test(document.querySelector("#scTable").innerText) || document.querySelector("#scTable table"), null, { timeout: SLOW });
   expect("score check: building in the background says how far it's got", /of \d+ stocks|Rank IC/.test(await txt("#scTable")), await txt("#scTable"));
@@ -625,8 +679,10 @@ const SLOW = 150000;
   expect("score check: month by month, a score's IC per date", (await canvasDrawn("#scChart")) && await p.evaluate(() => /Risk \(calm\): rank IC/.test(state.charts.scChart.data.datasets[0].label)));
   await shot("score-check");
   }
+  await nav("backtest");
   await p.click("#btMode button[data-mode=single]");
-  expect("portfolio sim: back to a single asset", !(await p.evaluate(() => document.querySelector("#btSingle").classList.contains("hidden"))));
+  expect("portfolio sim: back to a single asset, under Portfolio's Simulate", !(await p.evaluate(() => document.querySelector("#btSingle").classList.contains("hidden")))
+    && (await p.evaluate(() => document.querySelector("#nav a.active")?.dataset.group)) === "portfolio" && !(await p.locator('#btMode [data-mode="score"]').count()));
 
   // ---- Journal & alerts
   await nav("journal");

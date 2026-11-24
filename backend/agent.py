@@ -375,6 +375,8 @@ def get_plan():
     b, m = p["base"], p["thisMonth"]
     out = {"monthly_amount": f"{p['monthly']:,.0f} {b}", "month": p["month"], "invested_this_month": f"{m['invested']:,.0f} {b}",
            "still_to_invest_this_month": f"{m['left']:,.0f} {b}",
+           **({"cash_at_the_broker": f"{p['cash']['balance']:,.0f} {b} (deposits recorded since {p['cash']['since']}, less what was bought, plus sales and dividends; approximate)"}
+              if p.get("cash") else {}),
            "suggested_buys_for_the_rest": [f"{o['ticker']}: {o['shares']:g} shares, about {o['value']:,.0f} {b} ({o['assetClass']})" for o in m["orders"]] or None,
            "notes": m["notes"] or None}
     g = p.get("goalCheck")

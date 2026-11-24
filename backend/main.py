@@ -95,7 +95,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, HTTPException  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from . import agent, ai, backtest, data, db, firstrun, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, tax, taxlaw, taxreport  # noqa: E402
+from . import agent, ai, backtest, cash, data, db, firstrun, insights, ledger, logos, mailer, orders, plan, portfolio, scorecheck, simulate, startup, tax, taxlaw, taxreport  # noqa: E402
 from . import indicators as ind  # noqa: E402
 from .universe import COUNTRY_GROUPS, MACRO, REGIONS, UNIVERSE, countries_in, search as uni_search, tickers_for  # noqa: E402
 
@@ -895,6 +895,34 @@ def pretrade(body: dict = Body(...)):
 
 # ---------------------------------------------------------------- orders
 # Prepared by the app from your targets, approved by you, placed by you at your broker. Nothing here trades.
+# ---------------------------------------------------------------- cash at the broker (cash.py)
+@app.get("/api/cash")
+def cash_get():
+    """Your deposits and withdrawals, and the cash to invest they leave after what you bought, sold and were paid."""
+    base = db.get_settings().get("base_currency", "USD")
+    try:
+        bal = cash.balance(base)
+    except data.DataError as e:
+        raise HTTPException(503, str(e))
+    return ok({"entries": cash.entries(), "balance": bal, "base": base})
+
+
+@app.post("/api/cash")
+def cash_add(body: dict = Body(...)):
+    try:
+        return ok({"id": cash.add(body)})
+    except cash.CashError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/cash/{cid}")
+def cash_delete(cid: int):
+    try:
+        cash.delete(cid)
+    except cash.CashError as e:
+        raise HTTPException(404, str(e))
+    return ok({"ok": True})
+
 @app.post("/api/orders/plan")
 def orders_plan(body: dict = Body(...)):
     try:

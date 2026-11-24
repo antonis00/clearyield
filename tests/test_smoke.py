@@ -5113,7 +5113,7 @@ def test_orders_prepared_approved_and_done():
         assert post(ticker="AAPL", kind="buy", date="2024-01-10", shares=10, price=100).status_code == 200
         assert post(ticker="MSFT", kind="buy", date="2024-01-10", shares=4, price=200).status_code == 200
         assert post(ticker="SPY", kind="buy", date="2024-01-10", shares=10, price=50).status_code == 200
-        c.post("/api/settings", json={"base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}})
+        c.post("/api/settings", json={"max_holding": 100, "base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}})
         px = {t: float(data.history(t, "1y")["Close"].iloc[-1]) for t in ("AAPL", "MSFT", "SPY")}
         va, vm, vs = 10 * px["AAPL"], 4 * px["MSFT"], 10 * px["SPY"]
         total, money = va + vm + vs, 1000.0
@@ -5188,7 +5188,7 @@ def test_orders_prepared_approved_and_done():
 
         # Backups carry orders; an older backup without them still restores
         backup = c.get("/api/backup").json()
-        assert backup["version"] == db.BACKUP_VERSION == 5 and len(backup["orders"]) == 3
+        assert backup["version"] == db.BACKUP_VERSION == 6 and len(backup["orders"]) == 3
         old = {**backup, "version": 4}
         old.pop("orders")
         assert c.post("/api/backup/restore", json=old).status_code == 200 and db.q("SELECT COUNT(*) n FROM orders")[0]["n"] == 0
@@ -5217,7 +5217,7 @@ def test_orders_after_review():
         n_spy = round(20 * px["AAPL"] / px["SPY"])
         assert post(ticker="AAPL", kind="buy", date="2024-01-10", shares=20, price=100).status_code == 200
         assert post(ticker="SPY", kind="buy", date="2024-01-10", shares=n_spy, price=50).status_code == 200
-        c.post("/api/settings", json={"base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}})
+        c.post("/api/settings", json={"max_holding": 100, "base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}})
         drift = abs(20 * px["AAPL"] / (20 * px["AAPL"] + n_spy * px["SPY"]) - 0.5)
         assert drift <= orders.BAND
         inside = c.post("/api/orders/plan", json={"sell": True, "new_money": 100}).json()
@@ -5292,7 +5292,7 @@ def test_orders_ticker_for_an_empty_class():
     _reset()
     with TestClient(app) as c:
         assert c.post("/api/transactions", json={"ticker": "SPY", "kind": "buy", "date": "2024-01-10", "shares": 40, "price": 50}).status_code == 200
-        c.post("/api/settings", json={"base_currency": "USD", "targets": {"ETFs": 70, "Stocks": 25, "Crypto": 5}})
+        c.post("/api/settings", json={"max_holding": 100, "base_currency": "USD", "targets": {"ETFs": 70, "Stocks": 25, "Crypto": 5}})
         plan = lambda **b: c.post("/api/orders/plan", json={"new_money": 2000, **b}).json()  # noqa: E731
         px = {t: float(data.history(t, "1y")["Close"].iloc[-1]) for t in ("SPY", "AAPL", "BTC-USD")}
         v = 40 * px["SPY"]
@@ -5897,6 +5897,89 @@ def test_folder_picker_lists_folders_and_makes_one():
             assert c.post("/api/folders", json={"path": str(root), "name": bad}).status_code == 400, bad
         assert "already" in c.post("/api/folders", json={"path": str(root), "name": "alpha"}).json()["detail"]
         assert c.post("/api/folders", json={"path": str(root / "nope"), "name": "x"}).status_code == 400
+
+def test_cash_at_the_broker():
+    """Deposits less withdrawals, less what was bought, plus what was sold and the dividends paid, from the first cash
+    entry on, each at its date's rate (hand-calculated in USD with no conversion). Nothing before a deposit is
+    recorded; bad entries refused; kept in backups; the plan offers it."""
+    from backend import cash, data, db
+    _reset()
+    with TestClient(app) as c:
+        c.post("/api/settings", json={"base_currency": "USD"})
+        assert c.get("/api/cash").json()["balance"] is None, "no cash until a deposit is recorded"
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        assert post(ticker="AAPL", kind="buy", date="2024-01-10", shares=10, price=100).status_code == 200  # before the first deposit
+        assert c.post("/api/cash", json={"kind": "deposit", "date": "2024-02-01", "amount": 5000, "currency": "USD"}).status_code == 200
+        assert post(ticker="AAPL", kind="buy", date="2024-03-01", shares=10, price=150).status_code == 200
+        assert post(ticker="AAPL", kind="sell", date="2024-06-03", shares=5, price=200).status_code == 200
+        assert post(ticker="AAPL", kind="dividend", date="2024-07-01", amount=12.5).status_code == 200
+        wid = c.post("/api/cash", json={"kind": "withdrawal", "date": "2024-08-01", "amount": 300, "currency": "USD", "note": "fees"}).json()["id"]
+        d = c.get("/api/cash").json()
+        assert abs(d["balance"]["balance"] - (5000 - 1500 + 1000 + 12.5 - 300)) < 1e-6, d["balance"]
+        assert d["balance"]["since"] == "2024-02-01" and d["balance"]["moves"]["bought"] == 1500 and len(d["entries"]) == 2
+        # Refused: a kind, a date or an amount that can't be right
+        for bad in ({"kind": "gift", "date": "2024-01-01", "amount": 1, "currency": "USD"}, {"kind": "deposit", "date": "soon", "amount": 1, "currency": "USD"},
+                    {"kind": "deposit", "date": "2024-01-01", "amount": -5, "currency": "USD"}, {"kind": "deposit", "date": "2099-01-01", "amount": 5, "currency": "USD"},
+                    {"kind": "deposit", "date": "2024-01-01", "amount": 5, "currency": "dollars"}):
+            assert c.post("/api/cash", json=bad).status_code == 400, bad
+        # Another currency is converted at its date's rate
+        c.post("/api/cash", json={"kind": "deposit", "date": "2024-09-02", "amount": 1000, "currency": "EUR"})
+        eur = c.get("/api/cash").json()["balance"]
+        assert abs(eur["balance"] - d["balance"]["balance"] - 1000 * data.fx_rate("EUR", "USD")) < 1e-6
+        # The plan offers it; backups keep it; an older backup (no cash) restores with none
+        assert abs(c.get("/api/plan").json()["cash"]["balance"] - eur["balance"]) < 1e-6
+        backup = c.get("/api/backup").json()
+        assert backup["version"] == 6 and len(backup["cash"]) == 3
+        assert c.delete(f"/api/cash/{wid}").status_code == 200 and c.delete(f"/api/cash/{wid}").status_code == 404
+        assert c.post("/api/backup/restore", json=backup).status_code == 200 and len(c.get("/api/cash").json()["entries"]) == 3
+        old = {**backup, "version": 5}
+        old.pop("cash")
+        assert c.post("/api/backup/restore", json=old).status_code == 200 and c.get("/api/cash").json()["balance"] is None
+        bad = {**backup, "cash": [{"kind": "deposit", "date": "x", "amount": 1, "currency": "USD"}]}
+        assert c.post("/api/backup/restore", json=bad).status_code == 400
+    _reset()
+
+
+def test_orders_respect_the_cap_and_the_fees():
+    """New money never takes one holding (broad index funds apart) above the cap: what it can't take goes to the core
+    fund, said so. Each order shows its fee; one whose fee would be too big a share of it is left for next month."""
+    from backend import data, orders
+    _reset()
+    with TestClient(app) as c:
+        post = lambda **b: c.post("/api/transactions", json=b)  # noqa: E731
+        post(ticker="AAPL", kind="buy", date="2024-01-10", shares=10, price=100)
+        post(ticker="SPY", kind="buy", date="2024-01-10", shares=200, price=50)
+        c.post("/api/settings", json={"base_currency": "USD", "targets": {"Stocks": 50, "ETFs": 50}, "max_holding": 5})
+        px = {t: float(data.history(t, "1y")["Close"].iloc[-1]) for t in ("AAPL", "SPY")}
+        total, money = 10 * px["AAPL"] + 200 * px["SPY"], 5000.0
+        p = c.post("/api/orders/plan", json={"new_money": money, "fractional": True}).json()
+        aapl = sum(o["value"] for o in p["orders"] if o["ticker"] == "AAPL")
+        # AAPL is already over 5%: nothing more goes to it (under the cap, it would be filled only up to it)
+        assert 10 * px["AAPL"] > 0.05 * (total + money) and aapl == 0, (aapl, 10 * px["AAPL"] / (total + money))
+        spy = [o for o in p["orders"] if o["ticker"] == "SPY"]
+        assert spy and any("limit" in o["reason"] for o in spy) and any("limit for one holding" in n for n in p["notes"]), p
+        assert abs(sum(o["value"] for o in p["orders"]) - money) < 1, "all the money still goes in"
+        # Under the cap, a holding is filled up to it and no further, and the rest goes to core
+        now = 10 * px["AAPL"] / (total + money)
+        c.post("/api/settings", json={"max_holding": round(now * 100 + 2)})
+        p = c.post("/api/orders/plan", json={"new_money": money, "fractional": True}).json()
+        aapl = sum(o["value"] for o in p["orders"] if o["ticker"] == "AAPL")
+        cap = round(now * 100 + 2) / 100
+        assert aapl > 0 and abs(10 * px["AAPL"] + aapl - cap * (total + money)) < px["AAPL"] * 1e-3 + 1, (aapl, cap)
+        assert any("limit" in o["reason"] for o in p["orders"] if o["ticker"] == "SPY")
+        # Fees: shown on each order; an order the fee would eat too much of is dropped, said so
+        c.post("/api/settings", json={"max_holding": 100, "costs": {"fixed": 10, "pct": 0.001, "fx_pct": 0, "max_drag": 0.01}})
+        p = c.post("/api/orders/plan", json={"new_money": money, "fractional": True}).json()
+        assert all(abs(o["fee"] - (10 + 0.001 * o["value"])) < 1e-9 and 10 + 0.001 * o["value"] <= 0.01 * o["value"] for o in p["orders"])
+        assert abs(p["fees"] - sum(o["fee"] for o in p["orders"])) < 1e-9
+        small = c.post("/api/orders/plan", json={"new_money": 600.0, "fractional": True}).json()
+        assert any("left for next month" in n for n in small["notes"]) and all(o["value"] * 0.01 >= o["fee"] for o in small["orders"])
+        assert c.post("/api/settings", json={"costs": {"fixed": -1}}).status_code == 400
+        assert c.post("/api/settings", json={"max_holding": 0}).status_code == 400
+        assert orders.fee_of(1000, "GBp", "USD", {"fixed": 0, "pct": 0, "fx_pct": 0.005}) == 5.0, "a currency conversion on a foreign order"
+        assert orders.fee_of(1000, "USD", "USD", {"fixed": 0, "pct": 0, "fx_pct": 0.005}) == 0.0
+    _reset()
+
 
 if __name__ == "__main__":
     import logging

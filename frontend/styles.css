@@ -178,7 +178,7 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 .grid2:has(> .card.hidden) { grid-template-columns: 1fr; } /* one card left: it takes the whole row */
 .grid2, .grid3, .grid4 { margin-bottom: 16px; }
 @media (max-width: 1100px) { .settings-grid > .set-tiles, .settings-grid > .set-data, .settings-grid > .set-email { order: 1; } .settings-grid > .save-card { order: 2; } }  /* one column: your settings first, then the app's */
-@media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } .grid3, .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .side { width: 64px; } .brand span:not(.logo), nav a { font-size: 0; } nav a::first-letter { font-size: 14px; } }
+@media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } .grid3, .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .side { width: 64px; } .nav-label { display: none; } nav a { justify-content: center; padding: 11px 0; } }
 .empty { padding: 80px 0; text-align: center; color: var(--muted); }
 
 /* macro strip */
@@ -191,8 +191,8 @@ h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); font-weight: 500; te
 
 /* kpis */
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-#pfKpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }  /* ten figures as two even rows, not eight and two */
-@media (max-width: 1100px) { #pfKpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+#pfKpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }  /* eight figures as two even rows */
+@media (max-width: 1100px) { #pfKpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .kpis.big { margin-bottom: 16px; }
 .kpi { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
 .kpis.big .kpi { background: var(--panel); }
@@ -678,3 +678,55 @@ label .pick-btn { margin-top: 4px; width: 100%; box-sizing: border-box; }
 /* Research's Key statistics: the next earnings and ex-dividend dates on a line under the figures */
 .stat-dates { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin: 14px 0 0; }
 .stat-dates .muted:not(:first-child) { margin-left: 6px; }
+
+/* Settings' Portfolio targets: the order rules under the targets */
+.set-sub { margin: 16px 0 6px; }
+
+/* The menu: six places and Ask, each with an icon; the words beside it, the icon alone on a narrower screen */
+nav a { display: flex; align-items: center; gap: 10px; }
+.nav-svg { display: inline-flex; width: 18px; height: 18px; flex: none; }
+.nav-svg svg { width: 18px; height: 18px; fill: currentColor; stroke: currentColor; stroke-width: 0; }
+.nav-svg .hole, .nav-svg .ink { fill: var(--side); stroke: var(--side); }
+nav a:hover .nav-svg .hole, nav a.active .nav-svg .hole, nav a:hover .nav-svg .ink, nav a.active .nav-svg .ink { fill: var(--panel); stroke: var(--panel); }
+.nav-short { display: none; }
+/* The sub-tabs of the place you're in (Portfolio, Research, Discover), under the search bar */
+.subnav { display: flex; gap: 2px; margin: -8px 0 18px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.subnav a { padding: 8px 14px; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 500; margin-bottom: -1px; }
+.subnav a:hover { color: var(--text); }
+.subnav a.on { color: var(--text); border-bottom-color: var(--accent); }
+/* On a phone the menu is a bar of icons along the bottom */
+@media (max-width: 700px) {
+  .side { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; height: 58px; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); z-index: 40; }
+  .brand, .side-foot { display: none; }
+  #nav { flex-direction: row; overflow: visible; }
+  nav a, nav a.nav-ask { flex: 1; flex-direction: column; justify-content: center; gap: 3px; padding: 6px 0; margin: 0; border-left: 0; border-top: 2px solid transparent; font-size: 10px; }
+  nav a.active { border-top-color: var(--accent); }
+  nav a .nav-label { display: none; }
+  nav a .nav-short { display: block; line-height: 1; }
+  main { padding: 0 12px 74px; }
+}
+/* Invest this month: what there is to invest, then the orders */
+.invest-sum { margin: 2px 0 14px; }
+.inv-figs { display: flex; flex-wrap: wrap; gap: 32px; margin-bottom: 12px; }
+.inv-fig { display: flex; flex-direction: column; gap: 2px; }
+.inv-fig .l { font-size: 12px; color: var(--muted); }
+.inv-fig .v { font: 600 24px var(--mono); }
+.inv-fig .s { font-size: 12px; color: var(--muted); }
+.cash-form { margin-top: 10px; }
+#cashListBox { margin-top: 10px; }
+.how-returns { margin-top: 12px; }
+.how-returns summary { cursor: pointer; color: var(--muted); }
+.how-returns ul { margin: 8px 0 0; }
+
+/* Your plan and Cash at your broker side by side: their forms on a grid, so fields line up and the button sits under them */
+#planForm, .cash-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; align-items: end; }
+.cash-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+#planForm label, .cash-form label { min-width: 0; }
+#planForm input, .cash-form input, .cash-form select { width: 100%; min-width: 0; }
+#planForm .plan-go { justify-self: end; }
+.cash-form .btn { grid-column: 4; justify-self: end; }
+@media (max-width: 700px) { #planForm, .cash-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cash-form .btn { grid-column: 2; } }
+#pfHow { margin-top: 4px; }
+
+/* Settings: Save across both columns at the end */
+.settings-grid > .save-card { grid-column: 1 / -1; }

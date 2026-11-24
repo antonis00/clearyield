@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL, ticker TEXT NOT NULL, side TEXT NOT NULL, shares REAL NOT NULL,
     limit_price REAL NOT NULL, currency TEXT DEFAULT '', reason TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'approved',
     closed REAL, fill_shares REAL, fill_price REAL, fill_date TEXT DEFAULT '', fee REAL, tx_id INTEGER);
+CREATE TABLE IF NOT EXISTS cash (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL,
+    currency TEXT NOT NULL, note TEXT DEFAULT '');
 """
 
 ADDED_COLUMNS = {
@@ -74,7 +77,13 @@ DEFAULT_SETTINGS = {
     "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
     "email_alerts": False,
     "backup_copy_dir": "",
-    "ai_privacy": False,  # Ask hides amounts of money and share counts from the AI provider (agent.redact)  # a second folder for the automatic backups (OneDrive, another drive): a disk failure loses neither
+    "ai_privacy": False,
+    # What an order costs at your broker (orders.py): a fixed fee per order in the base currency, a share of the order,
+    # a currency conversion charge when the order isn't in the base currency, and the most a fee may be of an order
+    # before it's left for next month
+    "costs": {"fixed": 0.0, "pct": 0.0, "fx_pct": 0.0, "max_drag": 0.01},
+    # New money never takes one holding (other than a broad index fund) above this share of the portfolio
+    "max_holding": 10,  # Ask hides amounts of money and share counts from the AI provider (agent.redact)  # a second folder for the automatic backups (OneDrive, another drive): a disk failure loses neither
     "fund_costs": {},  # {ticker: yearly cost as a fraction}, entered from a fund's factsheet; stands over Yahoo's figure
     # What you invest each month and the goal it's for (plan.py): the goal in today's money by a date, with the yearly
     # return and inflation the check assumes
@@ -268,8 +277,8 @@ def cache_clear():
 
 # ---- backup ----
 # Score history is here because Yahoo has no past fundamentals, so it could never be rebuilt
-USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history", "buckets", "orders")
-BACKUP_VERSION = 5
+USER_TABLES = ("watchlist", "transactions", "journal", "alerts", "score_history", "buckets", "orders", "cash")
+BACKUP_VERSION = 6  # 6 added cash (deposits and withdrawals)
 
 
 def export_user_data():
@@ -371,7 +380,7 @@ def auto_backup_status():
 
 def read_backup(backup):
     """Check a backup's shape, bringing an older version up to date. Raises ValueError if it can't be used."""
-    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, 4, BACKUP_VERSION):
+    if not isinstance(backup, dict) or backup.get("version") not in (1, 2, 3, 4, 5, BACKUP_VERSION):
         raise ValueError("This isn't a ClearYield backup, or it's from a different version.")
     if backup["version"] == 1:  # before the ledger, when there was a table of current lots
         lots = backup.get("holdings")
@@ -385,6 +394,8 @@ def read_backup(backup):
         backup = {**backup, "buckets": []}
     if backup["version"] < 5:
         backup = {**backup, "orders": []}
+    if backup["version"] < 6:
+        backup = {**backup, "cash": []}
     for t in USER_TABLES:
         if not isinstance(backup.get(t), list) or not all(isinstance(r, dict) for r in backup[t]):
             raise ValueError(f"The backup's {t} section isn't usable.")
@@ -398,6 +409,8 @@ def read_backup(backup):
         raise ValueError("Every bucket in the backup must be core or satellite.")
     from .orders import check_rows  # here: orders needs this module
     check_rows(backup["orders"])
+    from .cash import check_rows as check_cash
+    check_cash(backup["cash"])
     return {**backup, "settings": settings}
 
 
@@ -520,6 +533,8 @@ SETTING_CHECKS = {
     "email_alerts": _switch("Email alerts"),
     "backup_copy_dir": lambda v: _folder(v),
     "ai_privacy": _switch("Privacy"),
+    "costs": lambda v: _costs(v),
+    "max_holding": lambda v: _num(v, 1, 100, "The most in one holding"),
     "fund_costs": _fund_costs,
     "plan": lambda v: {**DEFAULT_SETTINGS["plan"], **__import__("backend.plan", fromlist=["check"]).check(v)},
     "setup_dismissed": _switch("Hiding the checklist"),
@@ -527,6 +542,19 @@ SETTING_CHECKS = {
     "tax_options": lambda v: __import__("backend.taxlaw", fromlist=["check_options"]).check_options(v),
     "fund_tax": lambda v: __import__("backend.taxlaw", fromlist=["check_fund_tax"]).check_fund_tax(v),
 }
+
+
+def _costs(v):
+    """Broker costs: a fixed fee per order (base currency), a percentage of the order, a currency conversion
+    percentage, and the largest share of an order a fee may be before the order is left for later."""
+    if not isinstance(v, dict) or any(k not in DEFAULT_SETTINGS["costs"] for k in v):
+        raise ValueError("Costs are a fixed fee, a percentage, a currency conversion percentage and the most a fee may be of an order.")
+    out = dict(DEFAULT_SETTINGS["costs"])
+    out["fixed"] = _num(v.get("fixed", out["fixed"]), 0, 1000, "The fixed fee per order")
+    out["pct"] = _num(v.get("pct", out["pct"]), 0, 0.05, "The fee as a share of the order")
+    out["fx_pct"] = _num(v.get("fx_pct", out["fx_pct"]), 0, 0.05, "The currency conversion charge")
+    out["max_drag"] = _num(v.get("max_drag", out["max_drag"]), 0.001, 0.2, "The most a fee may be of an order")
+    return out
 
 
 def _folder(v):

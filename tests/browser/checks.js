@@ -223,9 +223,9 @@ const CHECKS = {
 
   // Record a buy, a sale and a dividend on the Portfolio page, and see the results
   async ledger(page) {
-    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(500);
-    await page.waitForFunction(() => document.querySelector("#pfKpis").innerText.trim(), null, { timeout: 60000 });
-    expect("an empty portfolio says so instead of showing zeros", /No transactions yet/.test(await page.innerText("#pfKpis")), await page.innerText("#pfKpis"));
+    await page.evaluate(() => { location.hash = "#portfolio/records"; }); await page.waitForTimeout(500);
+    await page.waitForFunction(() => document.querySelector("#pfKpis").textContent.trim(), null, { timeout: 60000 });
+    expect("an empty portfolio says so instead of showing zeros", /No transactions yet/.test(await page.textContent("#pfKpis")), await page.textContent("#pfKpis"));
     const record = async (kind, fields) => {
       await page.selectOption("#hKind", kind);
       for (const [k, v] of Object.entries(fields)) await page.fill(k, v);
@@ -234,6 +234,7 @@ const CHECKS = {
       await page.waitForTimeout(1500);
     };
     await record("buy", { "#hTicker": "AAPL", "#hShares": "10", "#hCost": "100", "#hDate": "2024-06-03" });
+    await page.waitForFunction(() => document.querySelectorAll("#pfTable tbody tr").length === 1, null, { timeout: 30000 }).catch(() => {});
     expect("buy is recorded", (await page.locator("#pfTable tbody tr").count()) === 1);
     expect("form clears", (await page.inputValue("#hTicker")) === "" && (await page.inputValue("#hDate")) === "");
 
@@ -249,11 +250,11 @@ const CHECKS = {
     await page.selectOption("#hKind", "buy");
     expect("shares field returns for a buy", await page.isVisible("#hShares"));
 
-    const kpis = (await page.innerText("#pfKpis")).replace(/\s+/g, " ");
-    expect("realised P&L shown", /REALISED P&L \$200/i.test(kpis), kpis);
-    expect("dividends shown", /DIVIDENDS RECEIVED \$10/i.test(kpis), kpis);
-    expect("annual return shown", /ANNUAL RETURN/i.test(kpis));
-    expect("position is what's left", /6\.00/.test(await page.innerText("#pfTable tbody tr")));
+    const kpis = (await page.textContent("#pfKpis")).replace(/\s+/g, " ");
+    expect("realised P&L shown, in the total gain", /\$200 sold/.test(kpis), kpis);
+    expect("dividends shown, in the total gain", /\$10 dividends/.test(kpis), kpis);
+    expect("your return shown", /Your return/.test(kpis));
+    expect("position is what's left", /6\.00/.test(await page.textContent("#pfTable tbody tr")));
     const rows = await page.locator("#txTable tbody tr").count();
     expect("all three are listed, not the refused one", rows === 3, rows);
     expect("history is not blank", !/undefined|NaN|null/.test(await page.innerText("#txTable")));
@@ -262,7 +263,12 @@ const CHECKS = {
     // Sorting then deleting: refusal for the buy, then the sale, then the buy
     const dialogs = (d) => d.accept(); page.on("dialog", dialogs);
     await page.click("#txTable thead th:nth-child(1)"); await page.waitForTimeout(150);
-    const del = async (kind) => { await page.locator(`#txTable tbody tr:has-text("${kind}") [data-tdel]`).click(); await page.waitForTimeout(1200); };
+    const del = async (kind) => {
+      const before = await page.locator("#txTable tbody tr").count();
+      await page.locator(`#txTable tbody tr:has-text("${kind}") [data-tdel]`).click(); await page.waitForTimeout(600);
+      // wait for the list to be drawn again (a refused delete leaves it as it was)
+      await page.waitForFunction((n) => document.querySelectorAll("#txTable tbody tr").length !== n, before, { timeout: 6000 }).catch(() => {});
+    };
     await del("buy");
     expect("deleting a buy a sale needs is refused", /sale depends/.test(await page.textContent("#toast")), await page.textContent("#toast"));
     await del("sell"); await del("dividend"); await del("buy");
@@ -273,7 +279,7 @@ const CHECKS = {
     // Delete all in the Lots pop-up: the whole holding, sales and dividends included, after saying what goes
     await post(page, "/api/transactions/import", { text: "AAPL,10,100,2024-06-03\nAAPL,5,110,2024-09-02\nAAPL,4,150,2025-01-02,sell\nAAPL,,10,2025-02-03,dividend\nMSFT,2,300,2024-06-03" });
     await page.evaluate(() => { location.hash = "#dashboard"; }); await page.waitForTimeout(300);
-    await page.evaluate(() => { location.hash = "#portfolio"; });
+    await page.evaluate(() => { location.hash = "#portfolio/overview"; });
     await page.waitForFunction(() => document.querySelectorAll("#pfTable [data-lots]").length === 2, null, { timeout: 60000 });
     await page.locator('#pfTable [data-lots="AAPL"]').click(); await page.waitForTimeout(300);
     let asked = "";
@@ -333,7 +339,7 @@ const CHECKS = {
 
   // The form shows the currency and price, and questions a figure in the wrong unit
   async pence(page) {
-    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(400);
+    await page.evaluate(() => { location.hash = "#portfolio/records"; }); await page.waitForTimeout(400);
     await page.fill("#hTicker", "azn.l"); await page.press("#hTicker", "Tab");
     await page.waitForFunction(() => /GBp/.test(document.querySelector("#hHint").textContent), null, { timeout: 30000 });
     const hint = await page.textContent("#hHint");
@@ -370,12 +376,13 @@ const CHECKS = {
 
   // Pasting a list, and what the new Research sections show
   async features(page) {
-    await page.evaluate(() => { location.hash = "#portfolio"; }); await page.waitForTimeout(500);
+    await page.evaluate(() => { location.hash = "#portfolio/records"; }); await page.waitForTimeout(500);
     await page.locator("#pasteBox summary").click();
     await page.fill("#hPaste", "SPY,1,100,2024-06-03\nSPY,abc,100,2024-06-04"); await page.click("#btnPaste"); await page.waitForTimeout(800);
     expect("a bad line is named and nothing is added", /Line 2/.test(await page.textContent("#toast")) && (await post(page, "/api/transactions", null, "GET")).body.length === 0, await page.textContent("#toast"));
     expect("the text stays so you can fix it", /abc/.test(await page.inputValue("#hPaste")));
-    await page.fill("#hPaste", "ticker,shares,price,date,type\nSPY,5,400,2024-06-03\nAAPL,10,150,2024-06-03\nAAPL,2,200,2025-01-02,sell"); await page.click("#btnPaste"); await page.waitForTimeout(2500);
+    await page.fill("#hPaste", "ticker,shares,price,date,type\nSPY,5,400,2024-06-03\nAAPL,10,150,2024-06-03\nAAPL,2,200,2025-01-02,sell"); await page.click("#btnPaste");
+    await page.waitForFunction(() => document.querySelectorAll("#txTable tbody tr").length === 3, null, { timeout: 30000 }).catch(() => {});
     expect("pasted transactions are listed", (await page.locator("#txTable tbody tr").count()) === 3, await page.textContent("#toast"));
     expect("box clears", (await page.inputValue("#hPaste")) === "");
     expect("sector chart opens up funds", await page.evaluate(() => state.charts.aSector.data.labels.some((l) => l !== "ETFs")), await page.evaluate(() => state.charts.aSector.data.labels.join(", ")));

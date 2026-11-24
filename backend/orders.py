@@ -16,6 +16,12 @@ The rules, all on the page (ORDER_RULES in app.js; keep them in step):
   otherwise leave the buys short of cash. An order worth under MIN_ORDER of the base currency is dropped.
 - Orders approved and not yet done count as if filled, so preparing again doesn't repeat them.
 - The limit price offered is the latest close; change it before approving.
+- New money never takes one holding above `max_holding` of the portfolio (Settings, 10% by default), broad index
+  funds apart: what a holding at its cap can't take goes to your core fund instead, so the plan doesn't keep adding
+  to whatever has grown most.
+- Each order shows what it costs at your broker (Settings' `costs`: a fixed fee, a share of the order and a currency
+  conversion charge when it isn't in your base currency); an order whose fee would be more than `max_drag` of it is
+  left for next month, when the money can go in one larger order.
 """
 import csv
 import datetime as dt
@@ -25,6 +31,7 @@ import time
 
 from . import data, db, ledger, portfolio
 from .tax import held_over_a_year
+from .universe import CORE_FUNDS
 
 BAND = 0.02
 MIN_ORDER = 1.0
@@ -94,6 +101,19 @@ def _pending(rows, base):
     return change, extra
 
 
+def fee_of(value, currency, base, costs):
+    """An order's estimated cost at the broker, in the base currency."""
+    c = costs or {}
+    fee = (c.get("fixed") or 0) + (c.get("pct") or 0) * value
+    if currency and data.main_unit(currency) != base:
+        fee += (c.get("fx_pct") or 0) * value
+    return fee
+
+
+def _is_core(row):
+    return row.get("bucket") == "core" or row["ticker"] in CORE_FUNDS
+
+
 def plan(settings, new_money=0.0, sell=False, fractional=False, picks=None):
     """Draft orders. Nothing is saved: approving saves them. `picks` is {asset class: ticker} for classes you hold
     nothing in: what to buy there."""
@@ -106,7 +126,9 @@ def plan(settings, new_money=0.0, sell=False, fractional=False, picks=None):
     s.pop("_series", None)
     base = s["base"]
     out = {"base": base, "newMoney": new_money, "sell": sell, "fractional": fractional, "orders": [], "notes": [], "rule": "",
-           "classes": [], "spend": 0.0, "left": new_money, "pending": 0, "empty": []}
+           "classes": [], "spend": 0.0, "left": new_money, "pending": 0, "empty": [], "fees": 0.0,
+           "cap": (settings.get("max_holding") or 10) / 100, "costs": settings.get("costs") or {}}
+    costs, cap = out["costs"], out["cap"]
     if s["incomplete"]:
         out["notes"].append(f"No orders while {', '.join(s['missing'])} has no current data: the weights would be wrong.")
         return out
@@ -159,6 +181,41 @@ def plan(settings, new_money=0.0, sell=False, fractional=False, picks=None):
         e["pick"] = t
         rows.append(row)
 
+    planned, overflow = {}, []
+
+    def place(row, c, part, reason):
+        """One order for `row` worth about `part` (buy +, sell -): rounded, priced, its fee checked. Its value or 0."""
+        t = row["ticker"]
+        per_share = row["price"] * row["fx"]
+        if per_share <= 0:
+            return 0.0
+        decimals = CRYPTO_DECIMALS if c == "Crypto" else (FRACTION_DECIMALS if fractional else 0)
+        shares = _round_down(abs(part) / per_share, decimals)
+        if part < 0:
+            shares = min(shares, row["shares"])
+        worth = shares * per_share
+        if shares <= 0 or worth < MIN_ORDER:
+            if abs(part) >= MIN_ORDER and worth < abs(part):
+                out["notes"].append(f"{t}: {abs(part):,.0f} {base} is less than one share ({per_share:,.2f} {base}), so no order. "
+                                    "Allow fractional shares if your broker has them.")
+            return 0.0
+        fee = fee_of(worth, row["currency"], base, costs)
+        if fee > (costs.get("max_drag") or 0.01) * worth:
+            out["notes"].append(f"{t}: the fee, about {fee:,.2f} {base}, would be {fee / worth:.1%} of a {worth:,.0f} {base} order, "
+                                f"over your {(costs.get('max_drag') or 0.01):.1%} limit, so it's left for next month, when it can go in one larger order.")
+            return 0.0
+        side = "buy" if part > 0 else "sell"
+        order = {"ticker": t, "name": row.get("name"), "side": side, "shares": shares, "limitPrice": row["price"],
+                 "currency": row["currency"], "value": worth, "assetClass": c, "asOf": row["asOf"], "stale": row["stale"],
+                 "fee": fee, "reason": reason}
+        if side == "sell":
+            order["gain"] = _sale_gain(t, shares, row["price"])
+        out["orders"].append(order)
+        out["fees"] += fee
+        planned[t] = planned.get(t, 0.0) + (worth if side == "buy" else -worth)
+        held_after[c] = held_after.get(c, 0.0) + (worth if side == "buy" else -worth)
+        return worth if side == "buy" else -worth
+
     def orders_for(c, amount, budget=None):
         """The orders for one class's amount, split by what's held there; returns their value (buys +, sales -)."""
         mine = [r for r in rows if r["assetClass"] == c]
@@ -171,33 +228,23 @@ def plan(settings, new_money=0.0, sell=False, fractional=False, picks=None):
         weights = {r["ticker"]: r["value"] for r in mine}
         if not sum(weights.values()):  # the ticker you picked for a class you hold nothing in
             weights = {r["ticker"]: 1.0 for r in mine}
+        limit = cap * (total + new_money)
         for t, part in _split(amount, weights).items():
             row = next(x for x in mine if x["ticker"] == t)
-            per_share = row["price"] * row["fx"]
-            if per_share <= 0:
-                continue
-            decimals = CRYPTO_DECIMALS if c == "Crypto" else (FRACTION_DECIMALS if fractional else 0)
-            shares = _round_down(abs(part) / per_share, decimals)
-            if part < 0:
-                shares = min(shares, row["shares"])
-            worth = shares * per_share
-            if shares <= 0 or worth < MIN_ORDER:
-                if abs(part) >= MIN_ORDER and worth < abs(part):
-                    out["notes"].append(f"{t}: {abs(part):,.0f} {base} is less than one share ({per_share:,.2f} {base}), so no order. "
-                                        "Allow fractional shares if your broker has them.")
-                continue
-            side = "buy" if part > 0 else "sell"
-            order = {"ticker": t, "name": row.get("name"), "side": side, "shares": shares, "limitPrice": row["price"],
-                     "currency": row["currency"], "value": worth, "assetClass": c, "asOf": row["asOf"], "stale": row["stale"],
-                     "reason": f"{c} {val[c] / total:.1%} of the portfolio, target {tgt[c]:.1%}. "
-                               f"{'Sells' if side == 'sell' else 'Buys'} {abs(amount):,.0f} {base} of {c}"
-                               + (f"; {t} is your choice, since you hold nothing in {c} yet." if not val[c] else
-                                  f"; {t} is {weights[t] / sum(weights.values()):.0%} of your {c}, so it takes that share." if len(mine) > 1 else ".")}
-            if side == "sell":
-                order["gain"] = _sale_gain(t, shares, row["price"])
-            out["orders"].append(order)
-            held_after[c] += worth if side == "buy" else -worth
-            moved += worth if side == "buy" else -worth
+            if part > 0 and not _is_core(row):
+                room = max(0.0, limit - row["value"] - planned.get(t, 0.0))
+                if part > room + 1e-9:
+                    overflow.append((t, part - room))
+                    part = room
+                    if part < MIN_ORDER:
+                        continue
+            reason = (f"{c} {val[c] / total:.1%} of the portfolio, target {tgt[c]:.1%}. "
+                      f"{'Sells' if part < 0 else 'Buys'} {abs(amount):,.0f} {base} of {c}"
+                      + (f"; {t} is your choice, since you hold nothing in {c} yet." if not val[c] else
+                         f"; {t} is {weights[t] / sum(weights.values()):.0%} of your {c}, so it takes that share." if len(mine) > 1 else "."))
+            if part > 0 and not _is_core(row) and row["value"] + planned.get(t, 0.0) + part >= limit - 1e-6:
+                reason += f" Stops at your {cap:.0%} limit for one holding."
+            moved += place(row, c, part, reason)
         return moved
 
     held_after = dict(val)
@@ -215,10 +262,26 @@ def plan(settings, new_money=0.0, sell=False, fractional=False, picks=None):
             buys = {c: a * cash / wanted for c, a in buys.items()}
             out["notes"].append(f"Buys are scaled to the {cash:,.0f} {base} available: rounding the sales down raised less than the targets need.")
     spent = sum(orders_for(c, a) for c, a in buys.items())
+    # What holdings at their cap couldn't take goes to your core fund, not to the stocks that have grown most
+    extra = sum(x for _, x in overflow)
+    if extra >= MIN_ORDER:
+        names = ", ".join(sorted({t for t, _ in overflow}))
+        core = sorted((r for r in rows if _is_core(r)), key=lambda r: -r["value"])
+        if core:
+            r = core[0]
+            spent += place(r, r["assetClass"], extra, f"{names} {'is' if ', ' not in names else 'are'} at your {cap:.0%} limit for one holding, "
+                                                         f"so {extra:,.0f} {base} goes to your core fund instead.")
+            out["notes"].append(f"{names} reached your {cap:.0%} limit for one holding: {extra:,.0f} {base} goes to {r['ticker']} (core) instead. "
+                                "Change the limit in Settings.")
+        else:
+            out["notes"].append(f"{names} reached your {cap:.0%} limit for one holding, and you hold no core fund to take the rest: "
+                                f"{extra:,.0f} {base} is left over.")
     out["classes"] = [{"assetClass": c, "target": tgt[c], "now": val[c] / total,
                        "after": held_after[c] / (total + spent - raised) if total + spent - raised else 0} for c in classes]
     out["spend"] = spent - raised  # buys less sales, in the base currency
     out["left"] = new_money + raised - spent  # cash left over (never negative: buys are capped at what's available)
+    if out["fees"]:
+        out["notes"].append(f"Estimated broker costs: about {out['fees']:,.2f} {base} in all, on top of the orders.")
     if not out["orders"] and not out["notes"] and amounts:
         out["notes"].append("Nothing to do: every amount came to less than one order.")
     return out

@@ -156,18 +156,60 @@ function modal(html, onSubmit) {
 }
 
 /* ---------------------------------------------------------------- routing */
-function show(view, push = true) {
-  const other = $(`#view-${view}`).classList.contains("hidden");  // another screen: it opens at its top, not where the last one was scrolled to
+// Six places in the menu (and Ask). A place with several screens shows them as sub-tabs under the search bar; each
+// screen keeps its own address, so links and Back work as before. Portfolio's first four are tabs of one page.
+const GROUPS = {
+  portfolio: [["portfolio/overview", "Overview"], ["portfolio/invest", "Invest"], ["portfolio/performance", "Performance"], ["portfolio/records", "Records & tax"], ["backtest", "Simulate"]],
+  research: [["research", "Research"], ["compare", "Compare"]],
+  discover: [["screener", "Screener"], ["opportunities", "Opportunities"], ["scorecheck", "Score check"]],
+};
+const GROUP_OF = { portfolio: "portfolio", backtest: "portfolio", research: "research", compare: "research", screener: "discover", opportunities: "discover", scorecheck: "discover" };
+const PF_TABS = ["overview", "invest", "performance", "records"];
+function renderSubnav(view) {
+  const g = GROUPS[GROUP_OF[view]], here = view === "portfolio" ? `portfolio/${state.pfTab}` : view;
+  $("#subnav").classList.toggle("hidden", !g);
+  if (!g) return;
+  $("#subnav").innerHTML = g.map(([r, label]) => {
+    const href = r === "research" && state.ticker ? `#research/${state.ticker}` : `#${r}`;
+    return `<a href="${href}" data-route="${r}"${r === here ? ' class="on" aria-current="page"' : ""}>${esc(label)}</a>`;
+  }).join("");
+}
+$("#subnav").addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-route]");
+  if (!a || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  const r = a.dataset.route;
+  // Another tab of the Portfolio page already open: just show it (its figures are already loaded)
+  if (r.startsWith("portfolio/") && !$("#view-portfolio").classList.contains("hidden")) setPfTab(r.split("/")[1], true);
+  else if (r === "research" && state.ticker) openStock(state.ticker); else show(r);
+});
+// Portfolio's tabs: one page, four panels; a chart drawn while its panel was hidden is resized when it shows
+function setPfTab(tab, push = false) {
+  state.pfTab = PF_TABS.includes(tab) ? tab : "overview";
+  $$("#view-portfolio .pf-panel").forEach((el) => el.classList.toggle("hidden", el.dataset.pftab !== state.pfTab));
+  Object.values(state.charts).forEach((c) => { if (c?.canvas && $(`#view-portfolio .pf-panel[data-pftab="${state.pfTab}"]`)?.contains(c.canvas)) c.resize(); });
+  const target = `#portfolio/${state.pfTab}`;
+  if (push && decodeURIComponent(location.hash) !== target) history.pushState(null, "", target);
+  if (GROUP_OF[(location.hash.slice(1).split("/")[0]) || ""] === "portfolio") renderSubnav("portfolio");
+}
+function show(route, push = true) {
+  const [view, sub] = String(route).split("/");
+  const el = view === "scorecheck" ? "backtest" : view;  // Score check is the score research's screen, listed under Discover
+  const other = $(`#view-${el}`).classList.contains("hidden") || (el === "backtest" && state.btRoute !== (view === "scorecheck" ? "score" : "sim"));
   $$(".view").forEach((v) => v.classList.add("hidden"));
-  $(`#view-${view}`).classList.remove("hidden");
+  $(`#view-${el}`).classList.remove("hidden");
   if (other) window.scrollTo(0, 0);
-  $$("#nav a").forEach((a) => { a.classList.toggle("active", a.dataset.view === view); a.toggleAttribute("aria-current", a.dataset.view === view); });
+  const group = GROUP_OF[view] || view;
+  $$("#nav a").forEach((a) => { a.classList.toggle("active", a.dataset.group === group); a.toggleAttribute("aria-current", a.dataset.group === group); });
   if (view === "research" && state.redrawResearch && state.stock) redrawResearch();
+  if (view === "portfolio") setPfTab(sub || state.pfTab || "overview");
+  if (el === "backtest") state.btRoute = view === "scorecheck" ? "score" : "sim";
   if (push) {
-    const target = view === "research" && state.ticker ? `#research/${state.ticker}` : `#${view}`;
+    const target = view === "research" && state.ticker ? `#research/${state.ticker}` : view === "portfolio" ? `#portfolio/${state.pfTab}` : `#${view}`;
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare }[view] || (() => {}))();
+  renderSubnav(view);
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare }[el] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); show(a.dataset.view); });
 
@@ -1627,23 +1669,36 @@ async function loadPortfolio() {
       n ? `No figure on Yahoo for ${c.unknown.map((u) => u.ticker).join(", ")}, so ${n > 1 ? "they're" : "it's"} left out: Set costs lets you enter ${n > 1 ? "them" : "it"}.` : ""].filter(Boolean).join(" ");
     return ["Fund costs / yr", c.funds.length ? money(c.perYear, p.base, 0) : "—", `${lines.join("<br>")}<a href="#" id="pfCostEdit" class="kpi-link">Set costs</a>`, info];
   };
+  // The transactions and the cash at your broker are fetched alongside the portfolio, not after it
+  const txWanted = api("/api/transactions").catch(() => []), cashWanted = loadCash().catch(() => {});
   let p;
   try { p = await api("/api/portfolio"); } catch (e) { t.innerHTML = esc(e.message); return; }
   const b = p.base;
   $("#ordBase").textContent = `(${b})`;
   ordDraft = null; ordPicks = {}; $("#ordPlan").innerHTML = "";  // a draft from before this change in holdings is out of date
   loadOrders(); loadPlan(); loadDivMiss();
+  await cashWanted;
   $("#pfIncomplete").classList.toggle("hidden", !p.incomplete);
   if (p.incomplete) $("#pfIncomplete").innerHTML = missingNote(p);
+  // One answer to "am I doing well": your own return with timing, and what the same money in the benchmark would be
+  // worth now. The other measures (time-weighted, core against satellite) are under Performance, each said for what it is.
+  const gainParts = [[p.pnl, "open"], [p.realised, "sold"], [p.dividends, "dividends"]].filter(([v]) => Math.abs(v) >= 0.5);
+  const sm = p.sameMoney, ahead = sm ? p.total - sm.value : null;
   $("#pfKpis").innerHTML = [
-    ["Total value", money(p.total, b, 0)], ["Invested", money(p.cost, b, 0)], ["Unrealised P&L", `<span class="${cls(p.pnl)}">${money(p.pnl, b, 0)}</span>`, pct(p.pnlPct)],
-    [dayChange(p)[0], `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`, esc(dayChange(p)[1])], ["Realised P&L", `<span class="${cls(p.realised)}">${money(p.realised, b, 0)}</span>`], ["Dividends received", money(p.dividends, b, 0)],
+    ["Total value", money(p.total, b, 0), `${money(p.cost, b, 0)} invested`],
+    ["Total gain", `<span class="${cls(p.totalGain)}">${money(p.totalGain, b, 0)}</span>`, gainParts.length > 1 ? gainParts.map(([v, w]) => `<span class="${cls(v)}">${money(v, b, 0)}</span> ${w}`).join(" · ") : pct(p.pnlPct),
+      "Everything gained: on what you still hold, on what you sold, and the dividends paid."],
+    [dayChange(p)[0], `<span class="${cls(p.dayPnl)}">${money(p.dayPnl, b, 0)}</span>`, esc(dayChange(p)[1])],
     // Under a year, the return so far (not annualised); from a year, the annual return with timing
-    isNum(p.xirr) ? ["Annual return", cpct(p.xirr), "with timing", "Your money's return a year, counting when each amount went in and came out (money-weighted, XIRR)."]
-      : /^Shown after a year/.test(p.xirrWhy || "") && isNum(p.returnSoFar) ? ["Return so far", cpct(p.returnSoFar), "not annualised", "Your return since the first purchase. It becomes a yearly figure once there's a year of history: annualising less than a year exaggerates it."]
-      : ["Annual return", "—", esc(p.xirrWhy || "")],
+    isNum(p.xirr) ? ["Your return", cpct(p.xirr), "a year, with timing", "Your money's return a year, counting when each amount went in and came out (money-weighted, XIRR). The figure to judge your own investing by."]
+      : /^Shown after a year/.test(p.xirrWhy || "") && isNum(p.returnSoFar) ? ["Your return", cpct(p.returnSoFar), "so far, not annualised", "Your return since the first purchase. It becomes a yearly figure once there's a year of history: annualising less than a year exaggerates it."]
+      : ["Your return", "—", esc(p.xirrWhy || "")],
+    ...(sm ? [[`vs ${esc(sm.ticker)}`, `<span class="${cls(ahead)}">${ahead >= 0 ? "+" : "−"}${money(Math.abs(ahead), b, 0)}</span>`, ahead >= 0 ? "ahead of the same money in it" : "behind the same money in it",
+      `Had every purchase gone into ${sm.ticker} on the same date (and every sale and dividend come out of it), it would be worth ${money(sm.value, b, 0)} now; you have ${money(p.total, b, 0)}. This answers "was choosing my own worth it?" better than any percentage.`]] : []),
     ["Est. income / yr", money(p.annualIncome, b, 0), "past year", "Estimated dividend income a year: what each share you hold actually paid over the past year, times the shares you hold now. Accumulating funds (like VWCE) reinvest instead, so they count as 0."],
-    ...(fundCostKpi(p) ? [fundCostKpi(p)] : []), ["Positions", p.positions.length],
+    ...(fundCostKpi(p) ? [fundCostKpi(p)] : []),
+    state.cash?.balance ? ["Cash at broker", money(state.cash.balance.balance, b, 0), `<a href="#portfolio/invest" class="kpi-link">Invest it</a>`, "Recorded deposits less withdrawals, less what you bought, plus sales and dividends since your first deposit. Not included in the total value."]
+      : ["Positions", p.positions.length],
   ].map(([l, v, s, info]) => `<div class="kpi"><div class="l">${l}${info ? ` ${infoIcon(info)}` : ""}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
   if ($("#pfCostEdit")) $("#pfCostEdit").onclick = (e) => { e.preventDefault(); editFundCosts(p.fundCosts); };
   // Nothing bought or sold yet: no row of zeros that looks like a result
@@ -1683,7 +1738,7 @@ async function loadPortfolio() {
   });
   renderCoreSatellite(p);
   if (p.errors?.length) toast(p.errors.join(" · "));
-  const tx = await api("/api/transactions");
+  const tx = await txWanted;
   const curOf = Object.fromEntries(p.positions.map((x) => [x.ticker, x.currency]));
   table($("#txTable"), [
     { k: "date", label: "Date", fmt: (v) => esc(v || "no date") }, { k: "ticker", label: "Ticker", fmt: (v, r) => symLogo(v, r.name) }, { k: "kind", label: "Type", fmt: (v) => esc(v) },
@@ -1704,16 +1759,17 @@ async function loadPortfolio() {
     mkChart("pfPerf", { type: "line", data: { labels: p.performance.dates, datasets: ds }, options: { interaction: { mode: "index", intersect: false }, scales: { x: { ticks: { maxTicksLimit: 8 } } } } });
   }
   const r = p.risk;
-  // Returns say over when; "the same money in the benchmark" says in money whether the choices paid off
+  // The swings of today's holdings; the returns measured other ways are explained together, each for what it answers
   const since = r.since ? new Date(r.since).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
-  const sm = p.sameMoney, ahead = sm ? p.total - sm.value : null;
   $("#pfRisk").innerHTML = [
-    [`Your return ${infoIcon(`Time-weighted since ${since || "your first dated trade"}: how the holdings themselves did, whatever you added when. Early months with a small position count as much as later ones.`)}`, cpct(r.return1y)],
-    [`Benchmark ${infoIcon(`${esc(p.performance?.benchmarkName || "")} over the same days, in ${esc(b)}.`)}`, cpct(r.benchmarkReturn)],
-    ...(sm ? [[`Same money in ${esc(sm.ticker)} ${infoIcon(`What your portfolio would be worth now had every purchase gone into ${sm.ticker} on the same date (and every sale and dividend come out of it). You have ${money(p.total, b, 0)}.`)}`,
-      `${money(sm.value, b, 0)} <span class="sm ${cls(ahead)}">${ahead >= 0 ? "you're" : "you're"} ${money(Math.abs(ahead), b, 0)} ${ahead >= 0 ? "ahead" : "behind"}</span>`]] : []),
     ["Volatility", pct(r.volatility, 1, false)], ["Max drawdown", cpct(r.maxDrawdown)], ["Sharpe", num(r.sharpe)], ["Sortino", num(r.sortino)], ["Beta", num(r.beta)]]
     .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+  $("#pfHow").innerHTML = `<details class="how-returns" open><summary class="sm">How returns are measured</summary><ul class="caveats sm">
+      <li><b>Your return</b> (Overview): ${isNum(p.xirr) ? `${cpct(p.xirr)} a year` : isNum(p.returnSoFar) ? `${cpct(p.returnSoFar)} so far` : "not yet"}, money-weighted: it counts when each amount went in, so it's the return on <i>your</i> money.</li>
+      ${sm ? `<li><b>Same money in ${esc(sm.ticker)}</b>: ${money(sm.value, b, 0)}, against your ${money(p.total, b, 0)}: every purchase had it gone into the benchmark on the same date.</li>` : ""}
+      <li><b>Time-weighted</b>: ${cpct(r.return1y)} since ${esc(since || "your first dated trade")}, against ${cpct(r.benchmarkReturn)} for ${esc(p.performance?.benchmarkName || "the benchmark")} in ${esc(b)} over the same days. How the holdings themselves did, whatever you added when: early months with a small position count as much as later ones, so it can read very differently from your return.</li>
+      <li><b>Core and satellite</b> (below): each bucket's time-weighted return over the days both were held.</li>
+      <li>Volatility, drawdown, Sharpe, Sortino and beta apply today's holdings to the past year.</li></ul></details>`;
   $("#pfWarn").innerHTML = p.warnings.map((w) => `<li class="t-1">${esc(w)}</li>`).join("") || (p.positions.length ? `<li class="t1">No concentration warnings.</li>` : "");
   const pie = (id, obj) => mkChart(id, { type: "doughnut", data: { labels: Object.keys(obj), datasets: [{ data: Object.values(obj), backgroundColor: PALETTE, borderColor: C("--panel"), borderWidth: 2 }] },
     options: { cutout: "62%", plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 } } }, tooltip: { callbacks: { label: (c) => `${c.label}: ${pct(c.raw / p.total, 1, false)}` } } } } });
@@ -1858,6 +1914,7 @@ $("#btnBt").onclick = async () => {
   const b = $("#btnBt"); b.disabled = true;
   try {
     const d = await api("/api/backtest", { method: "POST", body: { ticker: $("#bTicker").value, strategy: $("#bStrat").value, period: $("#bPeriod").value, cost_bps: $("#bCost").value } });
+    $$(".bt-out").forEach((el) => el.classList.remove("hidden"));
     mkChart("btChart", { type: "line", data: { labels: d.dates, datasets: [
       { label: d.label, data: d.equity, borderColor: C("--accent"), borderWidth: 2, pointRadius: 0 },
       { label: "All at once", data: d.buyHold, borderColor: C("--muted"), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0 }] },
@@ -1880,14 +1937,22 @@ function setBtMode(mode, load = true) {
   $("#btPortfolio").classList.toggle("hidden", mode !== "portfolio");
   $("#btScore").classList.toggle("hidden", mode !== "score");
   $("#btModeHint").textContent = BT_HINT[mode];
-  try { localStorage.setItem("btMode", mode); } catch { /* not remembered, but still shown */ }
+  if (mode !== "score") { try { localStorage.setItem("btMode", mode); } catch { /* not remembered, but still shown */ } }
   if (mode === "portfolio" && load) pmLoad().catch((e) => toast(e.message));
   if (mode === "score" && load) loadScoreCheck();
 }
 $$("#btMode button").forEach((b) => b.onclick = () => setBtMode(b.dataset.mode));
-function btMode() { try { const m = localStorage.getItem("btMode"); return ["portfolio", "score"].includes(m) ? m : "single"; } catch { return "single"; } }
+function btMode() { try { const m = localStorage.getItem("btMode"); return m === "portfolio" ? m : "single"; } catch { return "single"; } }
 setBtMode(btMode(), false);
-function loadBacktestView() { if (btMode() === "portfolio") pmLoad().catch((e) => toast(e.message)); if (btMode() === "score") loadScoreCheck(); }
+// Simulate (under Portfolio): a mix, or one asset all at once or monthly. Score check (under Discover) is the same
+// screen's score research, without the switch.
+function loadBacktestView() {
+  const score = state.btRoute === "score";
+  $(".bt-switch").classList.toggle("hidden", score);
+  if (score) { setBtMode("score", false); try { localStorage.setItem("btMode", "single"); } catch { /* fine */ } loadScoreCheck(); return; }
+  const m = btMode(); setBtMode(m, false);
+  if (m === "portfolio") pmLoad().catch((e) => toast(e.message));
+}
 
 /* ---------------------------------------------------------------- tax year */
 // A calendar year's sales (gains and losses, first in, first out) and dividends, in the base currency (tax.py)
@@ -2183,19 +2248,19 @@ function renderDraft() {
   }
   const gain = (o) => !o.gain ? "" : `<div class="ord-gain">gain about <span class="${cls(o.gain.amount)}">${priceOf(o.gain.amount, o)}</span>${o.gain.heldOverYear ? ", held over a year" : o.gain.heldOverYear === false ? ", held under a year" : ""}</div>`;
   el.innerHTML = `<p class="muted sm">${esc(d.rule)} ${infoIcon(ORDER_RULES)}</p>
-    <div class="tablewrap"><table class="ord-table"><thead><tr><th></th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit price</th><th class="num">About (${esc(b)})</th><th>Why</th></tr></thead><tbody>
+    <div class="tablewrap"><table class="ord-table"><thead><tr><th></th><th>Order</th><th>Ticker</th><th class="num">Shares</th><th class="num">Limit price</th><th class="num">About (${esc(b)})</th><th class="num">Fee</th><th>Why</th></tr></thead><tbody>
     ${d.orders.map((o, i) => `<tr data-i="${i}"><td><input type="checkbox" class="ord-on" name="include-${i}" checked aria-label="Include this order"></td>
       <td><b class="${o.side === "buy" ? "up" : "down"}">${o.side === "buy" ? "Buy" : "Sell"}</b></td>
       <td data-stock="${esc(o.ticker)}"><span class="symwrap">${logoOf(o.ticker, o.name)}<span><span class="sym">${esc(o.ticker)}</span>${o.stale ? ' <span class="pill warn">old price</span>' : ""}<span class="sub">${esc(o.name || "")}</span></span></span></td>
       <td class="num"><input type="number" class="ord-shares" name="shares-${i}" min="0" step="any" value="${o.shares}" aria-label="Shares"></td>
       <td class="num"><input type="number" class="ord-limit" name="limit-${i}" min="0" step="any" value="${+o.limitPrice.toFixed(4)}" aria-label="Limit price"> <span class="muted sm">${esc(o.currency)}</span></td>
-      <td class="num">${money(o.value, b, 0)}${gain(o)}</td><td class="sm">${esc(o.reason)}</td></tr>`).join("")}
+      <td class="num">${money(o.value, b, 0)}${gain(o)}</td><td class="num">${o.fee ? money(o.fee, b, 2) : '<span class="muted">—</span>'}</td><td class="sm">${esc(o.reason)}</td></tr>`).join("")}
     </tbody></table></div>
     <div class="ord-after muted sm">After these: ${d.classes.filter((c) => c.target > 0 || c.now > 0 || c.after > 0).map((c) => `${esc(c.assetClass)} ${pct(c.now, 0, false)} → ${pct(c.after, 0, false)} (target ${pct(c.target, 0, false)})`).join(" · ")}.
       ${d.left >= 0.5 ? `About ${money(d.left, b, 0)} of ${d.orders.some((o) => o.side === "sell") ? "the new money and the sales" : "the new money"} is left unspent.` : ""}
       ${d.orders.some((o) => o.side === "sell") && d.orders.some((o) => o.side === "buy") ? "Place the sales first if the buys need their cash." : ""}</div>
     ${notes ? `<ul class="signals">${notes}</ul>` : ""}${picks}
-    <div class="ord-actions"><span class="muted sm">Approving saves them here to place at your broker. Sales may be taxed; fees aren't included.</span>
+    <div class="ord-actions"><span class="muted sm">Approving saves them here to place at your broker. ${d.fees ? `Fees about ${money(d.fees, b, 2)}, from your costs in Settings.` : "Set your broker's fees in Settings to see what each order costs."} Sales may be taxed.</span>
       <button type="button" class="btn ghost ord-discard">Discard</button><button class="btn" id="ordApprove">Approve ticked orders</button></div>`;
   $("#ordApprove").onclick = approveOrders;
   $(".ord-discard", el).onclick = discardDraft;
@@ -2254,7 +2319,42 @@ function markOrderDone(o) {
 
 $("#ordForm").onsubmit = (e) => { e.preventDefault(); prepareOrders(); };
 // The transaction form sits beside the list of transactions; this takes you there from Positions
-$("#pfToRecord").onclick = (e) => { e.preventDefault(); $("#recordCard").scrollIntoView({ behavior: "smooth", block: "start" }); $("#hTicker").focus({ preventScroll: true }); };
+$("#pfToRecord").onclick = (e) => { e.preventDefault(); setPfTab("records", true); $("#recordCard").scrollIntoView({ behavior: "smooth", block: "start" }); $("#hTicker").focus({ preventScroll: true }); };
+
+// ---- Cash at your broker (cash.py): deposits and withdrawals, and what they leave to invest
+async function loadCash() {
+  let d;
+  try { d = await api("/api/cash"); } catch (e) { $("#cashSum").innerHTML = `<p class="muted sm">${esc(e.message)}</p>`; return; }
+  state.cash = d;
+  const b = d.base, c = d.balance;
+  if (!$("#cashCur").options.length || $("#cashCur").dataset.base !== b) {
+    const curs = [...new Set([b, "EUR", "USD", "GBP", "QAR", "CHF", ...Object.keys(state.meta?.currencies || {})])].filter((x) => /^[A-Z]{3}$/.test(x));
+    $("#cashCur").innerHTML = curs.map((x) => `<option${x === b ? " selected" : ""}>${esc(x)}</option>`).join(""); $("#cashCur").dataset.base = b;
+  }
+  if (!$("#cashDate").value) $("#cashDate").value = new Date().toLocaleDateString("en-CA");
+  $("#cashSum").innerHTML = !c ? `<p class="muted sm">Record the money you pay into your broker account, and the app keeps the cash left to invest: deposits, less what you buy, plus what you sell and the dividends paid. Optional.</p>`
+    : `<div class="plan-big ${c.balance < -0.5 ? "down" : ""}">${money(c.balance, b, 0)}<small>to invest, since ${esc(c.since)}${c.approximate ? " (approximate)" : ""}</small></div>
+       <p class="sm muted">Paid in ${money(c.moves.deposits - c.moves.withdrawals, b, 0)} · bought ${money(c.moves.bought, b, 0)} · sold ${money(c.moves.sold, b, 0)} · dividends ${money(c.moves.dividends, b, 0)}${c.undated.length ? ` · left out, no date: ${esc(c.undated.join(", "))}` : ""}</p>`;
+  $("#cashListBox").classList.toggle("hidden", !d.entries.length);
+  $("#cashCount").textContent = d.entries.length ? `(${d.entries.length})` : "";
+  table($("#cashList"), [
+    { k: "date", label: "Date" }, { k: "kind", label: "Type", fmt: (v) => (v === "deposit" ? "Deposit" : "Withdrawal") },
+    { k: "amount", label: "Amount", num: 1, fmt: (v, r) => money(v, r.currency) }, { k: "note", label: "Note", fmt: (v) => esc(v || "") },
+    { k: "id", label: "", fmt: (v) => `<button class="btn danger sm" data-cdel="${v}">Delete</button>` },
+  ], d.entries, { empty: "None recorded." }).afterDraw(() => $$("[data-cdel]", $("#cashList")).forEach((btn) => btn.onclick = async () => {
+    if (!confirm("Delete this cash entry?")) return;
+    try { await api(`/api/cash/${btn.dataset.cdel}`, { method: "DELETE" }); refreshInvest(); } catch (e) { toast(e.message); }
+  }));
+}
+// Cash changed: the cash card, then the plan's figures and the headline (they show the cash too)
+async function refreshInvest() { await loadCash(); loadPlan(); }
+$("#cashForm").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/cash", { method: "POST", body: { kind: $("#cashKind").value, amount: Number($("#cashAmount").value), currency: $("#cashCur").value, date: $("#cashDate").value } });
+    $("#cashAmount").value = ""; toast("Recorded"); refreshInvest();
+  } catch (err) { toast(err.message); }
+};
 
 // ---- Your plan: this month's money and the goal (plan.py)
 async function loadPlan() {
@@ -2266,13 +2366,6 @@ async function loadPlan() {
   const fill = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
   fill("#planMonthly", p.monthly || ""); fill("#planGoal", p.goal || ""); fill("#planBy", p.by || "");
   fill("#planExp", +(p.expected * 100).toFixed(2)); fill("#planInfl", +(p.inflation * 100).toFixed(2));
-  const month = !p.monthly ? `<p class="muted sm">Set what you invest each month: this then shows what's still to go in this month and where, by your targets.</p>`
-    : `<div class="plan-big">${money(m.left, b, 0)}<small>still to invest of ${money(p.monthly, b, 0)}</small></div>
-       <p class="sm">${m.trades ? `${money(m.invested, b, 0)} has gone in this month (${m.trades} trade${m.trades > 1 ? "s" : ""}, purchases less sales).` : "Nothing recorded this month yet."}</p>
-       ${m.orders.length ? `<ul class="plan-buys">${m.orders.map((o) => `<li data-stock="${esc(o.ticker)}" tabindex="0">${logoOf(o.ticker, o.name, 22)}<span><b>${esc(o.ticker)}</b> <span class="muted">${esc(o.assetClass)}</span></span><span class="num">${money(o.value, b, 0)}</span></li>`).join("")}</ul>
-         <button type="button" class="btn sm" id="planToOrders">Prepare these orders</button>` : ""}
-       ${(m.empty || []).length ? `<p class="muted sm">${m.empty.map((e) => `${esc(e.assetClass)} is under target and you hold nothing there: the Orders card asks what to buy.`).join(" ")}</p>` : ""}
-       ${m.notes.length ? `<ul class="caveats sm">${m.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
   let goal;
   if (!p.goal || !p.by) goal = `<p class="muted sm">Set a goal and its date, and this shows the chance of reaching it with what you hold and invest each month.</p>`;
   else if (g.error) goal = `<p class="muted sm">${esc(g.error)}</p>`;
@@ -2283,9 +2376,22 @@ async function loadPlan() {
       <p class="sm">At a steady ${pct(g.realYearly, 1, false)} a year after inflation, ${g.needed > 0 ? `about <b>${money(g.needed, b, 0)} a month</b> reaches it` : "what you hold reaches it without adding more"}${p.monthly && g.needed > 0 ? (short ? `: ${money(g.needed - p.monthly, b, 0)} more than you plan.` : `, within the ${money(p.monthly, b, 0)} you plan.`) : "."}</p>
       ${g.note ? `<p class="muted sm">${esc(g.note)}</p>` : ""}`;
   }
-  el.innerHTML = `<div><h4>${esc(p.month)}</h4>${month}</div><div><h4>On track?</h4>${goal}</div>`;
-  const go = $("#planToOrders");
-  if (go) go.onclick = () => { $("#ordMoney").value = +m.left.toFixed(2); $("#ordFrac").checked = true; $("#ordSell").checked = false; prepareOrders(); $("#ordCard").scrollIntoView({ behavior: "smooth", block: "start" }); };
+  el.innerHTML = `<h4>On track?</h4>${goal}`;
+  renderInvestSum(p);
+}
+// The top of Invest this month: what there is to invest (this month's plan, and the cash at your broker when you
+// record it), and one click to draft the orders for it
+function renderInvestSum(p) {
+  const b = p.base, m = p.thisMonth, c = p.cash;
+  const cashLeft = c && c.balance > 0.5 ? c.balance : 0;
+  const suggest = cashLeft || m.left || 0;
+  const parts = [];
+  if (p.monthly) parts.push(`<div class="inv-fig"><span class="l">This month's plan</span><span class="v">${money(m.left, b, 0)}</span><span class="s">still to go in of ${money(p.monthly, b, 0)}${m.trades ? ` · ${money(m.invested, b, 0)} in so far` : ""}</span></div>`);
+  if (c) parts.push(`<div class="inv-fig"><span class="l">Cash at your broker ${infoIcon("Your recorded deposits less withdrawals, less what you bought, plus sales and dividends, since the first deposit" + (c.approximate ? "; some at today's exchange rate" : "") + ".")}</span><span class="v ${c.balance < 0 ? "down" : ""}">${money(c.balance, b, 0)}</span><span class="s">${c.balance < -0.5 ? "more bought than recorded: add a deposit" : "to invest"}</span></div>`);
+  if (!parts.length) parts.push(`<p class="muted sm">Set what you invest each month in Your plan, or record a deposit under Cash at your broker: the amount to invest then fills in here.</p>`);
+  $("#investSum").innerHTML = `<div class="inv-figs">${parts.join("")}</div>`;
+  // The amount to invest starts as what there is: the cash at your broker, or what's left of this month's plan
+  if (!$("#ordMoney").value && suggest >= 1) $("#ordMoney").value = +suggest.toFixed(2);
 }
 $("#planForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -2583,6 +2689,10 @@ function loadSettings() {
   $("#sBase").value = s.base_currency; $("#sRf").value = (s.risk_free_rate * 100).toFixed(2); $("#sBench").value = s.benchmark;
   $("#targetInputs").innerHTML = Object.entries(s.targets).map(([k, v]) => `<label>${esc(k)} %<input type="number" name="target-${esc(k)}" data-tgt="${esc(k)}" value="${esc(v)}"></label>`).join("");
   $("#sCore").value = s.core_target;
+  const co = s.costs || {};
+  $("#sMaxHold").value = s.max_holding ?? 10; $("#sFeeBase").textContent = `(${s.base_currency})`;
+  $("#sFeeFixed").value = co.fixed || ""; $("#sFeePct").value = co.pct ? +(co.pct * 100).toFixed(4) : ""; $("#sFeeFx").value = co.fx_pct ? +(co.fx_pct * 100).toFixed(4) : "";
+  $("#sFeeDrag").value = +((co.max_drag ?? 0.01) * 100).toFixed(3);
   showTargetClash();
   $("#targetInputs").oninput = $("#sCore").oninput = () => showTargetClash();
   $("#sRegions").innerHTML = state.meta.regions.map((r) => `<label><input type="checkbox" name="region" value="${esc(r)}" data-region="${esc(r)}" ${(s.regions || state.meta.regions).includes(r) ? "checked" : ""}> ${esc(r)}</label>`).join("");
@@ -2623,14 +2733,16 @@ function settingsShown() {
     w: $$("[data-w]").map((r) => Number(r.value)), tg: $$("[data-tgt]").map((i) => num(i.value)), core: num($("#sCore").value),
     regions: set($$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region)),
     tiles: set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile)),
-    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value, copyDir: $("#sBackupCopy").value.trim(), privacy: $("#sAiPrivacy").checked };
+    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value, copyDir: $("#sBackupCopy").value.trim(), privacy: $("#sAiPrivacy").checked,
+    maxHold: num($("#sMaxHold").value), fees: ["#sFeeFixed", "#sFeePct", "#sFeeFx", "#sFeeDrag"].map((id) => num($(id).value || 0)) };
 }
 function settingsSaved() {
   const s = state.meta.settings, num = (v) => Math.round(Number(v) * 1e6) / 1e6;
   return { base: s.base_currency, rf: num((s.risk_free_rate * 100).toFixed(2)), bench: s.benchmark,
     w: Object.values(s.weights).map((v) => Math.round(v * 100)), tg: Object.values(s.targets).map(num), core: num(s.core_target),
     regions: [...(s.regions || state.meta.regions)].sort(), tiles: [...s.dashboard_tiles].sort(),
-    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "", copyDir: s.backup_copy_dir || "", privacy: !!s.ai_privacy };
+    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "", copyDir: s.backup_copy_dir || "", privacy: !!s.ai_privacy,
+    maxHold: num(s.max_holding ?? 10), fees: [s.costs?.fixed || 0, (s.costs?.pct || 0) * 100, (s.costs?.fx_pct || 0) * 100, (s.costs?.max_drag ?? 0.01) * 100].map(num) };
 }
 function markUnsaved() {
   const dirty = JSON.stringify(settingsShown()) !== JSON.stringify(settingsSaved()), msg = $("#settingsMsg");
@@ -2819,6 +2931,10 @@ $("#btnSaveSettings").onclick = async () => {
     core_target: Number($("#sCore").value), regions: $$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region) };
   if (!body.regions.length) return toast("Follow at least one region.");
   Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked, backup_copy_dir: $("#sBackupCopy").value.trim(), ai_privacy: $("#sAiPrivacy").checked });
+  const maxHold = Number($("#sMaxHold").value);
+  if (!(maxHold >= 1 && maxHold <= 100)) return toast("The most in one holding is a percentage from 1 to 100.");
+  Object.assign(body, { max_holding: maxHold, costs: { fixed: Number($("#sFeeFixed").value || 0), pct: Number($("#sFeePct").value || 0) / 100,
+    fx_pct: Number($("#sFeeFx").value || 0) / 100, max_drag: Number($("#sFeeDrag").value || 1) / 100 } });
   const copyBefore = state.meta.settings.backup_copy_dir || "";
   // Saved only once chosen, so "not chosen" stays visible to the first-run checklist
   if ($("#sTaxRes").value || state.meta.settings.tax_residence) body.tax_residence = $("#sTaxRes").value;
@@ -2993,7 +3109,8 @@ function renderMarketChoices() {
   const route = () => {
     const [view, arg] = location.hash.slice(1).split("/");
     if (view === "research" && arg) openStock(decodeURIComponent(arg));
-    else show(view && document.getElementById(`view-${view}`) ? view : "dashboard", false);
+    else if (view === "portfolio" && $("#view-portfolio").classList.contains("hidden") === false && arg) setPfTab(arg);  // a tab of the page already open
+    else show(view === "scorecheck" || (view && document.getElementById(`view-${view}`)) ? (view === "portfolio" && arg ? `portfolio/${arg}` : view) : "dashboard", false);
   };
   window.addEventListener("hashchange", route);
   route();

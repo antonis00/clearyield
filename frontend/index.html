@@ -18,16 +18,13 @@
 <aside class="side">
   <a class="brand" href="#dashboard" data-goto="dashboard" title="Dashboard"><img class="brand-mark" src="/static/favicon.svg" alt=""><span>ClearYield</span></a>
   <nav id="nav">
-    <a href="#dashboard" data-view="dashboard" class="active">Dashboard</a>
-    <a href="#research" data-view="research">Research</a>
-    <a href="#portfolio" data-view="portfolio">Portfolio</a>
-    <a href="#opportunities" data-view="opportunities">Opportunities</a>
-    <a href="#compare" data-view="compare">Compare</a>
-    <a href="#screener" data-view="screener">Screener</a>
-    <a href="#backtest" data-view="backtest">Backtest</a>
-    <a href="#journal" data-view="journal">Journal &amp; Alerts</a>
-    <a href="#settings" data-view="settings">Settings</a>
-    <a href="#ask" data-view="ask" class="nav-ask"><span class="nav-ico nav-mark" aria-hidden="true">◆</span> Ask ClearYieldAI</a>
+    <a href="#dashboard" data-view="dashboard" data-group="dashboard" class="active" title="Dashboard" aria-label="Dashboard"><span class="nav-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="9" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.5"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.5"/><rect x="3" y="15" width="7.5" height="6" rx="1.5"/></svg></span><span class="nav-label">Dashboard</span><span class="nav-short">Home</span></a>
+    <a href="#portfolio" data-view="portfolio" data-group="portfolio" title="Portfolio" aria-label="Portfolio"><span class="nav-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M14.5 2.6A9 9 0 0 1 21.4 9.5H14.5z"/></svg></span><span class="nav-label">Portfolio</span><span class="nav-short">Portfolio</span></a>
+    <a href="#research" data-view="research" data-group="research" title="Research" aria-label="Research"><span class="nav-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 7-9" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 21h18" fill="none" stroke-width="2" stroke-linecap="round"/></svg></span><span class="nav-label">Research</span><span class="nav-short">Research</span></a>
+    <a href="#screener" data-view="screener" data-group="discover" title="Discover" aria-label="Discover"><span class="nav-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke-width="2.2"/><path d="M15.5 15.5L21 21" fill="none" stroke-width="2.4" stroke-linecap="round"/></svg></span><span class="nav-label">Discover</span><span class="nav-short">Discover</span></a>
+    <a href="#journal" data-view="journal" data-group="journal" title="Journal &amp; Alerts" aria-label="Journal &amp; Alerts"><span class="nav-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h11a2 2 0 0 1 2 2v16l-4-2-4 2-4-2-3 1.5V5a2 2 0 0 1 2-2z"/><path d="M8 8h7M8 12h7" fill="none" stroke-width="1.8" stroke-linecap="round" class="ink"/></svg></span><span class="nav-label">Journal &amp; Alerts</span><span class="nav-short">Journal</span></a>
+    <a href="#settings" data-view="settings" data-group="settings" title="Settings" aria-label="Settings"><span class="nav-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M10.3 2h3.4l.5 2.6 1.9.8 2.2-1.5 2.4 2.4-1.5 2.2.8 1.9 2.6.5v3.4l-2.6.5-.8 1.9 1.5 2.2-2.4 2.4-2.2-1.5-1.9.8-.5 2.6h-3.4l-.5-2.6-1.9-.8-2.2 1.5-2.4-2.4 1.5-2.2-.8-1.9L2 13.7v-3.4l2.6-.5.8-1.9-1.5-2.2 2.4-2.4 2.2 1.5 1.9-.8z"/><circle cx="12" cy="12" r="3.2" class="hole"/></svg></span><span class="nav-label">Settings</span><span class="nav-short">Settings</span></a>
+    <a href="#ask" data-view="ask" data-group="ask" class="nav-ask" title="Ask ClearYieldAI" aria-label="Ask ClearYieldAI"><span class="nav-ico nav-mark" aria-hidden="true">◆</span> <span class="nav-label">Ask ClearYieldAI</span><span class="nav-short">Ask</span></a>
   </nav>
   <div class="side-foot" id="modeBadge"></div>
 </aside>
@@ -40,6 +37,7 @@
     </div>
     <div id="bgProgress" class="bg-progress hidden" tabindex="0" role="status"></div>
   </header>
+  <nav id="subnav" class="subnav hidden" aria-label="Sections"></nav>
 
   <!-- DASHBOARD -->
   <section id="view-dashboard" class="view">
@@ -279,9 +277,42 @@
   <!-- PORTFOLIO -->
   <section id="view-portfolio" class="view hidden">
     <div id="pfIncomplete" class="alertbar hidden"></div>
+    <div class="pf-panel" data-pftab="overview">
     <div id="pfKpis" class="kpis big"></div>
-    <div class="card"><div class="card-h"><h3>Positions</h3><a href="#portfolio" class="btn ghost sm" id="pfToRecord">+ Record a transaction</a></div><div id="pfTable" class="tablewrap"></div></div>
-    <div class="card hidden" id="divMissCard"><div class="card-h"><h3>Dividends not recorded</h3><span class="muted sm">Yahoo lists these as paid while you held the shares. Record what your broker paid.</span></div><div id="divMiss" class="tablewrap"></div></div>
+    <div class="card"><div class="card-h"><h3>Positions</h3><a href="#portfolio/records" class="btn ghost sm" id="pfToRecord">+ Record a transaction</a></div><div id="pfTable" class="tablewrap"></div></div>
+    <div class="grid4">
+      <div class="card"><h4>Asset class</h4><canvas id="aAsset"></canvas></div>
+      <div class="card"><h4>Region</h4><canvas id="aRegion"></canvas></div>
+      <div class="card"><h4>Sector, opening up funds</h4><canvas id="aSector"></canvas></div>
+      <div class="card"><h4>Currency, opening up funds</h4><canvas id="aCur"></canvas><div class="muted sm" id="aCurNote"></div></div>
+    </div>
+    </div>
+    <div class="pf-panel hidden" data-pftab="invest">
+    <div class="card" id="ordCard">
+      <div class="card-h"><h3>Invest this month</h3><span class="muted sm">Orders from your plan and targets. You approve them and place them at your broker: ClearYield never trades.</span></div>
+      <div id="investSum" class="invest-sum"></div>
+      <form id="ordForm" class="form-row inline ord-form">
+        <label><span>Amount to invest <span id="ordBase"></span></span><input type="number" id="ordMoney" min="0" step="any" placeholder="0"></label>
+        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordFrac" role="switch" checked><span></span></span><span>Fractional shares</span></label>
+        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordSell" role="switch"><span></span></span><span>Rebalance by selling too</span></label>
+        <button class="btn ord-go">Prepare orders</button>
+      </form>
+      <div id="ordPlan"></div>
+      <div id="ordOpen"></div>
+    </div>
+    <div class="grid2 invest-side">
+    <div class="card" id="cashCard">
+      <div class="card-h"><h3>Cash at your broker</h3><span class="muted sm">Record what you pay in and take out</span></div>
+      <div id="cashSum"></div>
+      <form id="cashForm" class="form-row inline cash-form">
+        <label><span>Type</span><select id="cashKind" name="cash-kind"><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option></select></label>
+        <label><span>Amount</span><input type="number" id="cashAmount" name="cash-amount" min="0" step="any" placeholder="0"></label>
+        <label><span>Currency</span><select id="cashCur" name="cash-currency"></select></label>
+        <label><span>Date</span><input type="date" id="cashDate" name="cash-date"></label>
+        <button class="btn">Record</button>
+      </form>
+      <details id="cashListBox" class="hidden"><summary class="muted sm">Deposits and withdrawals <span id="cashCount"></span></summary><div id="cashList" class="tablewrap"></div></details>
+    </div>
     <div class="card" id="planCard">
       <div class="card-h"><h3>Your plan</h3><span class="muted sm">What you invest each month, and the goal it's for</span></div>
       <form id="planForm" class="form-row inline plan-form">
@@ -292,23 +323,19 @@
         <label><span>Inflation %</span><input type="number" id="planInfl" step="0.5" min="0" max="15"></label>
         <button class="btn plan-go">Save plan</button>
       </form>
-      <div id="planOut" class="grid2 plan-out"></div>
+      <div id="planOut" class="plan-out"></div>
+    </div>
     </div>
     <div class="card">
-      <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Targets are set in Settings</span></div>
+      <div class="card-h"><h3>Rebalancing</h3><span class="muted sm">Where each class stands against your targets, set in Settings</span></div>
       <div id="pfRebal" class="tablewrap"></div>
       <div id="pfRebalNote" class="muted sm" style="margin-top:8px"></div>
     </div>
-    <div class="card" id="ordCard">
-      <div class="card-h"><h3>Orders</h3><span class="muted sm">Prepared from your targets. You approve them and place them at your broker: ClearYield never trades.</span></div>
-      <form id="ordForm" class="form-row inline ord-form">
-        <label><span>New money <span id="ordBase"></span></span><input type="number" id="ordMoney" min="0" step="any" placeholder="0"></label>
-        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordFrac" role="switch" checked><span></span></span><span>Fractional shares</span></label>
-        <label class="ord-opt"><span class="switch"><input type="checkbox" id="ordSell" role="switch"><span></span></span><span>Rebalance by selling too</span></label>
-        <button class="btn ord-go">Suggest orders</button>
-      </form>
-      <div id="ordPlan"></div>
-      <div id="ordOpen"></div>
+    </div>
+    <div class="pf-panel hidden" data-pftab="performance">
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Your performance vs benchmark (up to 1Y)</h3></div><canvas id="pfPerf" height="200"></canvas><div class="muted sm" id="pfNote"></div></div>
+      <div class="card"><div class="card-h"><h3>Risk</h3><span class="muted sm">Today's holdings over the past year</span></div><div id="pfRisk" class="statgrid"></div><div id="pfHow"></div><ul id="pfWarn" class="signals"></ul></div>
     </div>
     <div class="card hidden" id="csCard">
       <div class="card-h"><h3>Core &amp; satellite</h3><span class="muted sm">Broad index funds start as core, everything else as satellite. Switch any holding in Positions; set the target in Settings.</span></div>
@@ -317,16 +344,9 @@
         <div><canvas id="csPerf" height="150"></canvas><div id="csPerfNote" class="muted sm"></div></div>
       </div>
     </div>
-    <div class="grid2">
-      <div class="card"><div class="card-h"><h3>Your performance vs benchmark (up to 1Y)</h3></div><canvas id="pfPerf" height="200"></canvas><div class="muted sm" id="pfNote"></div></div>
-      <div class="card"><div class="card-h"><h3>Risk</h3><span class="muted sm">Returns are what you earned. The rest applies today's holdings to the past year.</span></div><div id="pfRisk" class="statgrid"></div><ul id="pfWarn" class="signals"></ul></div>
     </div>
-    <div class="grid4">
-      <div class="card"><h4>Asset class</h4><canvas id="aAsset"></canvas></div>
-      <div class="card"><h4>Region</h4><canvas id="aRegion"></canvas></div>
-      <div class="card"><h4>Sector, opening up funds</h4><canvas id="aSector"></canvas></div>
-      <div class="card"><h4>Currency, opening up funds</h4><canvas id="aCur"></canvas><div class="muted sm" id="aCurNote"></div></div>
-    </div>
+    <div class="pf-panel hidden" data-pftab="records">
+    <div class="card hidden" id="divMissCard"><div class="card-h"><h3>Dividends not recorded</h3><span class="muted sm">Yahoo lists these as paid while you held the shares. Record what your broker paid.</span></div><div id="divMiss" class="tablewrap"></div></div>
     <div class="card" id="recordCard">
       <div class="card-h"><h3>Record a transaction</h3><span class="muted sm">Prices in the asset's trading currency. Add the date so P&amp;L includes currency moves.</span></div>
       <div class="form-row">
@@ -369,11 +389,12 @@
       <ul id="taxNotes" class="signals"></ul>
       <div id="taxSources" class="muted sm"></div>
     </div>
+    </div>
   </section>
 
   <!-- BACKTEST -->
   <section id="view-backtest" class="view hidden">
-    <div class="form-row bt-switch"><div class="seg" id="btMode"><button data-mode="single" class="on">Single asset</button><button data-mode="portfolio">Portfolio</button><button data-mode="score">Score check</button></div>
+    <div class="form-row bt-switch"><div class="seg" id="btMode"><button data-mode="portfolio">Portfolio mix</button><button data-mode="single" class="on">One asset</button></div>
       <span class="muted sm" id="btModeHint">One asset, one trading rule.</span></div>
     <div id="btPortfolio" class="hidden">
       <div class="card">
@@ -443,8 +464,8 @@
         <button class="btn" id="btnBt">Run backtest</button>
       </div>
     </div>
-    <div class="card"><div class="card-h"><h3>10,000 invested: all at once or monthly</h3></div><canvas id="btChart" height="110"></canvas></div>
-    <div class="grid2">
+    <div class="card hidden bt-out"><div class="card-h"><h3>10,000 invested: all at once or monthly</h3></div><canvas id="btChart" height="110"></canvas></div>
+    <div class="grid2 hidden bt-out">
       <div class="card"><div class="card-h"><h3>Results</h3></div><div id="btTable" class="tablewrap"></div></div>
       <div class="card"><div class="card-h"><h3>Read before trusting this</h3></div><ul id="btCaveats" class="signals"></ul></div>
     </div>
@@ -493,7 +514,7 @@
   <section id="view-settings" class="view hidden">
     <div class="grid2 settings-grid">
       <!-- In rows, so cards side by side end on the same line: General | tiles, then how you invest (weights,
-           targets) | your data (backups, AI privacy), then email | save -->
+           targets, order rules) | your data (backups, AI privacy, email), then save across both -->
       <div class="card">
         <div class="card-h"><h3>General</h3></div>
         <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
@@ -529,6 +550,14 @@
           <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
           <div class="form-row targets"><span id="targetInputs"></span><label><span>Core target % <span class="info" tabindex="0" role="img" aria-label="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it." data-tip="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it.">i</span></span><input type="number" id="sCore" min="0" max="100" step="5"></label></div>
           <div id="tgtClash" class="tgt-clash hidden" role="status"></div>
+          <h4 class="set-sub">Orders</h4>
+          <div class="form-row targets">
+            <label><span>Max per holding % <span class="info" tabindex="0" role="img" aria-label="New money never takes one holding above this share of the portfolio; broad index funds apart. What a holding at its limit can't take goes to your core fund." data-tip="New money never takes one holding above this share of the portfolio; broad index funds apart. What a holding at its limit can't take goes to your core fund.">i</span></span><input type="number" id="sMaxHold" min="1" max="100" step="1"></label>
+            <label><span>Fee per order <span id="sFeeBase"></span></span><input type="number" id="sFeeFixed" min="0" step="any" placeholder="0"></label>
+            <label><span>Fee %</span><input type="number" id="sFeePct" min="0" max="5" step="0.01" placeholder="0"></label>
+            <label><span>FX fee %</span><input type="number" id="sFeeFx" min="0" max="5" step="0.05" placeholder="0"></label>
+            <label><span>Skip if fee over % <span class="info" tabindex="0" role="img" aria-label="An order whose fee would be more than this share of it is left for next month, when the money can go in one larger order." data-tip="An order whose fee would be more than this share of it is left for next month, when the money can go in one larger order.">i</span></span><input type="number" id="sFeeDrag" min="0.1" max="20" step="0.1"></label>
+          </div>
         </div>
       </div>
       <div class="settings-stack set-data">
@@ -546,14 +575,14 @@
           <p class="sm" style="margin: 0">Hide your amounts from the AI. Ask then sends your weights, percentages and returns, never how much money you hold, gained, invest or owe in tax, nor how many shares.</p>
           <p class="muted sm" id="privacyNote" style="margin: 6px 0 0"></p>
         </div>
-      </div>
-      <div class="card set-email">
-        <div class="card-h"><h3>Email alerts</h3><label class="switch"><input type="checkbox" id="sEmailOn" role="switch" aria-label="Email alerts"><span></span></label></div>
-        <div class="email-row">
-          <input type="email" id="sEmail" placeholder="name@example.com" autocomplete="email" maxlength="254" aria-label="Email address for alerts">
-          <button class="btn ghost" id="btnTestEmail">Send test</button>
+        <div class="card set-email">
+          <div class="card-h"><h3>Email alerts</h3><label class="switch"><input type="checkbox" id="sEmailOn" role="switch" aria-label="Email alerts"><span></span></label></div>
+          <div class="email-row">
+            <input type="email" id="sEmail" placeholder="name@example.com" autocomplete="email" maxlength="254" aria-label="Email address for alerts">
+            <button class="btn ghost" id="btnTestEmail">Send test</button>
+          </div>
+          <p id="emailStatus" class="muted sm"></p>
         </div>
-        <p id="emailStatus" class="muted sm"></p>
       </div>
       <div class="card save-card">
         <div><div id="settingsMsg">No unsaved changes</div><div class="muted sm">Theme and tiles change at once; the rest when you save.</div></div>
