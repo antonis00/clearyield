@@ -478,7 +478,8 @@ const SLOW = 150000;
     && /Deadline: Return for 2025/.test(de.text) && /QNBK\.QA/.test(de.text) && de.report === "/api/tax/report?year=2025" && de.opts === 4 && de.sources >= 3 && !/undefined|NaN/.test(de.text),
     de.text.slice(0, 220));
   await p.evaluate(() => { document.querySelector("#taxSetup").open = true; });
-  await p.selectOption('[data-topt="church"]', "9"); await p.waitForTimeout(1500);
+  await p.selectOption('[data-topt="church"]', "9");
+  await p.waitForFunction(() => /27\.995%/.test(document.querySelector("#taxLines")?.innerText || ""), null, { timeout: SLOW }).catch(() => {});  // the year worked out again
   const church = await p.evaluate(async () => (await (await fetch("/api/meta")).json()).settings.tax_options.DE);
   expect("portfolio: a tax question's answer is saved and used", church.church === 9 && /27\.995%/.test(await txt("#taxLines")), JSON.stringify(church));
   const report = await p.evaluate(async () => { const r = await fetch("/api/tax/report?year=2025"); return { ok: r.ok, text: await r.text() }; });
@@ -1040,7 +1041,26 @@ const SLOW = 150000;
   await Promise.all([p.waitForResponse((r) => r.url().endsWith("/api/startup"), { timeout: SLOW }), p.click("#startupOpt .switch")]); await p.waitForTimeout(200);
   expect("settings: and off again", !(await p.evaluate(async () => (await (await fetch("/api/startup")).json()).enabled)) && !(await p.isChecked("#sStartup")));
   expect("settings: automatic daily backups, with the latest, and a second folder offered", /Backed up automatically every day to \S+\\backups, the last 14 kept · latest \d{4}-\d\d-\d\d\. A restore saves what it replaces/.test(await txt("#autoBackupNote"))
-    && /Only on this disk for now/.test(await txt("#backupCopyNote")) && (await p.locator("#sBackupCopy").isVisible()), `${await txt("#autoBackupNote")} | ${await txt("#backupCopyNote")}`);
+    && /Only on this disk for now/.test(await txt("#backupCopyNote")) && (await p.locator("#sBackupCopy").isVisible()) && (await p.locator("#btnBrowseCopy").isVisible()), `${await txt("#autoBackupNote")} | ${await txt("#backupCopyNote")}`);
+  // Browse opens the app's own folder picker at once: drives and places, a folder's subfolders, cancel changes nothing
+  const fpStart = Date.now();
+  await p.click("#btnBrowseCopy"); await p.waitForSelector(".fp-place");
+  const fpOpened = Date.now() - fpStart;
+  await p.locator(".fp-place").first().click(); await p.waitForFunction(() => document.querySelector("#fpChosen").textContent.length > 1);
+  const fp = await p.evaluate(() => ({ places: document.querySelectorAll(".fp-place").length, chosen: document.querySelector("#fpChosen").textContent,
+    use: !document.querySelector("#fpUse").disabled, crumbs: document.querySelectorAll(".fp-crumb").length }));
+  await p.click("#fpUse"); await p.waitForTimeout(200);
+  const fpBox = await p.inputValue("#sBackupCopy");
+  await p.fill("#sBackupCopy", ""); await p.locator("#sBackupCopy").dispatchEvent("input");
+  expect("settings: Browse opens the app's own folder picker quickly, and the folder chosen fills the box", fp.places >= 1 && fp.chosen && fp.use && fp.crumbs >= 1
+    && fpBox === fp.chosen && fpOpened < 1500 && (await p.evaluate(() => document.querySelector("#modal").classList.contains("hidden"))), JSON.stringify({ ...fp, fpBox, fpOpened }));
+  // AI privacy: a switch, off by default, saying what it does; turning it on shows as unsaved
+  const priv0 = { on: await p.isChecked("#sAiPrivacy"), note: await txt("#privacyNote") };
+  await p.locator("#sAiPrivacy").evaluate((el) => { el.checked = true; el.dispatchEvent(new Event("change", { bubbles: true })); });
+  const priv1 = { note: await txt("#privacyNote"), unsaved: await txt("#settingsMsg") };
+  await p.locator("#sAiPrivacy").evaluate((el) => { el.checked = false; el.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect("settings: AI privacy is a switch, off by default, explained; a change is unsaved until saved",
+    !priv0.on && /^Off:/.test(priv0.note) && /^On:/.test(priv1.note) && /Unsaved/.test(priv1.unsaved) && /No unsaved/.test(await txt("#settingsMsg")), JSON.stringify({ priv0, priv1 }));
   // The save card says when something is unsaved, and Discard puts the saved values back
   const saveMsg = () => txt("#settingsMsg");
   const asiaWas = await p.isChecked('#sRegions [data-region="Asia-Pacific"]');

@@ -1207,6 +1207,10 @@ function renderAskSetup() {
   const a = state.meta?.aiInfo;
   requestAnimationFrame(() => $("#askInput").focus({ preventScroll: true }));  // ready to type, as in a chat
   if (!a?.on) $("#askStatus").textContent = a?.problem ? `AI isn't set up: ${a.problem}` : "Ask needs an AI provider. Set AI_PROVIDER in .env (see .env.example), then restart the app.";
+  // Where the question and what Ask looks up go, said before the first question
+  const hidden = !!state.meta?.settings?.ai_privacy;
+  $("#askWhere").innerHTML = !a?.on ? "" : `Your question and what Ask looks up for it go to <b>${esc(a.model)}</b> on ${esc(a.server)}. `
+    + (hidden ? 'Your amounts are hidden from it (<a href="#settings">Settings › AI privacy</a>).' : 'That includes your amounts: you can hide them in <a href="#settings">Settings › AI privacy</a>.');
 }
 // A step as the page lists it, with its pages for a web search
 const askStepLi = (s) => `<li class="${s.ok ? "" : "warn"}">${esc((ASK_STEP[s.tool] || (() => s.tool))(s.args || {}))}${s.ok ? "" : ` <span class="muted">(${esc(s.error || "failed")})</span>`}${webLinks(s)}</li>`;
@@ -2586,10 +2590,13 @@ function loadSettings() {
   const ab = state.meta.autoBackup;
   $("#autoBackupNote").textContent = ab ? `Backed up automatically every day to ${ab.folder.split(/[\\/]/).slice(-2).join("\\")}, the last ${ab.keep} kept${ab.last ? ` · latest ${ab.last}` : ""}. A restore saves what it replaces there first.` : "";
   $("#sBackupCopy").value = s.backup_copy_dir || "";
+  if (!state.fpWarm) { state.fpWarm = true; api("/api/folders").catch(() => {}); }  // so Browse opens at once
+  $("#sAiPrivacy").checked = !!s.ai_privacy; privacySwitched();
   // Same disk only, until a second folder is set: a failed or stolen disk would take the backups with it
   const cn = $("#backupCopyNote");
-  cn.className = `sm ${ab?.copyError ? "down" : ab?.copyFolder ? "up" : "muted"}`;
+  cn.className = `sm ${ab?.copyError ? "down" : ab?.copyFolder ? (sameDrive(ab.copyFolder, ab.folder) ? "amber" : "up") : "muted"}`;
   cn.textContent = !ab ? "" : ab.copyError ? `The copy failed: ${ab.copyError}. Check the folder exists and can be written to.`
+    : ab.copyFolder && sameDrive(ab.copyFolder, ab.folder) ? `Copied there too, but it's on the same drive (${ab.copyFolder.slice(0, 2).toUpperCase()}) as the app's data, so a failed disk would take both: a USB drive or another disk is safer.`
     : ab.copyFolder ? `Copied there too${ab.copyLast ? ` · latest ${ab.copyLast}` : ""}, with the frozen score research.`
     : "Only on this disk for now: set a second folder so a failed disk doesn't take the backups with it.";
   const st = state.meta.startup;
@@ -2606,20 +2613,22 @@ $("#sStartup").onchange = async () => {
 };
 // What Save would change, compared in the form's own units (whole-percent sliders, sets for ticked boxes), so the save
 // card can say when something is unsaved. Theme, custom tiles and backups apply at once and aren't part of it.
+// Two paths on the same Windows drive (C:\\... and C:\\...): a backup copy there doesn't survive the disk failing
+const sameDrive = (a, b) => /^[a-z]:/i.test(a || "") && (a || "").slice(0, 2).toLowerCase() === (b || "").slice(0, 2).toLowerCase();
 function settingsShown() {
   const num = (v) => (String(v).trim() === "" ? null : Math.round(Number(v) * 1e6) / 1e6), set = (a) => [...a].sort();
   return { base: $("#sBase").value, rf: num($("#sRf").value), bench: $("#sBench").value.trim().toUpperCase() || "SPY",
     w: $$("[data-w]").map((r) => Number(r.value)), tg: $$("[data-tgt]").map((i) => num(i.value)), core: num($("#sCore").value),
     regions: set($$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region)),
     tiles: set($$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile)),
-    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value, copyDir: $("#sBackupCopy").value.trim() };
+    email: $("#sEmail").value.trim(), emailOn: $("#sEmailOn").checked, taxRes: $("#sTaxRes").value, copyDir: $("#sBackupCopy").value.trim(), privacy: $("#sAiPrivacy").checked };
 }
 function settingsSaved() {
   const s = state.meta.settings, num = (v) => Math.round(Number(v) * 1e6) / 1e6;
   return { base: s.base_currency, rf: num((s.risk_free_rate * 100).toFixed(2)), bench: s.benchmark,
     w: Object.values(s.weights).map((v) => Math.round(v * 100)), tg: Object.values(s.targets).map(num), core: num(s.core_target),
     regions: [...(s.regions || state.meta.regions)].sort(), tiles: [...s.dashboard_tiles].sort(),
-    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "", copyDir: s.backup_copy_dir || "" };
+    email: s.alert_email || "", emailOn: !!s.email_alerts, taxRes: s.tax_residence || "", copyDir: s.backup_copy_dir || "", privacy: !!s.ai_privacy };
 }
 function markUnsaved() {
   const dirty = JSON.stringify(settingsShown()) !== JSON.stringify(settingsSaved()), msg = $("#settingsMsg");
@@ -2807,7 +2816,7 @@ $("#btnSaveSettings").onclick = async () => {
     dashboard_tiles: $$("[data-tile]").filter((i) => i.checked).map((i) => i.dataset.tile),
     core_target: Number($("#sCore").value), regions: $$("[data-region]").filter((i) => i.checked).map((i) => i.dataset.region) };
   if (!body.regions.length) return toast("Follow at least one region.");
-  Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked, backup_copy_dir: $("#sBackupCopy").value.trim() });
+  Object.assign(body, { alert_email: $("#sEmail").value.trim(), email_alerts: $("#sEmailOn").checked, backup_copy_dir: $("#sBackupCopy").value.trim(), ai_privacy: $("#sAiPrivacy").checked });
   const copyBefore = state.meta.settings.backup_copy_dir || "";
   // Saved only once chosen, so "not chosen" stays visible to the first-run checklist
   if ($("#sTaxRes").value || state.meta.settings.tax_residence) body.tax_residence = $("#sTaxRes").value;
@@ -2824,6 +2833,66 @@ $("#btnSaveSettings").onclick = async () => {
 };
 $("#btnClearCache").onclick = async () => { await api("/api/cache/clear", { method: "POST" }); toast("Everything will refresh on its next use"); };
 
+// The folder picker: the app's own panel over the folders on this computer (GET /api/folders), so it opens at once
+// and matches the theme. Drives and the usual places on the left, the folder's subfolders on the right; a click opens a
+// folder, "Use this folder" takes the one shown.
+const FP_ICON = {
+  folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2H19.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="currentColor"/></svg>',
+  drive: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="17" cy="12" r="1.3" fill="currentColor"/></svg>',
+};
+async function pickFolder({ title, start }) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; $("#modal").classList.add("hidden"); $("#modalCard").classList.remove("fp-card"); resolve(v); } };
+    modal(`<div class="fp">
+      <div class="fp-head"><h3>${esc(title)}</h3><button type="button" class="btn ghost sm" data-fp-cancel aria-label="Close">✕</button></div>
+      <div class="fp-bar"><button type="button" class="btn ghost sm" id="fpUp" title="Up one folder" aria-label="Up one folder">↑</button><div class="fp-crumbs" id="fpCrumbs"></div></div>
+      <div class="fp-body"><nav class="fp-places" id="fpPlaces" aria-label="Drives and places"></nav><div class="fp-list" id="fpList" aria-label="Folders"></div></div>
+      <div class="fp-new hidden" id="fpNewRow"><input id="fpNewName" name="fp-new" placeholder="Name of the new folder" maxlength="120"><button type="button" class="btn sm" id="fpNewMake">Make it</button><button type="button" class="btn ghost sm" id="fpNewCancel">Cancel</button></div>
+      <div class="fp-foot"><button type="button" class="btn ghost" id="fpNew">New folder</button><span class="muted sm fp-chosen" id="fpChosen"></span><button type="button" class="btn ghost" data-fp-cancel>Cancel</button><button type="button" class="btn" id="fpUse" disabled>Use this folder</button></div>
+    </div>`);
+    $("#modalCard").classList.add("fp-card");
+    $("#modal").onclick = (e) => { if (e.target === $("#modal")) finish(null); };
+    $$("[data-fp-cancel]").forEach((b) => { b.onclick = () => finish(null); });
+    let here = "";
+    const show = async (path) => {
+      $("#fpList").innerHTML = '<div class="muted sm fp-empty">Opening…</div>';
+      let d;
+      try { d = await api(`/api/folders?path=${encodeURIComponent(path)}`); }
+      catch (e) { $("#fpList").innerHTML = `<div class="sm down fp-empty">${esc(e.message)}</div>`; return; }
+      here = d.path;
+      $("#fpPlaces").innerHTML = d.places.map((p) => `<button type="button" class="fp-place${here && here.toLowerCase().startsWith(p.path.toLowerCase()) && (p.kind === "drive" ? here.length <= p.path.length : true) ? " on" : ""}" data-path="${esc(p.path)}">${FP_ICON[p.kind === "drive" ? "drive" : "folder"]}<span>${esc(p.name)}${p.note && p.note !== "this computer" ? `<small>${esc(p.note)}</small>` : ""}</span></button>`).join("");
+      // The path as steps: each one goes back there
+      const parts = here ? here.split(/[\\/]/).filter(Boolean) : [];
+      $("#fpCrumbs").innerHTML = !here ? '<span class="muted sm">Choose a drive or a place</span>'
+        : parts.map((name, i) => { const to = parts.slice(0, i + 1).join("\\") + (i === 0 ? "\\" : ""); return `<button type="button" class="fp-crumb" data-path="${esc(to)}">${esc(name)}</button>`; }).join('<span class="fp-sep">›</span>');
+      $("#fpList").innerHTML = !here ? '<div class="muted sm fp-empty">Pick a drive or place on the left. A USB drive or another disk keeps the copy safe if this one fails.</div>'
+        : d.folders.length ? d.folders.map((f) => `<button type="button" class="fp-row" data-path="${esc(f.path)}">${FP_ICON.folder}<span>${esc(f.name)}</span></button>`).join("")
+        : '<div class="muted sm fp-empty">No folders inside. Use this one, or make a new folder in it.</div>';
+      $("#fpUp").disabled = !here; $("#fpUse").disabled = !here; $("#fpNew").disabled = !here;
+      $("#fpChosen").textContent = here;
+      $$("#modalCard [data-path]").forEach((b) => { b.onclick = () => show(b.dataset.path); });
+      $("#fpUp").onclick = () => show(d.parent || "");
+      $("#fpList .fp-row")?.focus({ preventScroll: true });
+    };
+    $("#fpUse").onclick = () => finish(here);
+    const newRow = (on) => { $("#fpNewRow").classList.toggle("hidden", !on); if (on) { $("#fpNewName").value = ""; $("#fpNewName").focus(); } };
+    $("#fpNew").onclick = () => newRow(true);
+    $("#fpNewCancel").onclick = () => newRow(false);
+    const make = async () => {
+      try { const r = await api("/api/folders", { method: "POST", body: { path: here, name: $("#fpNewName").value } }); newRow(false); await show(r.path); }
+      catch (e) { toast(e.message); }
+    };
+    $("#fpNewMake").onclick = make;
+    $("#fpNewName").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); make(); } else if (e.key === "Escape") { e.stopPropagation(); newRow(false); } };
+    $("#modalCard").onkeydown = (e) => { if (e.key === "Escape") finish(null); else if (e.key === "Backspace" && e.target.tagName !== "INPUT" && here) { e.preventDefault(); $("#fpUp").click(); } };
+    show(start || "");
+  });
+}
+$("#btnBrowseCopy").onclick = async () => {
+  const folder = await pickFolder({ title: "Choose a second folder for the backups", start: $("#sBackupCopy").value.trim() });
+  if (folder) { $("#sBackupCopy").value = folder; markUnsaved(); toast("Save to start copying backups there"); }
+};
 $("#btnRestore").onclick = () => $("#restoreFile").click();
 $("#restoreFile").onchange = async (e) => {
   const file = e.target.files[0]; e.target.value = "";
@@ -2930,3 +2999,10 @@ function renderMarketChoices() {
 })();
 // After a restore the page reloads: say where what it replaced was saved
 try { const n = sessionStorage.getItem("restoredNote"); if (n) { sessionStorage.removeItem("restoredNote"); setTimeout(() => toast(n), 800); } } catch {}
+// AI privacy: what the switch means, said beside it, and where Ask's data goes
+function privacySwitched() {
+  const a = state.meta?.aiInfo, on = $("#sAiPrivacy").checked;
+  $("#privacyNote").textContent = (on ? "On: questions like \"how much have I made\" are answered in percentages." : "Off: the AI sees your amounts when a question needs them.")
+    + (a?.on ? ` Ask uses ${a.model} on ${a.server}.` : "");
+}
+$("#sAiPrivacy").addEventListener("change", () => { privacySwitched(); markUnsaved(); });

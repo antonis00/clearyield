@@ -231,6 +231,7 @@
     <div id="askIntro" class="ask-intro">
       <h2>Ask ClearYieldAI</h2>
       <p class="muted">Ask about your portfolio or the markets. The AI answers from the app's own data and checks every figure against it. It only reads: nothing is bought, sold or saved.</p>
+      <p class="muted sm" id="askWhere"></p>
     </div>
     <div id="askAnswers"></div>
     <div class="ask-composer">
@@ -500,7 +501,8 @@
   <!-- SETTINGS -->
   <section id="view-settings" class="view hidden">
     <div class="grid2 settings-grid">
-      <!-- In rows, so cards side by side end on the same line: General | tiles, weights | email and data, targets | save -->
+      <!-- In rows, so cards side by side end on the same line: General | tiles, then how you invest (weights,
+           targets) | your data (backups, AI privacy), then email | save -->
       <div class="card">
         <div class="card-h"><h3>General</h3></div>
         <div class="form-row" style="align-items: center"><span class="muted sm">Theme</span>
@@ -527,32 +529,40 @@
         </div>
         <div id="ctMsg" class="muted sm"></div>
       </div>
-      <div class="card">
-        <div class="card-h"><h3>Factor weights</h3><button class="btn ghost sm" id="btnBalanced" title="20% each">Reset to balanced</button></div>
-        <div id="weightSliders"></div>
-      </div>
-      <div class="settings-stack">
+      <div class="settings-stack set-invest">
         <div class="card">
-          <div class="card-h"><h3>Email alerts</h3><label class="switch"><input type="checkbox" id="sEmailOn" role="switch" aria-label="Email alerts"><span></span></label></div>
-          <div class="email-row">
-            <input type="email" id="sEmail" placeholder="name@example.com" autocomplete="email" maxlength="254" aria-label="Email address for alerts">
-            <button class="btn ghost" id="btnTestEmail">Send test</button>
-          </div>
-          <p id="emailStatus" class="muted sm"></p>
+          <div class="card-h"><h3>Factor weights</h3><button class="btn ghost sm" id="btnBalanced" title="20% each">Reset to balanced</button></div>
+          <div id="weightSliders"></div>
         </div>
+        <div class="card">
+          <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
+          <div class="form-row targets"><span id="targetInputs"></span><label><span>Core target % <span class="info" tabindex="0" role="img" aria-label="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it." data-tip="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it.">i</span></span><input type="number" id="sCore" min="0" max="100" step="5"></label></div>
+          <div id="tgtClash" class="tgt-clash hidden" role="status"></div>
+        </div>
+      </div>
+      <div class="settings-stack set-data">
         <div class="card">
           <div class="card-h"><h3>Data</h3></div>
           <div class="form-row"><button class="btn ghost" id="btnClearCache">Refresh all data</button><a class="btn ghost" id="btnBackup" href="/api/backup" download style="margin-left: auto">Download backup</a><button class="btn ghost" id="btnRestore">Restore from file</button><input type="file" id="restoreFile" accept=".json,application/json" class="hidden"></div>
         <p class="muted sm" id="autoBackupNote" style="margin: 0"></p>
-        <label class="backup-copy">Also copy backups to <input id="sBackupCopy" name="backup-copy" placeholder="a folder on another drive or in OneDrive, e.g. C:\Users\you\OneDrive\ClearYield" spellcheck="false"></label>
+        <label class="backup-copy" for="sBackupCopy">Also copy backups to</label>
+        <div class="backup-copy-row"><input id="sBackupCopy" name="backup-copy" placeholder="a folder on another drive, a USB drive or a personal cloud folder" spellcheck="false"><button type="button" class="btn ghost" id="btnBrowseCopy">Browse…</button></div>
         <p class="sm" id="backupCopyNote" style="margin: 4px 0 0"></p>
         <p class="sm hidden" id="setupShow" style="margin: 8px 0 0"><button class="btn ghost sm" id="btnSetupShow">Show the Getting started checklist</button></p>
         </div>
+        <div class="card" id="privacyCard">
+          <div class="card-h"><h3>AI privacy</h3><label class="switch"><input type="checkbox" id="sAiPrivacy" role="switch" aria-label="Hide amounts from the AI"><span></span></label></div>
+          <p class="sm" style="margin: 0">Hide your amounts from the AI. Ask then sends your weights, percentages and returns, never how much money you hold, gained, invest or owe in tax, nor how many shares.</p>
+          <p class="muted sm" id="privacyNote" style="margin: 6px 0 0"></p>
+        </div>
       </div>
-      <div class="card">
-        <div class="card-h"><h3>Portfolio targets</h3><span class="muted sm">Used by Rebalancing and Core &amp; satellite</span></div>
-        <div class="form-row targets"><span id="targetInputs"></span><label><span>Core target % <span class="info" tabindex="0" role="img" aria-label="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it." data-tip="Core: broad index funds you hold for the long run, such as a world or S&amp;P 500 fund. Satellite: everything else (single stocks, sector funds, crypto). This is how much of the portfolio you want in core; the Portfolio page compares your actual split with it.">i</span></span><input type="number" id="sCore" min="0" max="100" step="5"></label></div>
-        <div id="tgtClash" class="tgt-clash hidden" role="status"></div>
+      <div class="card set-email">
+        <div class="card-h"><h3>Email alerts</h3><label class="switch"><input type="checkbox" id="sEmailOn" role="switch" aria-label="Email alerts"><span></span></label></div>
+        <div class="email-row">
+          <input type="email" id="sEmail" placeholder="name@example.com" autocomplete="email" maxlength="254" aria-label="Email address for alerts">
+          <button class="btn ghost" id="btnTestEmail">Send test</button>
+        </div>
+        <p id="emailStatus" class="muted sm"></p>
       </div>
       <div class="card save-card">
         <div><div id="settingsMsg">No unsaved changes</div><div class="muted sm">Theme and tiles change at once; the rest when you save.</div></div>

@@ -666,8 +666,36 @@ def _tools():
     return {n: t for n, t in TOOLS.items() if n != "web_search" or web_source()}
 
 
+SYSTEM_PRIVATE = ("\n- Privacy is on: amounts of money and share counts in the investor's own data are hidden (\"hidden\"). Talk in "
+                  "weights, percentages and returns; never guess or work out an amount, and say it's hidden if asked.")
+
+
 def _system():
-    return SYSTEM + (SYSTEM_WEB if web_source() else "")
+    return SYSTEM + (SYSTEM_WEB if web_source() else "") + (SYSTEM_PRIVATE if privacy() else "")
+
+
+# Privacy (Settings' ai_privacy): the tools that carry the investor's own money hide every amount and share count
+# before anything goes to the AI provider; weights, percentages and returns stay, so most questions still get answers
+AMOUNT_TOOLS = ("get_portfolio", "get_plan", "get_tax", "get_digest", "pretrade")
+_MONEY = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?\s?[TBMk]?\s?(?:[A-Z]{3}|GBp|ZAc|KWF|ILA)\b")
+_SYMBOL_MONEY = re.compile(r"[$€£¥]\s?\d[\d,]*(?:\.\d+)?\s?[TBMk]?(?![\w])")
+PUBLIC_AMOUNTS = {"$60,000"}  # thresholds in the law, not the investor's money (the US estate tax line)
+_SHARE_COUNT = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?\s+shares\b")
+_SHARES_FIELD = re.compile(r'"shares":\s*"[^"]*"')
+HIDDEN = "hidden"
+
+
+def privacy():
+    return bool(_settings().get("ai_privacy"))
+
+
+def redact(text):
+    """The text with every amount of money ("41,200.50 EUR", "4.98T USD") and share count hidden."""
+    text = _SHARES_FIELD.sub(f'"shares":"{HIDDEN}"', text)
+    text = _SHARE_COUNT.sub(f"{HIDDEN} shares", text)
+    text = re.sub(r"\b(buy|sell) \d[\d.,]* (?=[A-Z0-9^])", rf"\1 {HIDDEN} shares of ", text)  # an approved order: "buy 3 AAPL"
+    text = _SYMBOL_MONEY.sub(lambda m: m.group(0) if m.group(0).strip() in PUBLIC_AMOUNTS else HIDDEN, text)
+    return _MONEY.sub(HIDDEN, text)
 
 
 # ---------------------------------------------------------------- what the question plainly needs, looked up first
@@ -752,7 +780,7 @@ def prefetch(question):
 
 
 # Tools whose results are the investor's own money: once one has run, a web search may not carry its figures out
-PRIVATE_TOOLS = ("get_portfolio", "get_plan", "get_tax")
+PRIVATE_TOOLS = ("get_portfolio", "get_plan", "get_tax", "get_digest")
 _URL_IN = re.compile(r"(?i)\bhttps?://|\bwww\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|xyz|info|biz|ru|cn|me|app|dev|site|link|ly)(?:/|\b)")
 _AMOUNT_IN = re.compile(r"(?i)[$€£¥]\s?\d|\b\d[\d,.\s]*\s?(?:usd|eur|gbp|qar|aed|sar|kwd|chf|jpy|dollars?|euros?|pounds?|riyals?)\b")
 
@@ -828,8 +856,11 @@ def run_tool(name, args):
         return json.dumps({"error": f"No tool called {name}."}), False
     try:
         out = fn(**(args or {}))
+        text = json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=str)
+        if name in AMOUNT_TOOLS and privacy():
+            text = redact(text)
         # A result that reports a problem (no such symbol, Yahoo not answering) is a failed look-up, shown as one
-        return json.dumps(out, ensure_ascii=False, separators=(",", ":"), default=str), not (isinstance(out, dict) and "error" in out)
+        return text, not (isinstance(out, dict) and "error" in out)
     except TypeError as e:
         return json.dumps({"error": f"Wrong arguments for {name}: {e}"}), False
     except Exception as e:  # a missing symbol, Yahoo not answering: the model can say so or try another way

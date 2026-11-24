@@ -5904,6 +5904,61 @@ def test_a_session_built_from_candles_takes_the_official_close():
         data._yf = real
 
 
+def test_ai_privacy_hides_amounts():
+    """With AI privacy on, the tools that carry the investor's own money (portfolio, plan, tax, digest, pre-trade)
+    hide every amount and share count before anything goes to the provider; weights, percentages and returns stay,
+    and so do public thresholds in the law. Off by default; the model is told when it's on."""
+    import json
+
+    from backend import agent
+    sample = json.dumps({"value": "41,200.50 EUR", "cap": "4.98T USD", "gain": "1.2k EUR (-0.69%)", "weight": "79.9%",
+                         "buys": ["VWCE.DE: 17.7 shares, about 2,925 EUR (ETFs)"], "pretrade": {"shares": "6.6700", "price": "349.08"},
+                         "orders": ["buy 3 AAPL at a limit of 349.08 USD"], "pence": "1,274.00 GBp",
+                         "estate": "About $3,486 of the $60,000 a non-US person can leave free", "return": "-0.7% since 2026-03-15"})
+    r = agent.redact(sample)
+    d = json.loads(r)
+    assert d["value"] == d["cap"] == "hidden" and d["gain"] == "hidden (-0.69%)" and d["weight"] == "79.9%", d
+    assert d["buys"] == ["VWCE.DE: hidden shares, about hidden (ETFs)"] and d["pretrade"]["shares"] == "hidden" and d["pence"] == "hidden", d
+    assert d["orders"] == ["buy hidden shares of AAPL at a limit of hidden"], d
+    assert d["estate"] == "About hidden of the $60,000 a non-US person can leave free" and d["return"] == "-0.7% since 2026-03-15", d
+    with TestClient(app) as c:
+        assert c.get("/api/settings").json()["ai_privacy"] is False, "off by default"
+        c.post("/api/transactions", json={"ticker": "AAPL", "kind": "buy", "date": "2024-01-02", "shares": 3, "price": 100})
+        plain, _ = agent.run_tool("get_portfolio", {})
+        assert " USD" in plain and "hidden" not in plain and "privacy" not in agent._system().lower()
+        assert c.post("/api/settings", json={"ai_privacy": True}).json()["ai_privacy"] is True
+        private, _ = agent.run_tool("get_portfolio", {})
+        assert "hidden" in private and not agent._MONEY.search(private) and "Privacy is on" in agent._system(), private[:300]
+        stock, _ = agent.run_tool("get_stock", {"ticker": "AAPL"})
+        assert "hidden" not in stock, "a company's own figures are public: never hidden"
+        assert c.post("/api/settings", json={"ai_privacy": "yes"}).status_code == 400
+        c.post("/api/settings", json={"ai_privacy": False})
+    _reset()
+
+
+def test_folder_picker_lists_folders_and_makes_one():
+    """The page's own folder picker: with no path, the drives and usual places; a folder's subfolders (hidden ones and
+    files left out) with its parent; a missing folder is a 404; New folder makes one, refusing bad names and one
+    that already exists."""
+    root = Path(tempfile.mkdtemp())
+    (root / "Backups").mkdir()
+    (root / "alpha").mkdir()
+    (root / ".hidden").mkdir()
+    (root / "a-file.txt").write_text("x", encoding="utf-8")
+    with TestClient(app) as c:
+        top = c.get("/api/folders").json()
+        assert top["path"] == "" and top["folders"] == [] and top["places"] and all({"name", "path", "kind"} <= set(x) for x in top["places"]), top
+        d = c.get("/api/folders", params={"path": str(root)}).json()
+        assert [f["name"] for f in d["folders"]] == ["alpha", "Backups"] and d["path"] == str(root) and d["parent"] == str(root.parent), d
+        assert c.get("/api/folders", params={"path": str(root / "nope")}).status_code == 404
+        assert c.get("/api/folders", params={"path": "relative\\path"}).status_code == 404
+        r = c.post("/api/folders", json={"path": str(root), "name": "ClearYield copies"})
+        assert r.status_code == 200 and Path(r.json()["path"]).is_dir() and r.json()["path"].endswith("ClearYield copies")
+        for bad in ("", "a/b", "x:y", "..", "dots."):
+            assert c.post("/api/folders", json={"path": str(root), "name": bad}).status_code == 400, bad
+        assert "already" in c.post("/api/folders", json={"path": str(root), "name": "alpha"}).json()["detail"]
+        assert c.post("/api/folders", json={"path": str(root / "nope"), "name": "x"}).status_code == 400
+
 if __name__ == "__main__":
     import logging
     import time

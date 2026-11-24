@@ -78,7 +78,8 @@ DEFAULT_SETTINGS = {
     "regions": list(REGIONS),  # the regions you follow: only their stocks are downloaded, screened and ranked against
     "alert_email": "",  # where triggered alerts are emailed; the mail server itself is in .env (mailer.py)
     "email_alerts": False,
-    "backup_copy_dir": "",  # a second folder for the automatic backups (OneDrive, another drive): a disk failure loses neither
+    "backup_copy_dir": "",
+    "ai_privacy": False,  # Ask hides amounts of money and share counts from the AI provider (agent.redact)  # a second folder for the automatic backups (OneDrive, another drive): a disk failure loses neither
     "fund_costs": {},  # {ticker: yearly cost as a fraction}, entered from a fund's factsheet; stands over Yahoo's figure
     # What you invest each month and the goal it's for (plan.py): the goal in today's money by a date, with the yearly
     # return and inflation the check assumes
@@ -523,6 +524,7 @@ SETTING_CHECKS = {
     "alert_email": _email,
     "email_alerts": _switch("Email alerts"),
     "backup_copy_dir": lambda v: _folder(v),
+    "ai_privacy": _switch("Privacy"),
     "fund_costs": _fund_costs,
     "plan": lambda v: {**DEFAULT_SETTINGS["plan"], **__import__("backend.plan", fromlist=["check"]).check(v)},
     "setup_dismissed": _switch("Hiding the checklist"),

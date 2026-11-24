@@ -165,6 +165,9 @@ async def lifespan(app):
     except Exception as e:  # never stop the app over housekeeping
         log.warning("cache pruning failed: %s", e)
     _auto_backup()
+    # The first folder listing in the background app took 2.7 s (later ones a few ms): done once now, off the main
+    # path, so the folder picker opens at once the first time too
+    __import__("threading").Thread(target=_warm_folders, daemon=True, name="warm-folders").start()
     tasks = [asyncio.create_task(_alert_loop())]
     if not data.DEMO and os.environ.get("CLEARYIELD_WARM", "1") != "0":
         tasks.append(asyncio.create_task(_warm_loop()))
@@ -1141,6 +1144,98 @@ def settings_set(body: dict = Body(...)):
         latest = db.auto_backups()
         db.copy_backup(latest[0]) if latest else db.auto_backup(force=True)
     return ok(saved)
+
+
+# ---------------------------------------------------------------- choosing a folder on this computer
+# A web page can't learn a folder's full path, but the app runs on this computer: the page's own folder picker asks it
+# what's in a folder. Instant and in the app's theme, unlike a separate dialog window. Folders only, never files.
+FOLDERS_MAX = 500
+
+
+def _places():
+    """Where a backup copy usually goes: each drive (with its label, and whether it's removable or on the network),
+    then the usual folders in the home folder."""
+    import string
+    out = []
+    if os.name == "nt":
+        import ctypes
+        kinds = {2: "removable", 3: "this computer", 4: "network"}
+        for letter in string.ascii_uppercase:
+            root = f"{letter}:\\"
+            kind = ctypes.windll.kernel32.GetDriveTypeW(root)
+            if kind not in kinds or not os.path.exists(root):
+                continue
+            label = ctypes.create_unicode_buffer(261)
+            ctypes.windll.kernel32.GetVolumeInformationW(root, label, 261, None, None, None, None, 0)
+            out.append({"name": f"{label.value or 'Local disk'} ({letter}:)", "path": root, "kind": "drive", "note": kinds[kind]})
+    else:
+        out.append({"name": "/", "path": "/", "kind": "drive", "note": ""})
+    home = Path.home()
+    for name in ("Desktop", "Documents", "Downloads"):
+        if (home / name).is_dir():
+            out.append({"name": name, "path": str(home / name), "kind": "folder", "note": ""})
+    return out
+
+
+def _subfolders(path):
+    """The folders in `path`, sorted, hidden and system ones left out."""
+    found = []
+    with os.scandir(path) as it:
+        for e in it:
+            try:
+                if not e.is_dir(follow_symlinks=False) or e.name.startswith((".", "$")):
+                    continue
+                attrs = getattr(e.stat(follow_symlinks=False), "st_file_attributes", 0)
+                if attrs & 0x6:  # hidden or system
+                    continue
+            except OSError:
+                continue
+            found.append({"name": e.name, "path": e.path})
+    return sorted(found, key=lambda f: f["name"].lower())[:FOLDERS_MAX]
+
+
+def _warm_folders():
+    try:
+        _places()
+        _subfolders(Path.home())
+    except Exception as e:  # only a warm-up
+        log.info("folder warm-up skipped: %s", e)
+
+
+@app.get("/api/folders")
+async def folders(path: str = ""):
+    """A folder's subfolders for the picker, with its parent; with no path, the drives and usual places. Answered on
+    the event loop (a listing takes milliseconds), not queued behind slower requests in the worker threads: in a busy
+    moment the picker took 7 s to open there."""
+    if not path:
+        return ok({"path": "", "parent": None, "folders": [], "places": _places()})
+    p = Path(path).expanduser()
+    if not p.is_absolute() or not p.is_dir():
+        raise HTTPException(404, "That folder doesn't exist (any more).")
+    try:
+        subs = _subfolders(p)
+    except PermissionError:
+        raise HTTPException(403, "Windows doesn't allow reading that folder.")
+    parent = str(p.parent) if p.parent != p else ""
+    return ok({"path": str(p), "parent": parent, "folders": subs, "places": _places()})
+
+
+@app.post("/api/folders")
+def folder_new(body: dict = Body(...)):
+    """A new folder inside `path`, for the picker's New folder."""
+    p, name = Path(str(body.get("path") or "")), str(body.get("name") or "").strip()
+    if not p.is_absolute() or not p.is_dir():
+        raise HTTPException(400, "Choose where to make the folder first.")
+    if not name or name in (".", "..") or len(name) > 120 or any(c in name for c in '<>:"/\\|?*') or name.endswith((".", " ")):
+        raise HTTPException(400, "A folder name can't be empty or contain < > : \" / \\ | ? *.")
+    new = p / name
+    try:
+        new.mkdir(exist_ok=False)
+    except FileExistsError:
+        raise HTTPException(400, f"There's already a folder called {name} there.")
+    except OSError as e:
+        raise HTTPException(403, f"Windows didn't allow making it: {e.strerror or e}.")
+    return ok({"path": str(new)})
 
 
 # ---------------------------------------------------------------- start with Windows
