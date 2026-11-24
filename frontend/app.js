@@ -209,7 +209,8 @@ function show(route, push = true) {
     if (decodeURIComponent(location.hash) !== target) history.pushState(null, "", target); // so Back and Forward move between screens
   }
   renderSubnav(view);
-  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare }[el] || (() => {}))();
+  ({ dashboard: loadDashboard, portfolio: loadPortfolio, journal: loadJournal, settings: loadSettings, opportunities: () => loadOpportunities(false), ask: renderAskSetup, backtest: loadBacktestView, compare: startCompare,
+     research: () => { if (!state.ticker) renderResearchStart(); } }[el] || (() => {}))();
 }
 $$("#nav a").forEach((a) => a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) return; e.preventDefault(); show(a.dataset.view); });
 
@@ -544,11 +545,40 @@ $("#refreshDigest").onclick = loadDigest;
 /* ---------------------------------------------------------------- research */
 // The range is how far back the chart goes; bars is how much time each candle covers
 const chartUrl = () => `/api/stock/${encodeURIComponent(state.ticker)}?period=${state.period}&bars=${state.bars}`;
+// ---- Research's start page: before a stock is chosen, a search and quick picks (recently viewed, your holdings, your
+// watchlist, the day's most traded), each with its logo; a click opens the stock
+const RECENT_MAX = 8;
+function recentStocks() { try { return JSON.parse(localStorage.getItem("recentStocks") || "[]").filter((x) => x && x.t); } catch { return []; } }
+function rememberStock(t, name) {
+  try { localStorage.setItem("recentStocks", JSON.stringify([{ t, n: name || "" }, ...recentStocks().filter((x) => x.t !== t)].slice(0, RECENT_MAX))); } catch { /* this visit only */ }
+}
+function rsChips(list) {
+  return list.map((x) => `<button type="button" class="rs-chip" data-stock="${esc(x.t)}" title="Research ${esc(x.n || x.t)}">${logoOf(x.t, x.n, 28)}<span><b>${esc(x.t)}</b><small>${esc(x.n || "")}</small></span></button>`).join("");
+}
+async function renderResearchStart() {
+  $("#researchStart").classList.remove("hidden"); $("#researchBody").classList.add("hidden"); $("#researchEmpty").classList.add("hidden");
+  const box = $("#rsGroups");
+  const group = (key, title, list, note) => list.length ? `<section class="rs-group" data-g="${key}"><h4>${esc(title)}${note ? ` <span class="muted">${esc(note)}</span>` : ""}</h4><div class="rs-chips">${rsChips(list)}</div></section>` : "";
+  const groups = { recent: group("recent", "Recently viewed", recentStocks()) };
+  const draw = () => { box.innerHTML = ["recent", "held", "watch", "popular"].map((k) => groups[k] || "").join(""); };
+  draw();
+  const [pf, wl, pop] = await Promise.all([api("/api/portfolio").catch(() => null), api("/api/watchlist").catch(() => []), api("/api/compare/start").catch(() => null)]);
+  if (state.ticker) return;  // a stock was opened meanwhile
+  groups.held = group("held", "Your holdings", (pf?.positions || []).map((r) => ({ t: r.ticker, n: r.name })));
+  groups.watch = group("watch", "Your watchlist", (wl || []).map((r) => ({ t: r.ticker, n: r.name })));
+  groups.popular = group("popular", "Most traded today", (pop?.popular || []).map((t) => ({ t, n: pop.names?.[t] && pop.names[t] !== t ? pop.names[t] : "" })), "large companies, on Yahoo");
+  draw();
+}
+$("#rsSearch").onclick = () => { const g = $("#globalSearch"); g.focus(); g.select(); };
+// The quick picks are buttons, which the page-wide stock click leaves alone: they open their stock here (Ctrl/Cmd or
+// a middle click opens a new tab, as elsewhere)
+$("#rsGroups").addEventListener("click", (e) => { const c = e.target.closest(".rs-chip"); if (!c) return; if (e.ctrlKey || e.metaKey) openInNewTab(c.dataset.stock); else openStock(c.dataset.stock); });
+$("#rsGroups").addEventListener("auxclick", (e) => { const c = e.button === 1 && e.target.closest(".rs-chip"); if (c) { e.preventDefault(); openInNewTab(c.dataset.stock); } });
 async function openStock(t, period) {
   if (state.ticker !== t.toUpperCase()) window.scrollTo(0, 0);  // another stock starts at the top too, also from Research itself
   state.ticker = t.toUpperCase(); state.period = period || state.period;
   show("research");
-  $("#researchEmpty").classList.add("hidden");
+  $("#researchEmpty").classList.add("hidden"); $("#researchStart").classList.add("hidden");
   const body = $("#researchBody");
   body.classList.remove("hidden"); body.style.opacity = 0.5;
   const request = ++state.stockRequest; // a slower reply for an earlier stock must not overwrite this one
@@ -556,6 +586,7 @@ async function openStock(t, period) {
     const s = await api(chartUrl());
     if (request !== state.stockRequest) return;
     state.stock = s; body.style.opacity = 1;
+    rememberStock(state.ticker, s.info?.name);
     renderHeader(s); renderPrice(s); renderFactors(s); renderStats(s); renderFin(s);
     loadPeers(state.ticker, request);
     $("#briefOut").innerHTML = "Combines scores, price action, fundamentals and headlines into a bull/bear summary.";

@@ -730,3 +730,32 @@ nav a:hover .nav-svg .hole, nav a.active .nav-svg .hole, nav a:hover .nav-svg .i
 
 /* Settings: Save across both columns at the end */
 .settings-grid > .save-card { grid-column: 1 / -1; }
+
+/* Research's start page: a welcome with a search, then quick picks with logos */
+.rs { max-width: 980px; margin: 8px auto 40px; }
+.rs-hero { position: relative; overflow: hidden; text-align: center; padding: 56px 24px 44px; border: 1px solid var(--line); border-radius: 16px;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 9%, var(--panel)) 0%, var(--panel) 55%, color-mix(in srgb, var(--accent2) 8%, var(--panel)) 100%); }
+.rs-glow { position: absolute; inset: -40% 20% auto; height: 260px; background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 22%, transparent), transparent); pointer-events: none; }
+.rs-mark { position: relative; width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 16px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.rs-mark svg { width: 28px; height: 28px; stroke: var(--accent); }
+.rs-hero h2 { position: relative; margin: 0 0 8px; font-size: 26px; }
+.rs-hero p { position: relative; margin: 0 auto 24px; max-width: 560px; line-height: 1.55; }
+.rs-search { position: relative; display: inline-flex; align-items: center; gap: 12px; width: min(560px, 100%); padding: 14px 18px; border-radius: 999px; cursor: text;
+  border: 1px solid var(--field-line, var(--line)); background: var(--bg); color: var(--muted); font: 15px var(--sans); text-align: left;
+  box-shadow: 0 8px 28px #0004; transition: border-color .15s, box-shadow .15s; }
+.rs-search:hover, .rs-search:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent), 0 8px 28px #0004; outline: none; }
+.rs-search svg { width: 18px; height: 18px; flex: none; stroke: var(--muted); }
+.rs-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.rs-group { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.rs-group h4 { margin: 0 0 12px; }
+.rs-group h4 .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.rs-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.rs-chip { display: inline-flex; align-items: center; gap: 9px; max-width: 100%; padding: 7px 12px 7px 7px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--text); font: 13px var(--sans); text-align: left; transition: border-color .15s, transform .15s; }
+.rs-chip:hover, .rs-chip:focus-visible { border-color: var(--accent); transform: translateY(-1px); outline: none; }
+.rs-chip span { display: flex; flex-direction: column; min-width: 0; }
+.rs-chip small { color: var(--muted); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-chip small:empty { display: none; }
+@media (max-width: 700px) { .rs-groups { grid-template-columns: 1fr; } .rs-hero { padding: 40px 16px 32px; } .rs-hero h2 { font-size: 21px; } }
+.rs-group:last-child:nth-child(odd) { grid-column: 1 / -1; }  /* an odd one out spans the row, leaving no hole */

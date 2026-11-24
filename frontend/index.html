@@ -70,7 +70,18 @@
 
   <!-- RESEARCH -->
   <section id="view-research" class="view hidden">
-    <div id="researchEmpty" class="empty">Research a company or ticker above to start.</div>
+    <!-- Before a stock is chosen: what Research does, a search, and quick picks to start from -->
+    <div id="researchStart" class="rs">
+      <div class="rs-hero">
+        <div class="rs-glow" aria-hidden="true"></div>
+        <div class="rs-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 7-9" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 21h18" fill="none" stroke-width="2" stroke-linecap="round"/></svg></div>
+        <h2>What would you like to research?</h2>
+        <p class="muted">Any stock, fund or coin: its price and chart, the five scores with the figures behind them, news, and a brief you can ask the AI to write.</p>
+        <button type="button" class="rs-search" id="rsSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke-width="2.2"/><path d="M15.5 15.5L21 21" fill="none" stroke-width="2.4" stroke-linecap="round"/></svg><span>Search a company or ticker, e.g. Apple, ASML or QNBK.QA</span></button>
+      </div>
+      <div class="rs-groups" id="rsGroups"></div>
+    </div>
+    <div id="researchEmpty" class="empty hidden"></div>
     <div id="researchBody" class="hidden">
       <div class="stock-head">
         <div class="stock-title">

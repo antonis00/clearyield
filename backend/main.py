@@ -629,7 +629,8 @@ def compare_start():
     benchmark when Yahoo doesn't answer. Your own holdings are one click away (My holdings)."""
     popular = data.most_traded(START_POPULAR)
     bench = db.get_settings().get("benchmark") or "SPY"
-    return ok({"tickers": popular or [bench], "popular": popular, "benchmark": bench})
+    from .universe import name_of
+    return ok({"tickers": popular or [bench], "popular": popular, "benchmark": bench, "names": {t: name_of(t) for t in (popular or [])}})
 
 
 START_POPULAR = 5

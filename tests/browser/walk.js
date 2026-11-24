@@ -388,6 +388,22 @@ const pfTab = async (t) => { await p.click(`#subnav [data-route="portfolio/${t}"
     JSON.stringify({ more, applied: applied?.filters }));
   if (await p.locator("#scrTable tbody tr").count()) { await p.locator("#scrTable tbody tr").first().click(); await p.waitForTimeout(700); expect("screener: row opens Research", (await p.evaluate(() => location.hash)).startsWith("#research")); }
 
+  // Research before a stock is chosen: a welcome with a search, and quick picks (recently viewed, holdings, watchlist,
+  // the day's most traded) that open the stock
+  const rsPage = await ctx.newPage();
+  await rsPage.goto(`${BASE}#research`);
+  await rsPage.waitForFunction(() => document.querySelectorAll("#rsGroups .rs-chip").length > 0, null, { timeout: SLOW }).catch(() => {});
+  const rsStart = await rsPage.evaluate(() => ({ shown: !document.querySelector("#researchStart").classList.contains("hidden"), body: document.querySelector("#researchBody").classList.contains("hidden"),
+    title: document.querySelector(".rs-hero h2")?.textContent, groups: [...document.querySelectorAll(".rs-group")].map((g) => g.dataset.g).join(","), chips: document.querySelectorAll(".rs-chip").length }));
+  await rsPage.click("#rsSearch");
+  const rsFocused = await rsPage.evaluate(() => document.activeElement?.id);
+  const rsPick = await rsPage.locator(".rs-chip").first().getAttribute("data-stock");
+  await rsPage.locator(".rs-chip").first().click();
+  const rsOpened = await rsPage.waitForFunction((t) => typeof state !== "undefined" && state.stock?.ticker === t && document.querySelector("#researchStart").classList.contains("hidden"), rsPick, { timeout: SLOW }).then(() => true).catch(() => false);
+  await rsPage.close();
+  expect("research: before a stock is chosen, a welcome with a search and quick picks that open the stock", rsStart.shown && rsStart.body && /What would you like to research/.test(rsStart.title || "")
+    && rsStart.groups.includes("recent") && rsStart.chips >= 2 && rsFocused === "globalSearch" && rsOpened, JSON.stringify({ rsStart, rsFocused, rsPick, rsOpened }));
+
   // ---- Portfolio
   await nav("portfolio");
   // Six places and Ask in the menu; Portfolio's screens as sub-tabs, Overview first
