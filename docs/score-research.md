@@ -235,3 +235,55 @@ it's stored under a name the page doesn't read. Every change below was decided f
 8. **The background build**: the cache is checked again inside the lock (so two runs can't start together), and a
    failed run is shown as a failure, not as "building".
 
+
+---
+
+# Round 3: scoring within the sector (pre-registered 24 Nov 2026, before any round 3 figure was worked out)
+
+Round 2's results are known (value suggestive, quality backwards, mostly in Europe; growth no evidence). One reading
+is that the fixed thresholds compare sectors more than companies: a bank's margins, a utility's debt and a software
+company's P/E are judged on one scale, so a factor partly says which sector a stock is in. Comparing each company
+with its own sector is the usual remedy (Asness, Porter and Stevens, 2000, *Predicting stock returns using
+industry-relative firm characteristics*). Sector-relative scoring was listed as the next idea before round 2 was run;
+none of the panels below has been computed with it.
+
+## Candidates (three; nothing else is tried)
+
+For **value, quality and growth**, each month-start: the share of the other stocks in the same sector, scored on that
+factor that date (every region in the panel), whose score the stock beats, a tie counting half, times 100. A sector
+with fewer than 8 other scored stocks that date gives no candidate score. The sector is Yahoo's sector today. Each is
+judged against today's score for the same factor (fixed thresholds) on the same stocks.
+
+Momentum and risk aren't candidates: they're measured the same way for every company, and the risk score's own
+evidence (calm stocks stay calm) is about the investor's ride, which isn't relative to a sector.
+
+## Adoption rule
+
+Round 2's, unchanged: at the 3-month horizon, on North America and Asia-Pacific the gain over today's score passes
+Holm's correction for three tests (one-sided 0.025 overall); on Europe, the Middle East & Africa and Latin America the
+candidate works on its own (p < 0.025) and its gain has p < 0.05; the gain is positive in every confirming region with
+at least 12 months of 15+ stocks scored by both. A run decides only if complete, and the first complete run is kept
+for good (`data/research/score-round3.json`).
+
+The overall score with the three candidates in place of today's factors is reported beside today's overall score,
+for information only: it is not a fourth test.
+
+## What adoption means in the app
+
+An adopted factor is scored within its sector by default, with the stock's score on the fixed thresholds and its
+rank shown beside it (sector, how many companies, the share it beats). A factor that isn't adopted keeps the fixed
+thresholds by default. Settings offers scoring all three within the sector either way, as the owner's choice, and
+the page says whether the research supports it.
+
+## Unchanged
+
+Everything else in round 2 and 2b: the stocks (today's list, every region), the dates, the point-in-time records and
+lags, past market values, country-relative outcomes, the statistics and the minimums.
+
+## Known limits added
+
+- Today's sector for every past date: a company that changed sector is ranked with its new one.
+- Sector ranks use the panel's own stocks (about 400), not every listed company, so a small sector's ranks move with
+  few companies; that's why a sector needs 8 others.
+- Company figures still cover only Yahoo's last four annual statements (2023-26), so these are confirmed across
+  stocks and regions, not across time.
